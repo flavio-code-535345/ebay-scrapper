@@ -7,6 +7,7 @@ Handles SQLite database operations for search history and deal storage
 import sqlite3
 import csv
 import io
+import json
 import time
 import os
 from typing import List, Dict, Optional
@@ -54,8 +55,25 @@ def init_db():
         );
     """)
 
+    # Add AI-assessment columns to existing databases (migration-safe).
+    _add_column_if_missing(cursor, "deals", "ai_deal_rating", "TEXT")
+    _add_column_if_missing(cursor, "deals", "ai_confidence_score", "REAL")
+    _add_column_if_missing(cursor, "deals", "ai_visual_findings", "TEXT")
+    _add_column_if_missing(cursor, "deals", "ai_red_flags", "TEXT")
+    _add_column_if_missing(cursor, "deals", "ai_fair_market_estimate", "TEXT")
+    _add_column_if_missing(cursor, "deals", "ai_verdict_summary", "TEXT")
+    _add_column_if_missing(cursor, "deals", "ai_assessed", "INTEGER DEFAULT 0")
+
     conn.commit()
     conn.close()
+
+
+def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> None:
+    """Add *column* to *table* when it does not already exist."""
+    try:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+    except Exception:
+        pass  # column already exists – SQLite raises OperationalError
 
 
 def save_search(query: str, deals: List[Dict]) -> int:
@@ -71,12 +89,19 @@ def save_search(query: str, deals: List[Dict]) -> int:
     search_id = cursor.lastrowid
 
     for deal in deals:
+        # Serialise list fields (visual_findings, red_flags) as JSON strings.
+        visual_findings = deal.get('ai_visual_findings')
+        red_flags = deal.get('ai_red_flags')
+
         cursor.execute(
             """INSERT INTO deals
                (search_id, title, price, condition, seller_rating, url, shipping,
                 is_trending, overall_score, price_score, seller_score,
-                condition_score, trend_score, recommendation, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                condition_score, trend_score, recommendation,
+                ai_deal_rating, ai_confidence_score, ai_visual_findings,
+                ai_red_flags, ai_fair_market_estimate, ai_verdict_summary,
+                ai_assessed, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 search_id,
                 deal.get('title'),
@@ -92,6 +117,13 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 deal.get('condition_score'),
                 deal.get('trend_score'),
                 deal.get('recommendation'),
+                deal.get('ai_deal_rating'),
+                deal.get('ai_confidence_score'),
+                json.dumps(visual_findings) if isinstance(visual_findings, list) else visual_findings,
+                json.dumps(red_flags) if isinstance(red_flags, list) else red_flags,
+                deal.get('ai_fair_market_estimate'),
+                deal.get('ai_verdict_summary'),
+                int(bool(deal.get('ai_assessed'))),
                 now,
             ),
         )

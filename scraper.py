@@ -270,6 +270,9 @@ class EbayScraper:
             # Check if item is trending / popular (Beliebt).
             is_trending = self._extract_trending(item_element)
 
+            # Extract listing image URLs for AI/visual analysis.
+            image_urls = self._extract_image_urls(item_element)
+
             return {
                 'title': title,
                 'price': price,
@@ -278,6 +281,7 @@ class EbayScraper:
                 'url': item_url,
                 'shipping': shipping,
                 'is_trending': is_trending,
+                'image_urls': image_urls,
                 'timestamp': time.time()
             }
 
@@ -402,6 +406,34 @@ class EbayScraper:
                 return True
 
         return False
+
+    def _extract_image_urls(self, item_element) -> List[str]:
+        """Extract listing image URLs from the item element.
+
+        eBay lazy-loads images using ``data-src`` / ``s-src`` attributes;
+        this method checks both standard and lazy-load variants.
+        """
+        urls: List[str] = []
+        seen: set = set()
+
+        for img in item_element.find_all('img'):
+            for attr in ('src', 'data-src', 's-src'):
+                url = img.get(attr, '').strip()
+                if (
+                    url
+                    and url.startswith('http')
+                    and url not in seen
+                    # Skip eBay placeholder / spacer images
+                    and 'gif' not in url.lower()
+                    and 's-l' in url  # eBay image CDN pattern (e.g. s-l500, s-l1600)
+                ):
+                    seen.add(url)
+                    urls.append(url)
+                    break  # one URL per <img> tag is enough
+
+        if urls:
+            logger.debug("Extracted %d image URL(s) for listing", len(urls))
+        return urls
 
     # ── Value parsers ──────────────────────────────────────────────────────────
 

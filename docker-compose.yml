@@ -11,6 +11,9 @@ services:
       - FLASK_ENV=production
       - FLASK_APP=app.py
       - DB_PATH=/data/ebay_deals.db
+      # Set your Gemini API key here (or use a .env file / Docker secret).
+      # Never commit the actual key value — leave blank to disable AI assessment.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     volumes:
       - ebay_db:/data
     healthcheck:

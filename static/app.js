@@ -114,6 +114,9 @@ function createDealCard(deal) {
     const conditionScore = deal.condition_score || 0;
     const trendScore = deal.trend_score || 0;
 
+    // ── AI (Gemini) verdict section ────────────────────────────────────────
+    const aiSection = deal.ai_assessed ? buildAiSection(deal) : '';
+
     return `
         <div class="deal-card">
             <div class="deal-header">
@@ -151,6 +154,8 @@ function createDealCard(deal) {
                         <span class="detail-value">${deal.is_trending ? '🔥 Yes' : 'No'}</span>
                     </div>
                 </div>
+
+                ${aiSection}
 
                 <div class="scores-breakdown">
                     <div class="score-row">
@@ -194,6 +199,58 @@ function createDealCard(deal) {
             </div>
         </div>
     `;
+}
+
+/**
+ * Build the Gemini AI verdict section HTML for a deal card.
+ * @param {Object} deal - Deal object with ai_* fields set.
+ * @returns {string} HTML string.
+ */
+function buildAiSection(deal) {
+    const rating = deal.ai_deal_rating || 'Unknown';
+    const confidence = deal.ai_confidence_score || 0;
+    const summary = deal.ai_verdict_summary || '';
+    const estimate = deal.ai_fair_market_estimate || '';
+    const visualFindings = Array.isArray(deal.ai_visual_findings) ? deal.ai_visual_findings : [];
+    const redFlags = Array.isArray(deal.ai_red_flags) ? deal.ai_red_flags : [];
+
+    const badgeClass = getAiBadgeClass(rating);
+
+    const findingsHtml = visualFindings.length
+        ? `<ul class="ai-list">${visualFindings.map(f => `<li>${escapeHtml(f)}</li>`).join('')}</ul>`
+        : '';
+
+    const redFlagsHtml = redFlags.length
+        ? `<ul class="ai-list ai-red-flags">${redFlags.map(f => `<li>⚠️ ${escapeHtml(f)}</li>`).join('')}</ul>`
+        : '';
+
+    const estimateHtml = estimate
+        ? `<div class="ai-estimate">💰 Fair market estimate: <strong>${escapeHtml(estimate)}</strong></div>`
+        : '';
+
+    return `
+        <div class="ai-verdict">
+            <div class="ai-verdict-header">
+                <span class="ai-badge ${badgeClass}">${escapeHtml(rating)}</span>
+                <span class="ai-confidence">AI Confidence: ${confidence}%</span>
+            </div>
+            ${summary ? `<p class="ai-summary">${escapeHtml(summary)}</p>` : ''}
+            ${estimateHtml}
+            ${findingsHtml}
+            ${redFlagsHtml}
+        </div>
+    `;
+}
+
+/**
+ * Map an AI deal rating to its CSS badge class.
+ */
+function getAiBadgeClass(rating) {
+    const r = (rating || '').toLowerCase();
+    if (r.includes('must') || r === 'must buy') return 'badge-must-buy';
+    if (r === 'fair') return 'badge-fair';
+    if (r.includes('avoid') || r.includes('hard pass')) return 'badge-avoid';
+    return 'badge-unknown';
 }
 
 function getScoreColor(score) {
