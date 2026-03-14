@@ -91,6 +91,21 @@ async function handleSearch(e) {
 
 function displayResults(data) {
     document.getElementById('dealCount').textContent = data.deal_count;
+
+    // Show a warning banner if the Gemini quota is exhausted.
+    const aiWarning = document.getElementById('aiWarningContainer');
+    if (aiWarning) {
+        if (data.ai_enabled && data.ai_rate_limited) {
+            const secs = data.ai_paused_seconds || 0;
+            aiWarning.textContent =
+                `⚠️ Gemini AI is temporarily paused due to quota exhaustion` +
+                (secs > 0 ? ` (resumes in ~${secs}s)` : '') +
+                `. Showing rules-based scores only.`;
+            aiWarning.classList.remove('d-none');
+        } else {
+            aiWarning.classList.add('d-none');
+        }
+    }
     
     const dealsGrid = document.getElementById('dealsGrid');
     dealsGrid.innerHTML = data.deals.map(deal => createDealCard(deal)).join('');
@@ -115,7 +130,14 @@ function createDealCard(deal) {
     const trendScore = deal.trend_score || 0;
 
     // ── AI (Gemini) verdict section ────────────────────────────────────────
-    const aiSection = deal.ai_assessed ? buildAiSection(deal) : '';
+    let aiSection = '';
+    if (deal.ai_assessed) {
+        aiSection = buildAiSection(deal);
+    } else if (deal.ai_error_type === 'rate_limit') {
+        aiSection = buildAiErrorSection('⏳ AI paused (quota limit reached)');
+    } else if (deal.ai_error_type === 'parse_error') {
+        aiSection = buildAiErrorSection('⚠️ AI response could not be parsed');
+    }
 
     return `
         <div class="deal-card">
@@ -243,7 +265,24 @@ function buildAiSection(deal) {
 }
 
 /**
+ * Build a small AI error notice for a deal card.
+ * @param {string} message - Human-friendly error description.
+ * @returns {string} HTML string.
+ */
+function buildAiErrorSection(message) {
+    return `
+        <div class="ai-verdict ai-verdict-error">
+            <div class="ai-verdict-header">
+                <span class="ai-badge badge-unknown">${escapeHtml(message)}</span>
+            </div>
+        </div>
+    `;
+}
+
+/**
  * Map an AI deal rating to its CSS badge class.
+ * @param {string} rating - The AI deal rating string (e.g. "Must Buy", "Fair", "Avoid").
+ * @returns {string} CSS class name for the badge element.
  */
 function getAiBadgeClass(rating) {
     const r = (rating || '').toLowerCase();

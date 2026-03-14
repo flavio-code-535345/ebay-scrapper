@@ -124,6 +124,12 @@ body {
     border: 1px solid #f5c6cb;
 }
 
+.alert-warning {
+    background: #fff8e1;
+    color: #7d5700;
+    border: 1px solid #ffe082;
+}
+
 .error-details-list {
     margin-top: 0.5rem;
     padding-left: 1.2rem;
@@ -420,4 +426,9 @@ body {
     letter-spacing: 0.04em;
     margin-top: 0.35rem;
     display: block;
+}
+
+.ai-verdict-error {
+    background: #fafafa;
+    border-color: #ddd;
 }
