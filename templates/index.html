@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>eBay Scrapper Search Interface</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mt-5">eBay Deals Search</h1>
+        <input type="text" id="searchBar" class="form-control my-3" placeholder="Search for deals..." />
+        <div id="dealsDisplay" class="row">
+            <!-- Deal cards will be displayed here -->
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.2/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script>
+        // Mock data for demonstration
+        const deals = [
+            { title: 'Deal 1', description: 'Description for deal 1' },
+            { title: 'Deal 2', description: 'Description for deal 2' },
+            { title: 'Deal 3', description: 'Description for deal 3' }
+        ];
+
+        const searchBar = document.getElementById('searchBar');
+        const dealsDisplay = document.getElementById('dealsDisplay');
+
+        function displayDeals(dealsToDisplay) {
+            dealsDisplay.innerHTML = '';
+            dealsToDisplay.forEach(deal => {
+                const col = document.createElement('div');
+                col.className = 'col-md-4';
+                col.innerHTML = `<div class='card mb-4'><div class='card-body'><h5 class='card-title'>${deal.title}</h5><p class='card-text'>${deal.description}</p></div></div>`;
+                dealsDisplay.appendChild(col);
+            });
+        }
+
+        searchBar.addEventListener('input', () => {
+            const searchTerm = searchBar.value.toLowerCase();
+            const filteredDeals = deals.filter(deal => deal.title.toLowerCase().includes(searchTerm));
+            displayDeals(filteredDeals);
+        });
+
+        // Initial display of deals
+        displayDeals(deals);
+    </script>
+</body>
+</html>
