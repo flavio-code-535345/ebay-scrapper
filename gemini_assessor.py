@@ -5,8 +5,6 @@ Analyzes eBay listings using Google Gemini multimodal API (text + images).
 Falls back gracefully when the API key is absent or a request fails.
 """
 
-import base64
-import io
 import json
 import logging
 import os
@@ -61,7 +59,7 @@ keys:
 - "verdict_summary": (A 2-sentence explanation of your choice)
 """
 
-# Gemini model to use – gemini-1.5-flash is fast, cost-effective, multimodal.
+# Gemini model to use – gemini-1.5-flash supports multimodal (text + images).
 _MODEL_NAME = "gemini-1.5-flash"
 
 # Maximum number of listing images sent per request (keeps latency reasonable).
@@ -77,19 +75,16 @@ class GeminiAssessor:
     def __init__(self) -> None:
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
         self.enabled = bool(api_key)
-        self._model = None
-        self._genai = None
+        self._client = None
+        self._types = None
 
         if self.enabled:
             try:
-                import google.generativeai as genai  # lazy import
+                from google import genai  # lazy import
+                from google.genai import types
 
-                genai.configure(api_key=api_key)
-                self._genai = genai
-                self._model = genai.GenerativeModel(
-                    model_name=_MODEL_NAME,
-                    system_instruction=_SYSTEM_PROMPT,
-                )
+                self._client = genai.Client(api_key=api_key)
+                self._types = types
                 logger.info("GeminiAssessor: Gemini API initialised (model=%s)", _MODEL_NAME)
             except Exception as exc:
                 logger.error("GeminiAssessor: Failed to initialise Gemini client: %s", exc)
@@ -112,12 +107,20 @@ class GeminiAssessor:
         - The Gemini API call fails (network error, quota, etc.).
         Callers should fall back to the rules-based engine in these cases.
         """
-        if not self.enabled or self._model is None:
+        if not self.enabled or self._client is None or self._types is None:
             return None
 
         try:
-            parts = self._build_parts(deal)
-            response = self._model.generate_content(parts)
+            contents = self._build_contents(deal)
+            # The new google.genai SDK requires per-request config; there is no
+            # global model object that holds a system instruction.
+            response = self._client.models.generate_content(
+                model=_MODEL_NAME,
+                contents=contents,
+                config=self._types.GenerateContentConfig(
+                    system_instruction=_SYSTEM_PROMPT,
+                ),
+            )
             return self._parse_response(response.text)
         except Exception as exc:
             logger.error(
@@ -131,8 +134,8 @@ class GeminiAssessor:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _build_parts(self, deal: Dict) -> List:
-        """Construct the Gemini content list (text + image parts)."""
+    def _build_contents(self, deal: Dict) -> List:
+        """Construct the Gemini contents list (text + image parts)."""
         title = deal.get("title", "Unknown")
         price = deal.get("price", 0)
         condition = deal.get("condition", "Unknown")
@@ -149,7 +152,7 @@ class GeminiAssessor:
             "Return your analysis in the required JSON format."
         )
 
-        parts: List = [text_prompt]
+        parts: List = [self._types.Part.from_text(text=text_prompt)]
 
         image_urls: List[str] = deal.get("image_urls", [])
         for url in image_urls[:_MAX_IMAGES]:
@@ -160,7 +163,7 @@ class GeminiAssessor:
         return parts
 
     def _fetch_image_part(self, url: str):
-        """Download *url* and return a Gemini-compatible image part, or None."""
+        """Download *url* and return a Gemini-compatible image Part, or None."""
         try:
             resp = requests.get(url, timeout=_IMAGE_FETCH_TIMEOUT)
             resp.raise_for_status()
@@ -168,7 +171,7 @@ class GeminiAssessor:
             if not mime_type.startswith("image/"):
                 mime_type = "image/jpeg"
 
-            return self._genai.types.Part.from_bytes(data=resp.content, mime_type=mime_type)
+            return self._types.Part.from_bytes(data=resp.content, mime_type=mime_type)
         except Exception as exc:
             logger.warning("GeminiAssessor: Could not fetch image %s: %s", url, exc)
             return None
