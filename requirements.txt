@@ -1,0 +1,7 @@
+# Python dependencies for eBay scraper GUI application
+
+Flask==2.0.1
+requests==2.25.1
+beautifulsoup4==4.10.0
+pandas==1.2.4
+tkinter
