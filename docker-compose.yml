@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   ebay-scrapper:
-    image: flavio-code-535345/ebay-scrapper:latest
+    image: flavio11113/ebay-scrapper:latest
     container_name: ebay-scrapper
     restart: unless-stopped
     ports:
