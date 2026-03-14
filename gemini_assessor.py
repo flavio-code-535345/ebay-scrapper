@@ -60,7 +60,7 @@ keys:
 """
 
 # Gemini model to use – gemini-1.5-flash supports multimodal (text + images).
-_MODEL_NAME = "gemini-1.5-flash"
+_MODEL_NAME = "gemini-flash-latest"
 
 # Maximum number of listing images sent per request (keeps latency reasonable).
 _MAX_IMAGES = 3
