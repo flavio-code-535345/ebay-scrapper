@@ -3,50 +3,58 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>eBay Scrapper Search Interface</title>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <title>eBay Deal Finder</title>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div class="container">
-        <h1 class="text-center mt-5">eBay Deals Search</h1>
-        <input type="text" id="searchBar" class="form-control my-3" placeholder="Search for deals..." />
-        <div id="dealsDisplay" class="row">
-            <!-- Deal cards will be displayed here -->
+
+    <!-- Hero / Search bar -->
+    <header class="hero">
+        <h1>🛍️ eBay Deal Finder</h1>
+        <p>Search eBay listings and get instant deal scores powered by AI assessment</p>
+        <div class="search-container">
+            <form id="searchForm">
+                <input
+                    type="text"
+                    id="searchQuery"
+                    placeholder="Search for deals… e.g. iPhone 14, RTX 4080"
+                    autocomplete="off"
+                    required
+                />
+                <button type="submit" id="searchBtn" class="btn-search">
+                    <span class="spinner-border d-none" role="status" aria-hidden="true"></span>
+                    <span class="btn-text">Search</span>
+                </button>
+            </form>
         </div>
-    </div>
+    </header>
 
-    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.2/dist/umd/popper.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
-    <script>
-        // Mock data for demonstration
-        const deals = [
-            { title: 'Deal 1', description: 'Description for deal 1' },
-            { title: 'Deal 2', description: 'Description for deal 2' },
-            { title: 'Deal 3', description: 'Description for deal 3' }
-        ];
+    <main class="main">
 
-        const searchBar = document.getElementById('searchBar');
-        const dealsDisplay = document.getElementById('dealsDisplay');
+        <!-- Error -->
+        <div id="errorContainer" class="alert alert-danger d-none"></div>
 
-        function displayDeals(dealsToDisplay) {
-            dealsDisplay.innerHTML = '';
-            dealsToDisplay.forEach(deal => {
-                const col = document.createElement('div');
-                col.className = 'col-md-4';
-                col.innerHTML = `<div class='card mb-4'><div class='card-body'><h5 class='card-title'>${deal.title}</h5><p class='card-text'>${deal.description}</p></div></div>`;
-                dealsDisplay.appendChild(col);
-            });
-        }
+        <!-- Loading -->
+        <div id="loadingContainer" class="loading-container d-none">
+            <p>⏳ Searching eBay and assessing deals…</p>
+        </div>
 
-        searchBar.addEventListener('input', () => {
-            const searchTerm = searchBar.value.toLowerCase();
-            const filteredDeals = deals.filter(deal => deal.title.toLowerCase().includes(searchTerm));
-            displayDeals(filteredDeals);
-        });
+        <!-- Empty state -->
+        <div id="emptyState" class="empty-state d-none">
+            <p>😕 No deals found. Try a different search term.</p>
+        </div>
 
-        // Initial display of deals
-        displayDeals(deals);
-    </script>
+        <!-- Results -->
+        <div id="resultsContainer" class="d-none">
+            <div class="results-header">
+                <h2><span id="dealCount">0</span> deals found</h2>
+                <button id="exportBtn" class="btn-export">📥 Export CSV</button>
+            </div>
+            <div id="dealsGrid" class="deals-grid"></div>
+        </div>
+
+    </main>
+
+    <script src="/static/app.js"></script>
 </body>
 </html>

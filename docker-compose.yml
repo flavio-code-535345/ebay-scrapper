@@ -1,0 +1,25 @@
+version: "3.8"
+
+services:
+  ebay-scrapper:
+    build: .
+    container_name: ebay-scrapper
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - FLASK_APP=app.py
+      - DB_PATH=/data/ebay_deals.db
+    volumes:
+      - ebay_db:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  ebay_db:
+    driver: local
