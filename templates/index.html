@@ -36,7 +36,13 @@
 
         <!-- Loading -->
         <div id="loadingContainer" class="loading-container d-none">
-            <p>⏳ Searching eBay and assessing deals…</p>
+            <div class="progress-section">
+                <div class="progress-label" id="progressLabel">⏳ Searching eBay…</div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar-fill" id="progressBarFill"></div>
+                </div>
+                <div class="progress-pct" id="progressPct">0%</div>
+            </div>
         </div>
 
         <!-- Empty state -->

@@ -93,15 +93,18 @@ value of the item's condition.
 detail.
 
 ### OUTPUT FORMAT
-You MUST return a JSON array where each element corresponds to one listing \
-in the order they were presented. Each element must have these keys:
+You MUST return a **single JSON array** where each element corresponds to one \
+listing in the order they were presented. Each element must have these keys:
 - "deal_rating": (Must Buy / Fair / Avoid)
 - "confidence_score": (1-100)
 - "visual_findings": (List any damage or missing parts found in photos)
 - "red_flags": (List any suspicious text or photo details)
 - "fair_market_estimate": (Based on condition)
 - "verdict_summary": (A 2-sentence explanation of your choice)
-Do NOT include any text outside the JSON array.
+
+CRITICAL: Output ONLY the JSON array — no markdown fences, no explanation \
+text, no concatenated separate objects. The entire response must be parseable \
+as a single `json.loads()` call that returns a list.
 """
 
 # Gemini model to use – gemini-flash-latest supports multimodal (text + images).
@@ -128,6 +131,34 @@ _RETRY_BASE_DELAY = 2.0  # seconds; doubled on each retry (exponential back-off)
 # ---------------------------------------------------------------------------
 _rate_limit_lock = threading.Lock()
 _rate_limited_until: float = 0.0  # monotonic timestamp
+
+
+def _extract_json_objects(text: str) -> list:
+    """Extract all top-level JSON values (objects or arrays) from *text*.
+
+    Handles Gemini responses that return concatenated JSON objects instead of a
+    single JSON array, e.g. ``{"a":1}{"b":2}`` instead of ``[{"a":1},{"b":2}]``.
+    Returns a (possibly empty) list of decoded Python values.
+    """
+    decoder = json.JSONDecoder()
+    results = []
+    pos = 0
+    while pos < len(text):
+        # Skip whitespace and stray commas between objects.
+        while pos < len(text) and text[pos] in " \t\n\r,":
+            pos += 1
+        if pos >= len(text):
+            break
+        if text[pos] in "{[":
+            try:
+                obj, end_pos = decoder.raw_decode(text, pos)
+                results.append(obj)
+                pos = end_pos
+            except json.JSONDecodeError:
+                pos += 1
+        else:
+            pos += 1
+    return results
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
@@ -540,22 +571,42 @@ class GeminiAssessor:
         data = None
         try:
             data = json.loads(text)
-        except json.JSONDecodeError:
-            # Last-ditch: find a JSON array anywhere in the text.
+        except json.JSONDecodeError as exc:
+            logger.debug("GeminiAssessor: Direct JSON parse failed: %s", exc)
+
+            # Fallback 1: find a JSON array anywhere in the text.
             arr_match = re.search(r"\[[\s\S]*\]", text)
             if arr_match:
                 try:
                     data = json.loads(arr_match.group())
                 except json.JSONDecodeError as inner_exc:
-                    logger.error(
-                        "GeminiAssessor: Batch JSON parse failed – %s. "
-                        "Raw response (first 500 chars): %r",
+                    logger.warning(
+                        "GeminiAssessor: Batch JSON array parse failed – %s. "
+                        "Trying concatenated-object extraction.",
                         inner_exc,
-                        original_text[:500],
                     )
-            else:
+
+            # Fallback 2: extract concatenated JSON objects (e.g. {...}{...}).
+            if data is None:
+                extracted = _extract_json_objects(text)
+                if extracted:
+                    items: List = []
+                    for obj in extracted:
+                        if isinstance(obj, list):
+                            items.extend(obj)
+                        elif isinstance(obj, dict):
+                            items.append(obj)
+                    if items:
+                        data = items
+                        logger.info(
+                            "GeminiAssessor: Extracted %d items via "
+                            "concatenated-object fallback.",
+                            len(items),
+                        )
+
+            if data is None:
                 logger.error(
-                    "GeminiAssessor: No JSON array found in batch response. "
+                    "GeminiAssessor: All JSON parse strategies failed for batch. "
                     "Raw response (first 500 chars): %r",
                     original_text[:500],
                 )

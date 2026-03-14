@@ -432,3 +432,40 @@ body {
     background: #fafafa;
     border-color: #ddd;
 }
+
+/* Progress bar */
+.progress-section {
+    max-width: 520px;
+    margin: 1.5rem auto 0;
+    padding: 0 1rem;
+}
+
+.progress-label {
+    text-align: center;
+    margin-bottom: 0.65rem;
+    font-size: 1rem;
+    color: var(--text);
+    min-height: 1.4em;
+}
+
+.progress-bar-container {
+    background: #e0e0e0;
+    border-radius: 999px;
+    height: 12px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--primary) 0%, var(--accent) 100%);
+    border-radius: 999px;
+    transition: width 0.15s linear;
+}
+
+.progress-pct {
+    text-align: right;
+    font-size: 0.82rem;
+    color: var(--muted);
+    margin-top: 0.3rem;
+}
