@@ -196,6 +196,10 @@ function createDealCard(deal) {
     const conditionScore = deal.condition_score || 0;
     const trendScore = deal.trend_score || 0;
 
+    // ── Image issue warning section ────────────────────────────────────────
+    const imageIssues = Array.isArray(deal.image_issues) ? deal.image_issues : [];
+    const imageWarningSection = buildImageIssueSection(imageIssues);
+
     // ── AI (Gemini) verdict section ────────────────────────────────────────
     let aiSection = '';
     if (deal.ai_assessed) {
@@ -219,7 +223,7 @@ function createDealCard(deal) {
                 <div class="deal-title">${escapeHtml(deal.title)}</div>
                 
                 <div class="deal-price">
-                    $${(deal.price || 0).toFixed(2)}
+                    €${(deal.price || 0).toFixed(2)}
                 </div>
                 
                 <div class="deal-details">
@@ -244,6 +248,7 @@ function createDealCard(deal) {
                     </div>
                 </div>
 
+                ${imageWarningSection}
                 ${aiSection}
 
                 <div class="scores-breakdown">
@@ -288,6 +293,27 @@ function createDealCard(deal) {
             </div>
         </div>
     `;
+}
+
+/**
+ * Build an image issue warning section for a deal card.
+ * @param {string[]} issues - Array of image issue identifiers.
+ * @returns {string} HTML string, or empty string when there are no issues.
+ */
+function buildImageIssueSection(issues) {
+    if (!issues || issues.length === 0) return '';
+
+    const issueLabels = {
+        'no_images':    '📷 No product images available',
+        'low_res_only': '🔍 Only low-resolution images found',
+    };
+
+    const items = issues.map(issue => {
+        const label = issueLabels[issue] || escapeHtml(issue);
+        return `<span class="image-issue-badge">${label}</span>`;
+    }).join('');
+
+    return `<div class="image-issues">${items}</div>`;
 }
 
 /**
