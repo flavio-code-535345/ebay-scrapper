@@ -64,7 +64,7 @@ This project aims to simplify the process of finding the best deals on eBay usin
 
 The Docker image is automatically built and published to Docker Hub via GitHub Actions on every push to `main`. Portainer (or any Docker host) can pull the image directly — no local build required.
 
-**Docker Hub image:** `flavio-code-535345/ebay-scrapper:latest`
+**Docker Hub image:** `flavio11113/ebay-scrapper:latest`
 
 ### How the CI/CD pipeline works
 
@@ -85,7 +85,7 @@ The workflow (`.github/workflows/docker-build.yml`) supports:
 
 ### 1. Create a Docker Hub account
 1. Go to <https://hub.docker.com/> and sign up (or log in).
-2. Create a **public** repository named `ebay-scrapper` under your account (`flavio-code-535345/ebay-scrapper`).
+2. Create a **public** repository named `ebay-scrapper` under your account (`flavio11113/ebay-scrapper`).
 
 ### 2. Generate a Docker Hub access token
 1. In Docker Hub, go to **Account Settings → Security → New Access Token**.
@@ -136,7 +136,7 @@ version: "3.8"
 
 services:
   ebay-scrapper:
-    image: flavio-code-535345/ebay-scrapper:latest
+    image: flavio11113/ebay-scrapper:latest
     container_name: ebay-scrapper
     restart: unless-stopped
     ports:
