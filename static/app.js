@@ -52,14 +52,23 @@ async function handleSearch(e) {
         const data = await response.json();
 
         if (!response.ok) {
-            throw new Error(data.error || 'Search failed');
+            console.error('API error response:', data);
+            throw new Error(data.error || `HTTP ${response.status}: Search failed`);
+        }
+
+        if (data.errors && data.errors.length) {
+            console.warn('Search completed with warnings:', data.errors);
         }
 
         // Hide loading
         document.getElementById('loadingContainer').classList.add('d-none');
 
         if (!data.deals || data.deals.length === 0) {
-            showError('No deals found. Try a different search term.');
+            const errorLines = (data.errors && data.errors.length)
+                ? data.errors
+                : ['No matching items found on eBay for this search term.'];
+            console.warn('No deals found. Details:', errorLines);
+            showDetailedError('No deals found. Try a different search term.', errorLines);
             document.getElementById('emptyState').classList.remove('d-none');
             return;
         }
@@ -69,7 +78,10 @@ async function handleSearch(e) {
     } catch (error) {
         console.error('Search error:', error);
         document.getElementById('loadingContainer').classList.add('d-none');
-        showError(error.message || 'An error occurred during search');
+        showDetailedError(
+            error.message || 'An error occurred during search',
+            ['Check the browser console (F12) for more details.']
+        );
     } finally {
         searchBtn.disabled = false;
         spinner.classList.add('d-none');
@@ -195,6 +207,16 @@ function getScoreColor(score) {
 function showError(message) {
     const errorContainer = document.getElementById('errorContainer');
     errorContainer.textContent = message;
+    errorContainer.classList.remove('d-none');
+}
+
+function showDetailedError(summary, details) {
+    const errorContainer = document.getElementById('errorContainer');
+    const detailsHtml = details.map(d => `<li><pre class="error-detail">${escapeHtml(d)}</pre></li>`).join('');
+    errorContainer.innerHTML = `
+        <strong>${escapeHtml(summary)}</strong>
+        <ul class="error-details-list">${detailsHtml}</ul>
+    `;
     errorContainer.classList.remove('d-none');
 }
 

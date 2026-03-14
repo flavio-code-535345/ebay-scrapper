@@ -124,6 +124,26 @@ body {
     border: 1px solid #f5c6cb;
 }
 
+.error-details-list {
+    margin-top: 0.5rem;
+    padding-left: 1.2rem;
+}
+
+.error-details-list li {
+    margin-top: 0.3rem;
+}
+
+.error-detail {
+    font-family: monospace;
+    font-size: 0.82rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: #fdf0ef;
+    border-left: 3px solid #e57373;
+    padding: 0.3rem 0.6rem;
+    margin: 0;
+}
+
 /* Results header */
 .results-header {
     display: flex;

@@ -4,12 +4,19 @@ Flask REST API for eBay Deal Scraper
 Provides endpoints for searching, history, export, stats and health checks
 """
 
+import logging
 import os
 from flask import Flask, request, jsonify, render_template, Response
 
 from scraper import EbayScraper
 from deal_assessor import DealAssessor
 import database
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -38,7 +45,8 @@ def search():
     if not query:
         return jsonify({'error': 'query is required'}), 400
 
-    deals = scraper.search(query, max_results=max_results)
+    deals, search_errors = scraper.search(query, max_results=max_results)
+    logger.info("Search for %r returned %d deals, %d error(s)", query, len(deals), len(search_errors))
 
     assessed = []
     for deal in deals:
@@ -51,6 +59,7 @@ def search():
         'query': query,
         'deal_count': len(assessed),
         'deals': assessed,
+        'errors': search_errors,
     })
 
 

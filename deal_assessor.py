@@ -4,8 +4,11 @@ Deal Assessment Engine
 Evaluates and scores eBay deals based on multiple criteria
 """
 
+import logging
 from typing import Dict
 import statistics
+
+logger = logging.getLogger(__name__)
 
 class DealAssessor:
     """Intelligent deal assessment system"""
@@ -25,7 +28,7 @@ class DealAssessor:
     def assess_deal(self, deal: Dict) -> Dict:
         """
         Assess a deal and return scores
-        
+
         Returns dict with:
         - price_score: 0-100
         - seller_score: 0-100
@@ -34,30 +37,40 @@ class DealAssessor:
         - overall_score: 0-100
         - recommendation: Text recommendation
         """
-        
-        price_score = self._score_price(deal)
-        seller_score = self._score_seller(deal)
-        condition_score = self._score_condition(deal)
-        trend_score = self._score_trends(deal)
-        
-        # Calculate weighted overall score
-        overall_score = (
-            price_score * self.PRICE_WEIGHT +
-            seller_score * self.SELLER_WEIGHT +
-            condition_score * self.CONDITION_WEIGHT +
-            trend_score * self.TREND_WEIGHT
-        )
-        
-        recommendation = self._get_recommendation(overall_score)
-        
-        return {
-            'price_score': price_score,
-            'seller_score': seller_score,
-            'condition_score': condition_score,
-            'trend_score': trend_score,
-            'overall_score': overall_score,
-            'recommendation': recommendation
-        }
+        try:
+            price_score = self._score_price(deal)
+            seller_score = self._score_seller(deal)
+            condition_score = self._score_condition(deal)
+            trend_score = self._score_trends(deal)
+
+            # Calculate weighted overall score
+            overall_score = (
+                price_score * self.PRICE_WEIGHT +
+                seller_score * self.SELLER_WEIGHT +
+                condition_score * self.CONDITION_WEIGHT +
+                trend_score * self.TREND_WEIGHT
+            )
+
+            recommendation = self._get_recommendation(overall_score)
+
+            return {
+                'price_score': price_score,
+                'seller_score': seller_score,
+                'condition_score': condition_score,
+                'trend_score': trend_score,
+                'overall_score': overall_score,
+                'recommendation': recommendation
+            }
+        except Exception as exc:
+            logger.error("Error assessing deal %r: %s", deal.get('title', '?'), exc, exc_info=True)
+            return {
+                'price_score': 0,
+                'seller_score': 0,
+                'condition_score': 0,
+                'trend_score': 0,
+                'overall_score': 0,
+                'recommendation': '⚠️ Assessment failed'
+            }
     
     def _score_price(self, deal: Dict) -> float:
         """Score deal based on price (0-100)"""
