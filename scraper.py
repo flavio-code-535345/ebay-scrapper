@@ -75,11 +75,53 @@ class EbayScraper:
             soup = BeautifulSoup(response.content, 'html.parser')
             deals: List[Dict] = []
 
-            # Find all item listings.
-            # eBay uses both <li class="s-item"> and <div class="s-item"> depending
-            # on layout/A-B tests, so we cover both tags with a CSS selector.
+            # ── Selector strategy ─────────────────────────────────────────────
+            # eBay uses <li class="s-item …"> inside <ul class="srp-results …">.
+            # eBay periodically changes or adds class names, so we try a cascade
+            # of increasingly broad selectors and log which one fired.
+
+            # 1. Primary: class-based s-item selector (covers li AND div variants)
             items = soup.select('li.s-item, div.s-item')
-            logger.info("BeautifulSoup found %d raw item elements", len(items))
+            selector_used = 'li.s-item / div.s-item'
+
+            if not items:
+                # 2. Fallback A: any direct <li> children of the srp-results
+                #    container that contain a product link.  This handles the
+                #    case where eBay removed or renamed the s-item class while
+                #    keeping the overall srp-results wrapper intact.
+                srp_container = soup.find(class_='srp-results')
+                if srp_container:
+                    candidate_lis = srp_container.find_all('li', recursive=False)
+                    items = [
+                        li for li in candidate_lis
+                        if li.find('a', class_='s-item__link')
+                        or li.find('a', href=lambda h: h and '/itm/' in h)
+                    ]
+                    if items:
+                        selector_used = 'srp-results > li (fallback A)'
+                        logger.warning(
+                            "Primary 's-item' selector returned 0 results; "
+                            "fell back to 'srp-results > li' — eBay likely changed "
+                            "the item class name.  This is a markup/selector change, "
+                            "NOT a connectivity or ban problem."
+                        )
+
+            if not items:
+                # 3. Fallback B: any element (any tag) carrying the s-item__wrapper
+                #    class, which has been stable across several eBay redesigns.
+                items = soup.select('.s-item__wrapper')
+                if items:
+                    selector_used = '.s-item__wrapper (fallback B)'
+                    logger.warning(
+                        "Fell back to '.s-item__wrapper' selector — eBay may have "
+                        "changed their markup.  This is a selector/markup issue, NOT "
+                        "a connectivity or ban problem."
+                    )
+
+            logger.info(
+                "BeautifulSoup found %d raw item elements (selector: %s)",
+                len(items), selector_used,
+            )
 
             if not items:
                 # Gather diagnostic context so developers can tell whether the
@@ -95,21 +137,23 @@ class EbayScraper:
                 if srp_container:
                     diag = (
                         "An 'srp-results' container was found on the page, which means "
-                        "eBay returned a valid search results page. The 's-item' CSS "
-                        "selector no longer matches any elements — eBay has likely changed "
-                        "their item markup (e.g., a different tag name or class). "
-                        "This is a selector/markup issue, NOT a connectivity or ban problem."
+                        "eBay returned a valid search results page. None of the known "
+                        "item selectors ('li.s-item', 'div.s-item', 'srp-results > li', "
+                        "'.s-item__wrapper') matched any elements — eBay has likely "
+                        "changed their item markup.  This is a selector/markup issue, "
+                        "NOT a connectivity or ban problem."
                     )
                 else:
                     diag = (
-                        f"No 'srp-results' container and no 's-item' elements were found. "
+                        f"No 'srp-results' container and no item elements were found. "
                         f"Page title: \"{page_title}\". "
                         f"eBay may have significantly restructured their search results page "
                         f"or returned an unexpected page (CAPTCHA, login wall, etc.)."
                     )
 
                 msg = (
-                    "BeautifulSoup found 0 item elements with class 's-item'. "
+                    "BeautifulSoup found 0 item elements after trying all known "
+                    "selectors ('li.s-item', 'srp-results > li', '.s-item__wrapper'). "
                     "eBay has likely changed their HTML structure — this is a markup/"
                     "selector issue, not a connectivity or ban problem. "
                     "The scraper's selectors need to be updated to match the new page layout."
@@ -144,36 +188,65 @@ class EbayScraper:
             return [], errors
 
     def _parse_item(self, item_element) -> Dict:
-        """Parse individual item element into deal dictionary"""
+        """Parse individual item element into deal dictionary.
+
+        Uses a cascade of selectors for each field so that parsing continues
+        to work when eBay tweaks their class names between the well-known
+        `s-item__*` names and any new variants they introduce.
+        """
         try:
             # Extract title – eBay uses <h3> in newer layouts, <h2> in older ones;
             # using a CSS class selector avoids the tag dependency entirely.
             title_elem = item_element.select_one('.s-item__title')
             title = title_elem.text.strip() if title_elem else "Unknown"
 
-            # Extract price
-            price_elem = item_element.find('span', {'class': 's-item__price'})
+            # Skip eBay's "Shop on eBay" placeholder card that sometimes appears
+            # as the very first item in the results list.
+            if title.lower() in ("shop on ebay", "results matching fewer words"):
+                return None
+
+            # Extract price – try the stable s-item__price class first, then fall
+            # back to any element with a dollar amount inside the item wrapper.
+            price_elem = item_element.find(class_='s-item__price')
+            if not price_elem:
+                price_elem = item_element.find('span', string=lambda s: s and '$' in s)
             price_text = price_elem.text.strip() if price_elem else "$0.00"
             price = self._parse_price(price_text)
 
             # Extract condition
-            condition_elem = item_element.find('span', {'class': 'SECONDARY_INFO'})
+            condition_elem = (
+                item_element.find(class_='SECONDARY_INFO')
+                or item_element.find(class_='s-item__subtitle')
+            )
             condition = condition_elem.text.strip() if condition_elem else "Unknown"
 
             # Extract seller rating
-            seller_elem = item_element.find('span', {'class': 's-item__seller-info-text'})
+            seller_elem = (
+                item_element.find(class_='s-item__seller-info-text')
+                or item_element.find(class_='s-item__seller-info')
+            )
             seller_rating = self._parse_seller_rating(seller_elem.text) if seller_elem else 0
 
-            # Extract item URL
-            link_elem = item_element.find('a', {'class': 's-item__link'})
+            # Extract item URL – try the dedicated link class first, then any
+            # anchor that points to an individual eBay listing page (/itm/).
+            link_elem = (
+                item_element.find('a', class_='s-item__link')
+                or item_element.find('a', href=lambda h: h and '/itm/' in h)
+            )
             item_url = link_elem.get('href', '') if link_elem else ""
 
             # Extract shipping info
-            shipping_elem = item_element.find('span', {'class': 's-item__shipping'})
+            shipping_elem = (
+                item_element.find(class_='s-item__shipping')
+                or item_element.find(class_='s-item__logisticsCost')
+            )
             shipping = shipping_elem.text.strip() if shipping_elem else "Calculate"
 
             # Check if new/trending
-            is_trending = bool(item_element.find('span', {'class': 'SHOP_NEW_TAG'}))
+            is_trending = bool(
+                item_element.find(class_='SHOP_NEW_TAG')
+                or item_element.find(class_='s-item__trending-price')
+            )
 
             return {
                 'title': title,
