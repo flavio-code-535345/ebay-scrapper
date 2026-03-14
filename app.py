@@ -91,6 +91,18 @@ def search():
         ai_assessment = ai_assessments[i] if i < len(ai_assessments) else None
         assessed.append({**deal, **rules_assessment, **(ai_assessment or {})})
 
+    # Sort deals: best first. AI-rated "Must Buy" with high confidence leads,
+    # followed by "Fair", then "Avoid", then rules-only results by overall_score.
+    _rating_order = {"must buy": 0, "fair": 1, "avoid": 2}
+
+    def _sort_key(d: dict):
+        ai_order = _rating_order.get((d.get("ai_deal_rating") or "").lower(), 3)
+        ai_conf = -(d.get("ai_confidence_score") or 0)
+        score = -(d.get("overall_score") or 0)
+        return (not d.get("ai_assessed", False), ai_order, ai_conf, score)
+
+    assessed.sort(key=_sort_key)
+
     database.save_search(query, assessed)
 
     # Compute how many seconds remain in any rate-limit back-off window.

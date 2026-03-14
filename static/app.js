@@ -1,5 +1,67 @@
 // eBay Deal Finder - Frontend Application
 
+// ---------------------------------------------------------------------------
+// Progress bar helpers
+// ---------------------------------------------------------------------------
+
+let _progressTimer = null;
+
+const _PROGRESS_STAGES = [
+    { target: 35,  label: '🔍 Searching eBay listings…',  duration: 3500 },
+    { target: 82,  label: '🤖 Running AI scoring…',       duration: 9000 },
+    { target: 96,  label: '⚙️ Processing results…',       duration: 2500 },
+];
+
+function startProgress() {
+    const fill  = document.getElementById('progressBarFill');
+    const label = document.getElementById('progressLabel');
+    const pct   = document.getElementById('progressPct');
+    if (!fill) return;
+
+    let stageIdx   = 0;
+    let stageStart = Date.now();
+    let current    = 0;
+
+    _progressTimer = setInterval(() => {
+        const stage    = _PROGRESS_STAGES[Math.min(stageIdx, _PROGRESS_STAGES.length - 1)];
+        const prev     = stageIdx === 0 ? 0 : _PROGRESS_STAGES[stageIdx - 1].target;
+        const elapsed  = Date.now() - stageStart;
+        const stagePct = Math.min(1, elapsed / stage.duration);
+
+        current = prev + (stage.target - prev) * stagePct;
+
+        if (stagePct >= 1 && stageIdx < _PROGRESS_STAGES.length - 1) {
+            stageIdx++;
+            stageStart = Date.now();
+        }
+
+        const rounded = Math.round(current);
+        fill.style.width  = rounded + '%';
+        pct.textContent   = rounded + '%';
+        label.textContent = stage.label;
+    }, 100);
+}
+
+function stopProgress(success) {
+    if (_progressTimer) {
+        clearInterval(_progressTimer);
+        _progressTimer = null;
+    }
+    const fill  = document.getElementById('progressBarFill');
+    const label = document.getElementById('progressLabel');
+    const pct   = document.getElementById('progressPct');
+    if (!fill) return;
+    if (success) {
+        fill.style.width  = '100%';
+        pct.textContent   = '100%';
+        label.textContent = '✅ Done!';
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Main search handler
+// ---------------------------------------------------------------------------
+
 document.addEventListener('DOMContentLoaded', () => {
     const searchForm = document.getElementById('searchForm');
     if (searchForm) {
@@ -36,6 +98,7 @@ async function handleSearch(e) {
     document.getElementById('resultsContainer').classList.add('d-none');
     document.getElementById('errorContainer').classList.add('d-none');
     document.getElementById('emptyState').classList.add('d-none');
+    startProgress();
 
     try {
         const response = await fetch('/api/search', {
@@ -60,10 +123,9 @@ async function handleSearch(e) {
             console.warn('Search completed with warnings:', data.errors);
         }
 
-        // Hide loading
-        document.getElementById('loadingContainer').classList.add('d-none');
-
         if (!data.deals || data.deals.length === 0) {
+            stopProgress(false);
+            document.getElementById('loadingContainer').classList.add('d-none');
             const errorLines = (data.errors && data.errors.length)
                 ? data.errors
                 : ['No matching items found on eBay for this search term.'];
@@ -73,10 +135,14 @@ async function handleSearch(e) {
             return;
         }
 
+        stopProgress(true);
+        // Brief pause so the user sees "Done!" before results render.
+        await new Promise(r => setTimeout(r, 300));
         displayResults(data);
 
     } catch (error) {
         console.error('Search error:', error);
+        stopProgress(false);
         document.getElementById('loadingContainer').classList.add('d-none');
         showDetailedError(
             error.message || 'An error occurred during search',
@@ -90,6 +156,7 @@ async function handleSearch(e) {
 }
 
 function displayResults(data) {
+    document.getElementById('loadingContainer').classList.add('d-none');
     document.getElementById('dealCount').textContent = data.deal_count;
 
     // Show a warning banner if the Gemini quota is exhausted.
