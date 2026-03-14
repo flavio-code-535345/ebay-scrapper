@@ -78,12 +78,14 @@ class GeminiAssessor:
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
         self.enabled = bool(api_key)
         self._model = None
+        self._genai = None
 
         if self.enabled:
             try:
                 import google.generativeai as genai  # lazy import
 
                 genai.configure(api_key=api_key)
+                self._genai = genai
                 self._model = genai.GenerativeModel(
                     model_name=_MODEL_NAME,
                     system_instruction=_SYSTEM_PROMPT,
@@ -166,9 +168,7 @@ class GeminiAssessor:
             if not mime_type.startswith("image/"):
                 mime_type = "image/jpeg"
 
-            import google.generativeai as genai  # noqa: PLC0415
-
-            return genai.types.Part.from_bytes(data=resp.content, mime_type=mime_type)
+            return self._genai.types.Part.from_bytes(data=resp.content, mime_type=mime_type)
         except Exception as exc:
             logger.warning("GeminiAssessor: Could not fetch image %s: %s", url, exc)
             return None

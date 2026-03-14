@@ -423,8 +423,8 @@ class EbayScraper:
                     url
                     and url.startswith('http')
                     and url not in seen
-                    # Skip eBay placeholder / spacer images
-                    and 'gif' not in url.lower()
+                    # Skip eBay placeholder / spacer images (GIF files)
+                    and not url.lower().endswith('.gif')
                     and 's-l' in url  # eBay image CDN pattern (e.g. s-l500, s-l1600)
                 ):
                     seen.add(url)

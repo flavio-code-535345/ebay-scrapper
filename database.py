@@ -69,7 +69,36 @@ def init_db():
 
 
 def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> None:
-    """Add *column* to *table* when it does not already exist."""
+    """Add *column* to *table* when it does not already exist.
+
+    Both *table* and *column* are validated against an explicit allowlist to
+    prevent SQL injection through these DDL-level parameters (SQLite does not
+    support parameterised DDL statements).
+    """
+    _ALLOWED_TABLES = {"deals", "searches"}
+    _ALLOWED_COLUMNS = {
+        "ai_deal_rating",
+        "ai_confidence_score",
+        "ai_visual_findings",
+        "ai_red_flags",
+        "ai_fair_market_estimate",
+        "ai_verdict_summary",
+        "ai_assessed",
+    }
+    _ALLOWED_TYPES = {
+        "TEXT",
+        "REAL",
+        "INTEGER",
+        "INTEGER DEFAULT 0",
+    }
+
+    if table not in _ALLOWED_TABLES:
+        raise ValueError(f"_add_column_if_missing: disallowed table name: {table!r}")
+    if column not in _ALLOWED_COLUMNS:
+        raise ValueError(f"_add_column_if_missing: disallowed column name: {column!r}")
+    if col_type not in _ALLOWED_TYPES:
+        raise ValueError(f"_add_column_if_missing: disallowed column type: {col_type!r}")
+
     try:
         cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
     except Exception:

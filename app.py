@@ -57,8 +57,8 @@ def search():
 
         # AI assessment via Gemini (optional; falls back to None on any failure).
         ai_assessment = gemini.assess_deal(deal)
-        if ai_assessment is None:
-            logger.debug("Gemini assessment unavailable for %r; using rules engine.", deal.get('title', '?'))
+        if ai_assessment is None and gemini.enabled:
+            logger.warning("Gemini assessment failed for %r; using rules engine.", deal.get('title', '?'))
 
         assessed.append({**deal, **rules_assessment, **(ai_assessment or {})})
 
