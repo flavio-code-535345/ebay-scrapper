@@ -10,6 +10,7 @@ from flask import Flask, request, jsonify, render_template, Response
 
 from scraper import EbayScraper
 from deal_assessor import DealAssessor
+from gemini_assessor import GeminiAssessor
 import database
 
 logging.basicConfig(
@@ -22,6 +23,7 @@ app = Flask(__name__)
 
 scraper = EbayScraper()
 assessor = DealAssessor()
+gemini = GeminiAssessor()
 
 database.init_db()
 
@@ -50,8 +52,15 @@ def search():
 
     assessed = []
     for deal in deals:
-        assessment = assessor.assess_deal(deal)
-        assessed.append({**deal, **assessment})
+        # Rules-based assessment (always available as baseline/fallback).
+        rules_assessment = assessor.assess_deal(deal)
+
+        # AI assessment via Gemini (optional; falls back to None on any failure).
+        ai_assessment = gemini.assess_deal(deal)
+        if ai_assessment is None and gemini.enabled:
+            logger.warning("Gemini assessment failed for %r; using rules engine.", deal.get('title', '?'))
+
+        assessed.append({**deal, **rules_assessment, **(ai_assessment or {})})
 
     database.save_search(query, assessed)
 
@@ -60,6 +69,7 @@ def search():
         'deal_count': len(assessed),
         'deals': assessed,
         'errors': search_errors,
+        'ai_enabled': gemini.enabled,
     })
 
 
@@ -91,7 +101,7 @@ def stats():
 
 @app.route('/api/health')
 def health():
-    return jsonify({'status': 'healthy'})
+    return jsonify({'status': 'healthy', 'ai_enabled': gemini.enabled})
 
 
 if __name__ == '__main__':
