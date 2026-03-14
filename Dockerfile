@@ -8,7 +8,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
-COPY app.py database.py deal_assessor.py scraper.py ./
+COPY app.py database.py deal_assessor.py gemini_assessor.py scraper.py ./
 COPY templates/ templates/
 COPY static/ static/
 
