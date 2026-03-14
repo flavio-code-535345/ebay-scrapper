@@ -51,20 +51,44 @@ def search():
     deals, search_errors = scraper.search(query, max_results=max_results)
     logger.info("Search for %r returned %d deals, %d error(s)", query, len(deals), len(search_errors))
 
+    # Rules-based assessment (always available as baseline/fallback).
+    rules_assessments = [assessor.assess_deal(deal) for deal in deals]
+
+    # AI assessment via Gemini: send all deals in a single (or few) request(s)
+    # to minimise quota consumption rather than calling once per deal.
+    ai_assessments = gemini.assess_deals_batch(deals) if deals else []
+
+    if gemini.enabled and ai_assessments:
+        failed = sum(1 for a in ai_assessments if a is None)
+        rate_limited = sum(
+            1 for a in ai_assessments if a and a.get("ai_error_type") == "rate_limit"
+        )
+        parse_errors = sum(
+            1 for a in ai_assessments if a and a.get("ai_error_type") == "parse_error"
+        )
+        if failed:
+            logger.warning(
+                "Gemini batch: %d/%d items failed AI assessment; using rules engine.",
+                failed,
+                len(ai_assessments),
+            )
+        if rate_limited:
+            logger.warning(
+                "Gemini batch: %d/%d items rate-limited; skipping AI assessment.",
+                rate_limited,
+                len(ai_assessments),
+            )
+        if parse_errors:
+            logger.warning(
+                "Gemini batch: %d/%d items had parse errors; AI fields set to defaults.",
+                parse_errors,
+                len(ai_assessments),
+            )
+
     assessed = []
-    for deal in deals:
-        # Rules-based assessment (always available as baseline/fallback).
-        rules_assessment = assessor.assess_deal(deal)
-
-        # AI assessment via Gemini (optional; falls back to None on any failure).
-        ai_assessment = gemini.assess_deal(deal)
-        if ai_assessment is None and gemini.enabled:
-            logger.warning("Gemini assessment failed for %r; using rules engine.", deal.get('title', '?'))
-        elif ai_assessment and ai_assessment.get('ai_error_type') == 'rate_limit':
-            logger.warning("Gemini rate-limited for %r; skipping AI assessment.", deal.get('title', '?'))
-        elif ai_assessment and ai_assessment.get('ai_error_type') == 'parse_error':
-            logger.warning("Gemini parse error for %r; AI fields set to defaults.", deal.get('title', '?'))
-
+    for i, deal in enumerate(deals):
+        rules_assessment = rules_assessments[i]
+        ai_assessment = ai_assessments[i] if i < len(ai_assessments) else None
         assessed.append({**deal, **rules_assessment, **(ai_assessment or {})})
 
     database.save_search(query, assessed)
