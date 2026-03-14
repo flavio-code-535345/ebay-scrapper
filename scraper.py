@@ -75,17 +75,49 @@ class EbayScraper:
             soup = BeautifulSoup(response.content, 'html.parser')
             deals: List[Dict] = []
 
-            # Find all item listings
-            items = soup.find_all('div', {'class': 's-item'})
+            # Find all item listings.
+            # eBay uses both <li class="s-item"> and <div class="s-item"> depending
+            # on layout/A-B tests, so we cover both tags with a CSS selector.
+            items = soup.select('li.s-item, div.s-item')
             logger.info("BeautifulSoup found %d raw item elements", len(items))
 
             if not items:
+                # Gather diagnostic context so developers can tell whether the
+                # page loaded at all vs. the selectors simply no longer match.
+                srp_container = soup.find(class_='srp-results')
+                page_title = (
+                    soup.title.string.strip()
+                    if soup.title and soup.title.string
+                    else "(no <title>)"
+                )
+                html_preview = response.text[:300].replace('\n', ' ')
+
+                if srp_container:
+                    diag = (
+                        "An 'srp-results' container was found on the page, which means "
+                        "eBay returned a valid search results page. The 's-item' CSS "
+                        "selector no longer matches any elements — eBay has likely changed "
+                        "their item markup (e.g., a different tag name or class). "
+                        "This is a selector/markup issue, NOT a connectivity or ban problem."
+                    )
+                else:
+                    diag = (
+                        f"No 'srp-results' container and no 's-item' elements were found. "
+                        f"Page title: \"{page_title}\". "
+                        f"eBay may have significantly restructured their search results page "
+                        f"or returned an unexpected page (CAPTCHA, login wall, etc.)."
+                    )
+
                 msg = (
                     "BeautifulSoup found 0 item elements with class 's-item'. "
-                    "eBay may have changed their page structure."
+                    "eBay has likely changed their HTML structure — this is a markup/"
+                    "selector issue, not a connectivity or ban problem. "
+                    "The scraper's selectors need to be updated to match the new page layout."
                 )
                 logger.warning(msg)
+                logger.debug("Zero-item diagnostic: %s HTML preview: %r", diag, html_preview)
                 errors.append(msg)
+                errors.append(diag)
 
             parse_errors = 0
             for item in items[:max_results]:
@@ -114,8 +146,9 @@ class EbayScraper:
     def _parse_item(self, item_element) -> Dict:
         """Parse individual item element into deal dictionary"""
         try:
-            # Extract title
-            title_elem = item_element.find('h2', {'class': 's-item__title'})
+            # Extract title – eBay uses <h3> in newer layouts, <h2> in older ones;
+            # using a CSS class selector avoids the tag dependency entirely.
+            title_elem = item_element.select_one('.s-item__title')
             title = title_elem.text.strip() if title_elem else "Unknown"
 
             # Extract price
