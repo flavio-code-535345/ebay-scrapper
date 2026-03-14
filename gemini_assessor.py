@@ -9,6 +9,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 from typing import Dict, List, Optional
 
 import requests
@@ -68,6 +70,34 @@ _MAX_IMAGES = 3
 # Request timeout when downloading listing images (seconds).
 _IMAGE_FETCH_TIMEOUT = 5
 
+# Default back-off (seconds) when no retryDelay is provided by the API.
+_DEFAULT_BACKOFF_SECONDS = 60
+
+# ---------------------------------------------------------------------------
+# Rate-limit / back-off state (shared across all GeminiAssessor instances).
+# ---------------------------------------------------------------------------
+_rate_limit_lock = threading.Lock()
+_rate_limited_until: float = 0.0  # monotonic timestamp
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Return True if *exc* looks like a 429 / RESOURCE_EXHAUSTED error."""
+    msg = str(exc).lower()
+    return "429" in msg or "resource_exhausted" in msg or "quota" in msg
+
+
+def _parse_retry_delay(exc: Exception) -> Optional[float]:
+    """Try to extract retryDelay (seconds) from the Gemini API error payload."""
+    try:
+        msg = str(exc)
+        # Match patterns like "retryDelay": "30s" or "retry_delay": "30s"
+        match = re.search(r'"retry[_\s]?[Dd]elay"\s*:\s*"(\d+(?:\.\d+)?)s?"', msg)
+        if match:
+            return float(match.group(1))
+    except Exception:
+        pass
+    return None
+
 
 class GeminiAssessor:
     """Wraps the Gemini API for multimodal eBay deal assessment."""
@@ -99,16 +129,43 @@ class GeminiAssessor:
     # Public API
     # ------------------------------------------------------------------
 
+    @property
+    def rate_limited_until(self) -> float:
+        """Return the monotonic timestamp until which Gemini is rate-limited (0 if none)."""
+        with _rate_limit_lock:
+            return _rate_limited_until
+
+    @property
+    def is_rate_limited(self) -> bool:
+        """Return True if the Gemini quota is currently exhausted."""
+        return time.monotonic() < self.rate_limited_until
+
     def assess_deal(self, deal: Dict) -> Optional[Dict]:
         """Analyse *deal* with Gemini and return an AI-assessment dict.
 
         Returns ``None`` when:
         - The API key is not configured.
-        - The Gemini API call fails (network error, quota, etc.).
+        - The Gemini API call fails (network error, etc.).
+        Returns a dict with ``ai_error_type`` set when:
+        - A 429 rate-limit is hit (``ai_error_type="rate_limit"``).
+        - The response cannot be parsed as JSON (``ai_error_type="parse_error"``).
         Callers should fall back to the rules-based engine in these cases.
         """
+        global _rate_limited_until
+
         if not self.enabled or self._client is None or self._types is None:
             return None
+
+        # If we are currently in a rate-limit back-off window, skip the call.
+        pause_remaining = self.rate_limited_until - time.monotonic()
+        if pause_remaining > 0:
+            logger.warning(
+                "GeminiAssessor: rate-limited – skipping AI assessment for %r "
+                "(%.0f s remaining in back-off).",
+                deal.get("title", "?"),
+                pause_remaining,
+            )
+            return {"ai_error_type": "rate_limit", "ai_assessed": False}
 
         try:
             contents = self._build_contents(deal)
@@ -123,6 +180,18 @@ class GeminiAssessor:
             )
             return self._parse_response(response.text)
         except Exception as exc:
+            if _is_rate_limit_error(exc):
+                delay = _parse_retry_delay(exc) or _DEFAULT_BACKOFF_SECONDS
+                with _rate_limit_lock:
+                    _rate_limited_until = time.monotonic() + delay
+                logger.warning(
+                    "GeminiAssessor: 429 RESOURCE_EXHAUSTED for %r – "
+                    "backing off %.0f s. Gemini AI temporarily paused.",
+                    deal.get("title", "?"),
+                    delay,
+                )
+                return {"ai_error_type": "rate_limit", "ai_assessed": False}
+
             logger.error(
                 "GeminiAssessor: API error for listing %r: %s",
                 deal.get("title", "?"),
@@ -179,6 +248,7 @@ class GeminiAssessor:
     @staticmethod
     def _parse_response(text: str) -> Dict:
         """Extract the JSON payload from Gemini's response text."""
+        original_text = text
         text = text.strip()
 
         # Strip optional markdown code fences.
@@ -186,15 +256,40 @@ class GeminiAssessor:
         if fenced:
             text = fenced.group(1).strip()
 
+        data = None
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
             # Last-ditch: try to find a JSON object anywhere in the text.
             obj_match = re.search(r"\{[\s\S]*\}", text)
             if obj_match:
-                data = json.loads(obj_match.group())
+                try:
+                    data = json.loads(obj_match.group())
+                except json.JSONDecodeError as inner_exc:
+                    logger.error(
+                        "GeminiAssessor: JSON parse failed after extraction – %s. "
+                        "Raw response (first 500 chars): %r",
+                        inner_exc,
+                        original_text[:500],
+                    )
             else:
-                raise ValueError(f"No JSON object found in Gemini response: {text[:200]!r}")
+                logger.error(
+                    "GeminiAssessor: No JSON object found in Gemini response. "
+                    "Raw response (first 500 chars): %r",
+                    original_text[:500],
+                )
+
+        if data is None:
+            return {
+                "ai_deal_rating": "Unknown",
+                "ai_confidence_score": 0,
+                "ai_visual_findings": [],
+                "ai_red_flags": [],
+                "ai_fair_market_estimate": "",
+                "ai_verdict_summary": "AI response could not be parsed.",
+                "ai_assessed": False,
+                "ai_error_type": "parse_error",
+            }
 
         return {
             "ai_deal_rating": str(data.get("deal_rating", "Unknown")),

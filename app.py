@@ -6,6 +6,7 @@ Provides endpoints for searching, history, export, stats and health checks
 
 import logging
 import os
+import time
 from flask import Flask, request, jsonify, render_template, Response
 
 from scraper import EbayScraper
@@ -59,10 +60,17 @@ def search():
         ai_assessment = gemini.assess_deal(deal)
         if ai_assessment is None and gemini.enabled:
             logger.warning("Gemini assessment failed for %r; using rules engine.", deal.get('title', '?'))
+        elif ai_assessment and ai_assessment.get('ai_error_type') == 'rate_limit':
+            logger.warning("Gemini rate-limited for %r; skipping AI assessment.", deal.get('title', '?'))
+        elif ai_assessment and ai_assessment.get('ai_error_type') == 'parse_error':
+            logger.warning("Gemini parse error for %r; AI fields set to defaults.", deal.get('title', '?'))
 
         assessed.append({**deal, **rules_assessment, **(ai_assessment or {})})
 
     database.save_search(query, assessed)
+
+    # Compute how many seconds remain in any rate-limit back-off window.
+    paused_seconds = max(0.0, gemini.rate_limited_until - time.monotonic())
 
     return jsonify({
         'query': query,
@@ -70,6 +78,8 @@ def search():
         'deals': assessed,
         'errors': search_errors,
         'ai_enabled': gemini.enabled,
+        'ai_rate_limited': gemini.is_rate_limited,
+        'ai_paused_seconds': round(paused_seconds),
     })
 
 
@@ -101,7 +111,13 @@ def stats():
 
 @app.route('/api/health')
 def health():
-    return jsonify({'status': 'healthy', 'ai_enabled': gemini.enabled})
+    paused_seconds = max(0.0, gemini.rate_limited_until - time.monotonic())
+    return jsonify({
+        'status': 'healthy',
+        'ai_enabled': gemini.enabled,
+        'ai_rate_limited': gemini.is_rate_limited,
+        'ai_paused_seconds': round(paused_seconds),
+    })
 
 
 if __name__ == '__main__':
