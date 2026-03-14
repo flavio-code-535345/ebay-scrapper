@@ -34,8 +34,15 @@ heavy wear not mentioned in the text.
 indicate authenticity or counterfeits.
    - Completeness: Count the items in the photo. Are cables, boxes, or \
 accessories missing?
-   - Context: Does the photo look like a stock photo (Red Flag) or a real \
-photo from a seller's home?
+   - Placeholder / Stock Photo Detection (CRITICAL Red Flag): If the image \
+appears to be a manufacturer stock photo, a generic product render, or a \
+watermarked image rather than an actual photo of the seller's item, add \
+"Stock/placeholder photo detected" to red_flags and lower confidence \
+accordingly. Real seller photos show the actual item in a home/desk/table \
+setting with natural lighting.
+   - Missing Images: If image_issues contains "no_images" or "low_res_only", \
+treat this as a significant red flag — a seller who doesn't provide real, \
+high-resolution photos of their bundle is a risk.
 
 2. TEXTUAL DATA SCAN:
    - Description Analysis: Flag phrases like "Untested," "For parts only," \
@@ -76,8 +83,15 @@ heavy wear not mentioned in the text.
 indicate authenticity or counterfeits.
    - Completeness: Count the items in the photo. Are cables, boxes, or \
 accessories missing?
-   - Context: Does the photo look like a stock photo (Red Flag) or a real \
-photo from a seller's home?
+   - Placeholder / Stock Photo Detection (CRITICAL Red Flag): If the image \
+appears to be a manufacturer stock photo, a generic product render, or a \
+watermarked image rather than an actual photo of the seller's item, add \
+"Stock/placeholder photo detected" to red_flags and lower confidence \
+accordingly. Real seller photos show the actual item in a home/desk/table \
+setting with natural lighting.
+   - Missing Images: If image_issues contains "no_images" or "low_res_only", \
+treat this as a significant red flag — a seller who doesn't provide real, \
+high-resolution photos of their bundle is a risk.
 
 2. TEXTUAL DATA SCAN:
    - Description Analysis: Flag phrases like "Untested," "For parts only," \
@@ -333,6 +347,12 @@ class GeminiAssessor:
     # Private helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _format_image_issues_line(deal: Dict) -> str:
+        """Return a formatted 'Image Issues: …\n' line for a deal, or empty string."""
+        issues: List[str] = deal.get("image_issues", [])
+        return f"Image Issues: {', '.join(issues)}\n" if issues else ""
+
     def _build_contents(self, deal: Dict) -> List:
         """Construct the Gemini contents list (text + image parts)."""
         title = deal.get("title", "Unknown")
@@ -347,8 +367,9 @@ class GeminiAssessor:
             f"Price: €{price:.2f}\n"
             f"Condition: {condition}\n"
             f"Shipping: {shipping}\n"
-            f"Seller Rating: {seller_rating}%\n\n"
-            "Return your analysis in the required JSON format."
+            f"Seller Rating: {seller_rating}%\n"
+            f"{self._format_image_issues_line(deal)}"
+            "\nReturn your analysis in the required JSON format."
         )
 
         parts: List = [self._types.Part.from_text(text=text_prompt)]
@@ -391,6 +412,7 @@ class GeminiAssessor:
                 f"Condition: {condition}\n"
                 f"Shipping: {shipping}\n"
                 f"Seller Rating: {seller_rating}%\n"
+                f"{self._format_image_issues_line(deal)}"
             )
             parts.append(self._types.Part.from_text(text=item_text))
 

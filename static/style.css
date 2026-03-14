@@ -440,6 +440,26 @@ body {
     padding: 0 1rem;
 }
 
+/* ── Image issue warnings ──────────────────────────────────────────────── */
+.image-issues {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.5rem;
+    margin-bottom: 0.25rem;
+}
+
+.image-issue-badge {
+    display: inline-block;
+    padding: 0.18rem 0.55rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeeba;
+}
+
 .progress-label {
     text-align: center;
     margin-bottom: 0.65rem;

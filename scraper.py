@@ -37,6 +37,38 @@ _MAX_CONDITION_TEXT_LEN = 80
 _MAX_SELLER_TEXT_LEN = 120
 _MAX_SHIPPING_TEXT_LEN = 100
 
+# Text phrases (lower-case) that indicate a listing has variant/dropdown selectors.
+# Listings with these phrases are NOT fixed-price bundles and are excluded.
+_VARIANT_TEXT_PATTERNS = [
+    # German
+    'mehrere ausführungen',
+    'ausführung wählen',
+    'farbe wählen',
+    'größe wählen',
+    'modell wählen',
+    'variante wählen',
+    'auswahl treffen',
+    'variation verfügbar',
+    'varianten verfügbar',
+    # English (fallback for mixed-language results)
+    'available in multiple',
+    'choose your',
+    'select a color',
+    'select a size',
+    'select your',
+    'color:',
+    'size:',
+    'style:',
+]
+
+# Maximum text length when scanning for variant text patterns.
+_MAX_VARIANT_TEXT_LEN = 80
+
+# Regex that matches eBay CDN image URL size codes indicating very low resolution
+# (below 230 px wide) – e.g. ``s-l140``, ``s-l225``.  These are often placeholder
+# thumbnails rather than real product shots.
+_LOW_RES_URL_RE = re.compile(r's-l(1[0-9]{2}|2[0-2][0-9])\b')
+
 
 class EbayScraper:
     def __init__(self):
@@ -240,6 +272,11 @@ class EbayScraper:
             if title.lower() in _skip or title.lower().startswith("ergebnisse für"):
                 return None
 
+            # Skip dropdown/variant listings – these are NOT fixed-price bundles.
+            if self._is_dropdown_variant(item_element):
+                logger.debug("Skipping dropdown/variant listing: %r", title)
+                return None
+
             # Extract price – try stable class first, then any element containing
             # a currency symbol (€ for ebay.de, $ for .com).
             price_elem = item_element.find(class_='s-item__price')
@@ -273,6 +310,9 @@ class EbayScraper:
             # Extract listing image URLs for AI/visual analysis.
             image_urls = self._extract_image_urls(item_element)
 
+            # Detect any image quality issues (no extra HTTP requests needed).
+            image_issues = self._detect_image_issues(image_urls)
+
             return {
                 'title': title,
                 'price': price,
@@ -282,6 +322,7 @@ class EbayScraper:
                 'shipping': shipping,
                 'is_trending': is_trending,
                 'image_urls': image_urls,
+                'image_issues': image_issues,
                 'timestamp': time.time()
             }
 
@@ -434,6 +475,62 @@ class EbayScraper:
         if urls:
             logger.debug("Extracted %d image URL(s) for listing", len(urls))
         return urls
+
+    def _is_dropdown_variant(self, item_element) -> bool:
+        """Return True if the listing has dropdown/variant selectors.
+
+        Variant/option listings (e.g. "choose colour", "select size") are NOT
+        fixed-price bundles and should be excluded from deal results.  We use a
+        set of CSS-class signals and text patterns that eBay injects into search-
+        result cards for multi-variation listings.
+        """
+        # 1. CSS class signals used by eBay to mark variation/variant listings.
+        if (
+            item_element.find(class_='s-item__variations')
+            or item_element.find(class_='s-item__variants-button')
+            or item_element.select_one('[class*="variations"]')
+            or item_element.select_one('[class*="variant"]')
+        ):
+            logger.debug("Dropdown/variant detected via CSS class")
+            return True
+
+        # 2. Rendered <select> dropdown elements inside the card.
+        if item_element.find('select'):
+            logger.debug("Dropdown/variant detected via <select> element")
+            return True
+
+        # 3. Text-based signals (German + English) for short inline elements.
+        for node in item_element.find_all(['span', 'div', 'a']):
+            text = node.get_text(strip=True).lower()
+            if not text or len(text) > _MAX_VARIANT_TEXT_LEN:
+                continue
+            for phrase in _VARIANT_TEXT_PATTERNS:
+                if phrase in text:
+                    logger.debug(
+                        "Dropdown/variant detected via text phrase %r: %r", phrase, text
+                    )
+                    return True
+
+        return False
+
+    def _detect_image_issues(self, image_urls: List[str]) -> List[str]:
+        """Detect potential image quality issues from the URL list alone.
+
+        Returns a (possibly empty) list of human-readable issue identifiers.
+        No extra HTTP requests are made; issues are inferred from URL metadata.
+
+        Possible identifiers returned:
+        - ``"no_images"``   – the listing has no product images at all.
+        - ``"low_res_only"``– every image is below 230 px (thumbnail-level quality).
+        """
+        if not image_urls:
+            return ["no_images"]
+
+        low_res_count = sum(1 for u in image_urls if _LOW_RES_URL_RE.search(u))
+        if low_res_count == len(image_urls):
+            return ["low_res_only"]
+
+        return []
 
     # ── Value parsers ──────────────────────────────────────────────────────────
 
