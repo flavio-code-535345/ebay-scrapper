@@ -190,6 +190,15 @@ def search():
         query, active_source, len(deals), len(search_errors),
     )
 
+    # Post-filter: exclude deals that the user has previously skipped.
+    skipped_urls = set(database.get_skipped_deal_urls())
+    if skipped_urls:
+        before_skip = len(deals)
+        deals = [d for d in deals if d.get("url") not in skipped_urls]
+        filtered_skip = before_skip - len(deals)
+        if filtered_skip:
+            logger.info("Skip filter removed %d previously-skipped deal(s)", filtered_skip)
+
     # Post-filter: drop any deal whose item_location is not Germany (DE).
     # This is a safety net in addition to the API/scraper-level filters
     # (itemLocationCountry and LH_ItemLocation) and is controlled by the
@@ -297,6 +306,10 @@ def search():
 
     # Compute how many seconds remain in any rate-limit back-off window.
     paused_seconds = max(0.0, gemini.rate_limited_until - time.monotonic())
+
+    saved_urls = set(d['url'] for d in database.get_saved_deals())
+    for deal in assessed:
+        deal['is_saved'] = deal.get('url') in saved_urls
 
     return jsonify({
         'query': query,
@@ -446,6 +459,77 @@ def update_settings():
         'ebay_delivery_country': ebay_api.delivery_country,
         'germany_only': _db_germany_only(),
     })
+
+
+# ── Save / Skip deal endpoints ────────────────────────────────────────────────
+
+@app.route('/api/deals/save', methods=['POST'])
+def deal_save():
+    """Save (favourite) a deal by URL."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({'error': 'Request body must be valid JSON'}), 400
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'url is required'}), 400
+    title = str(data.get('title') or '')[:500]
+    try:
+        price = float(data.get('price') or 0)
+    except (TypeError, ValueError):
+        price = 0.0
+    database.save_deal(url, title, price)
+    return jsonify({'saved': True, 'url': url})
+
+
+@app.route('/api/deals/unsave', methods=['POST'])
+def deal_unsave():
+    """Remove a deal from the saved list."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({'error': 'Request body must be valid JSON'}), 400
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'url is required'}), 400
+    database.unsave_deal(url)
+    return jsonify({'saved': False, 'url': url})
+
+
+@app.route('/api/deals/saved', methods=['GET'])
+def deal_saved_list():
+    """Return all saved deals."""
+    return jsonify(database.get_saved_deals())
+
+
+@app.route('/api/deals/skip', methods=['POST'])
+def deal_skip():
+    """Skip (hide) a deal so it is excluded from future search results."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({'error': 'Request body must be valid JSON'}), 400
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'url is required'}), 400
+    database.skip_deal(url)
+    return jsonify({'skipped': True, 'url': url})
+
+
+@app.route('/api/deals/unskip', methods=['POST'])
+def deal_unskip():
+    """Remove a deal from the skipped list."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({'error': 'Request body must be valid JSON'}), 400
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'url is required'}), 400
+    database.unskip_deal(url)
+    return jsonify({'skipped': False, 'url': url})
+
+
+@app.route('/api/deals/skipped', methods=['GET'])
+def deal_skipped_list():
+    """Return all skipped deal URLs."""
+    return jsonify(database.get_skipped_deal_urls())
 
 
 if __name__ == '__main__':

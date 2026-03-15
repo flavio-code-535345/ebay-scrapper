@@ -85,10 +85,30 @@
             <div class="results-header">
                 <h2><span id="dealCount">0</span> deals found</h2>
                 <span id="dataSourceBadge" class="data-source-badge d-none"></span>
-                <button id="exportBtn" class="btn-export">📥 Export CSV</button>
+                <div class="results-controls">
+                    <label for="ageFilterSelect" class="age-filter-label">🗓️ Max age:</label>
+                    <select id="ageFilterSelect" class="age-filter-select" title="Hide deals older than the selected number of days">
+                        <option value="0">All time</option>
+                        <option value="7">7 days</option>
+                        <option value="14">14 days</option>
+                        <option value="30">30 days</option>
+                        <option value="90">90 days</option>
+                    </select>
+                    <button id="savedDealsBtn" class="btn-saved-deals">⭐ Saved</button>
+                    <button id="exportBtn" class="btn-export">📥 Export CSV</button>
+                </div>
             </div>
             <div id="aiWarningContainer" class="alert alert-warning d-none"></div>
             <div id="dealsGrid" class="deals-grid"></div>
+        </div>
+
+        <!-- Saved deals panel -->
+        <div id="savedPanel" class="saved-panel d-none">
+            <div class="saved-panel-header">
+                <h2>⭐ Saved Deals</h2>
+                <button id="closeSavedBtn" class="btn-close-saved" title="Close saved deals">✕</button>
+            </div>
+            <div id="savedList" class="saved-list"></div>
         </div>
 
     </main>

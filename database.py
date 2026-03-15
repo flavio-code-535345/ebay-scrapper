@@ -70,6 +70,22 @@ def init_db():
     _add_column_if_missing(cursor, "deals", "item_location", "TEXT")
     _add_column_if_missing(cursor, "deals", "description", "TEXT")
     _add_column_if_missing(cursor, "deals", "seller_count", "TEXT")
+    _add_column_if_missing(cursor, "deals", "listing_date", "TEXT")
+
+    # User-managed deal preferences.
+    cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS user_saved_deals (
+            url TEXT PRIMARY KEY NOT NULL,
+            title TEXT,
+            price REAL,
+            saved_at REAL NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS user_skipped_deals (
+            url TEXT PRIMARY KEY NOT NULL,
+            skipped_at REAL NOT NULL
+        );
+    """)
 
     # Key-value settings store.
     cursor.executescript("""
@@ -106,6 +122,7 @@ def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> No
         "item_location",
         "description",
         "seller_count",
+        "listing_date",
     }
     _ALLOWED_TYPES = {
         "TEXT",
@@ -155,8 +172,9 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 ai_red_flags, ai_fair_market_estimate, ai_verdict_summary,
                 ai_assessed, ai_potential_scam, ai_scam_warning,
                 image_issues, image_urls, item_location, description, seller_count,
+                listing_date,
                 created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 search_id,
                 deal.get('title'),
@@ -186,6 +204,7 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 deal.get('item_location'),
                 deal.get('description'),
                 deal.get('seller_count'),
+                deal.get('listing_date'),
                 now,
             ),
         )
@@ -281,3 +300,84 @@ def set_setting(key: str, value: str) -> None:
     )
     conn.commit()
     conn.close()
+
+
+# ── User-saved deals ──────────────────────────────────────────────────────────
+
+def save_deal(url: str, title: str = "", price: float = 0.0) -> None:
+    """Persist a deal as saved/favourited (upsert by URL)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO user_saved_deals (url, title, price, saved_at) VALUES (?, ?, ?, ?)"
+        " ON CONFLICT(url) DO UPDATE SET title = excluded.title,"
+        " price = excluded.price, saved_at = excluded.saved_at",
+        (url, title, price, time.time()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def unsave_deal(url: str) -> None:
+    """Remove a deal from the saved list."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM user_saved_deals WHERE url = ?", (url,))
+    conn.commit()
+    conn.close()
+
+
+def get_saved_deals() -> List[Dict]:
+    """Return all saved deals ordered by most recently saved."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT url, title, price, saved_at FROM user_saved_deals ORDER BY saved_at DESC"
+    )
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def is_deal_saved(url: str) -> bool:
+    """Return True when *url* is in the saved deals list."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM user_saved_deals WHERE url = ?", (url,))
+    row = cursor.fetchone()
+    conn.close()
+    return row is not None
+
+
+# ── User-skipped deals ────────────────────────────────────────────────────────
+
+def skip_deal(url: str) -> None:
+    """Mark a deal URL as skipped so it is excluded from future searches."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO user_skipped_deals (url, skipped_at) VALUES (?, ?)"
+        " ON CONFLICT(url) DO UPDATE SET skipped_at = excluded.skipped_at",
+        (url, time.time()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def unskip_deal(url: str) -> None:
+    """Remove a deal URL from the skipped list."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM user_skipped_deals WHERE url = ?", (url,))
+    conn.commit()
+    conn.close()
+
+
+def get_skipped_deal_urls() -> List[str]:
+    """Return the set of all currently skipped deal URLs."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT url FROM user_skipped_deals")
+    rows = [row['url'] for row in cursor.fetchall()]
+    conn.close()
+    return rows
