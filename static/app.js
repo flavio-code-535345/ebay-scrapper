@@ -490,27 +490,88 @@ function parseConditionParts(conditionText) {
 }
 
 /**
- * Extract a clean, short shipping summary from raw eBay shipping text.
- * @param {string} shippingText
- * @returns {string}
+ * Parse a German-formatted number string (e.g. "9,90" or "1.234,56") into a
+ * JavaScript float.  Also handles standard English notation ("9.90").
+ * @param {string} s - Raw number string extracted from eBay text.
+ * @returns {number}
+ */
+function parseGermanNumber(s) {
+    const clean = s.trim();
+    // Both separators present – determine which is the decimal marker.
+    // In German notation the decimal comma always comes last ("1.234,56"),
+    // while in English notation the decimal point comes last ("1,234.56").
+    if (clean.includes(',') && clean.includes('.')) {
+        const lastComma = clean.lastIndexOf(',');
+        const lastDot   = clean.lastIndexOf('.');
+        if (lastComma > lastDot) {
+            // German: "1.234,56" → remove thousands dots, replace decimal comma
+            return parseFloat(clean.replace(/\./g, '').replace(',', '.')) || 0;
+        }
+        // English: "1,234.56" → remove thousands commas
+        return parseFloat(clean.replace(/,/g, '')) || 0;
+    }
+    if (clean.includes(',')) {
+        // German-only decimal: "9,90" → "9.90"
+        return parseFloat(clean.replace(',', '.')) || 0;
+    }
+    return parseFloat(clean) || 0;
+}
+
+/**
+ * Extract a clean, user-friendly shipping summary from raw eBay shipping text.
+ *
+ * Handles the following real-world eBay.de patterns:
+ *   - "Kostenloser Versand" / "Gratis" / "Free shipping"  → "Free"
+ *   - "EUR 7,95 Versand"                                  → "€7.95"
+ *   - "EUR 7,95 bis EUR 69,00 Versand"                    → "€7.95 – €69.00"
+ *   - "€ 9,90"                                            → "€9.90"
+ *   - "Nicht angegeben"                                   → "N/A"
+ *
+ * @param {string} shippingText - Raw shipping text from the eBay listing.
+ * @returns {string} Formatted shipping display string.
  */
 function cleanShippingText(shippingText) {
     if (!shippingText) return 'N/A';
 
     const lower = shippingText.toLowerCase();
 
-    // Free shipping
-    if (lower.includes('kostenlos') || lower.startsWith('gratis')) {
-        return 'Gratis';
+    // "Not specified" / "Nicht angegeben" – no shipping info available.
+    if (lower.includes('nicht angegeben')) return 'N/A';
+
+    // Free shipping – covers German and English phrasings used on eBay.
+    if (
+        lower.includes('kostenlos') ||
+        lower.includes('gratis') ||
+        lower.includes('free shipping') ||
+        lower.includes('free postage')
+    ) {
+        return 'Free';
     }
 
-    // Extract first EUR price (handles "EUR 9,90 bis EUR 11,90…")
-    const priceMatch = shippingText.match(/EUR\s*[\d,.]+(?:\s+bis\s+EUR\s*[\d,.]+)?/);
-    if (priceMatch) {
-        return priceMatch[0].replace(/\s+/g, ' ').trim();
+    // Price range: "EUR 7,95 bis EUR 69,00" (German "bis" = "up to").
+    // Display as "€7.95 – €69.00" so both bounds are clearly shown.
+    const rangeMatch = shippingText.match(/EUR\s*([\d,.]+)\s+bis\s+EUR\s*([\d,.]+)/i);
+    if (rangeMatch) {
+        const lo = parseGermanNumber(rangeMatch[1]);
+        const hi = parseGermanNumber(rangeMatch[2]);
+        return `€${lo.toFixed(2)} – €${hi.toFixed(2)}`;
     }
 
-    // Truncate long text as fallback
+    // Single EUR amount: "EUR 9,90 Versand".
+    const singleEurMatch = shippingText.match(/EUR\s*([\d,.]+)/i);
+    if (singleEurMatch) {
+        const amount = parseGermanNumber(singleEurMatch[1]);
+        return `€${amount.toFixed(2)}`;
+    }
+
+    // Euro symbol directly: "€ 9,90" or "€9,90".
+    const euroSymbolMatch = shippingText.match(/€\s*([\d,.]+)/);
+    if (euroSymbolMatch) {
+        const amount = parseGermanNumber(euroSymbolMatch[1]);
+        return `€${amount.toFixed(2)}`;
+    }
+
+    // Fallback: truncate overly long raw text to keep cards tidy.
     return shippingText.length > 55 ? shippingText.slice(0, 55).trimEnd() + '…' : shippingText;
 }
 
