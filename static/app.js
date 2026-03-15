@@ -1,6 +1,12 @@
 // eBay Deal Finder – Frontend Application (Dark JobOps Redesign)
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const MAX_SEARCH_RESULTS = 50;
+
+// ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
@@ -210,7 +216,7 @@ async function handleSearch(e) {
         const response = await fetch('/api/search', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query, max_results: 50 }),
+            body: JSON.stringify({ query, max_results: MAX_SEARCH_RESULTS }),
             signal: _abortController.signal,
         });
 
@@ -749,7 +755,7 @@ function updateBatchActionsBar() {
 function _dealDataFromCard(card) {
     if (!card) return { title: '', price: 0 };
     const title = card.querySelector('.deal-title')?.textContent?.trim() || '';
-    const price = parseFloat(card.querySelector('.deal-price')?.textContent?.replace('€', '') || 0);
+    const price = parseFloat(card.querySelector('.deal-price')?.textContent?.replace('€', '') ?? '0') || 0;
     return { title, price };
 }
 
@@ -1384,6 +1390,6 @@ async function exportToCSV() {
 
 function escapeHtml(text) {
     const div = document.createElement('div');
-    div.textContent = text ?? '';
+    div.textContent = text || '';
     return div.innerHTML;
 }
