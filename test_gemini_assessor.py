@@ -530,3 +530,47 @@ class TestExtractPotentialGameTitles:
         result = _extract_potential_game_titles(title)
         for t in result:
             assert not t.isdigit()
+
+
+# ---------------------------------------------------------------------------
+# _extract_platform_name tests
+# ---------------------------------------------------------------------------
+
+
+from gemini_assessor import _extract_platform_name
+
+
+class TestExtractPlatformName:
+    def test_xbox_360(self):
+        assert _extract_platform_name("10 Xbox 360 Spiele Bundle") == "Microsoft Xbox 360"
+
+    def test_xbox_360_no_space(self):
+        assert _extract_platform_name("Xbox360 Spielesammlung") == "Microsoft Xbox 360"
+
+    def test_ps4(self):
+        assert _extract_platform_name("PS4 Spielesammlung 5 Spiele") == "Sony PlayStation 4"
+
+    def test_playstation_4_full(self):
+        assert _extract_platform_name("PlayStation 4 Bundle") == "Sony PlayStation 4"
+
+    def test_ps3(self):
+        assert _extract_platform_name("PS3 Lot 8 Spiele") == "Sony PlayStation 3"
+
+    def test_wii(self):
+        assert _extract_platform_name("Nintendo Wii Spiele Lot") == "Nintendo Wii"
+
+    def test_nintendo_switch(self):
+        assert _extract_platform_name("Nintendo Switch Bundle 5 Games") == "Nintendo Switch"
+
+    def test_xbox_one(self):
+        assert _extract_platform_name("Xbox One Bundle COD + FIFA") == "Microsoft Xbox One"
+
+    def test_no_platform(self):
+        assert _extract_platform_name("5 Spiele Bundle Lot") == ""
+
+    def test_case_insensitive(self):
+        assert _extract_platform_name("XBOX 360 BUNDLE") == "Microsoft Xbox 360"
+
+    def test_more_specific_before_generic(self):
+        """Xbox 360 must be matched before bare Xbox."""
+        assert _extract_platform_name("Xbox 360 Sammlung") == "Microsoft Xbox 360"

@@ -12,6 +12,7 @@
     --muted:     #8b949e;
     --accent:    #58a6ff;
     --accent-dim:#1f6feb;
+    --blue-dim:  #0d2c5e;
     --green:     #3fb950;
     --green-dim: #196c2e;
     --yellow:    #e3b341;
@@ -824,7 +825,7 @@ a:hover { text-decoration: underline; }
 }
 
 .badge-must-buy { background: var(--green-dim);   color: var(--green);  }
-.badge-good     { background: var(--accent-dim);  color: var(--accent); }
+.badge-good     { background: var(--blue-dim);    color: var(--accent); }
 .badge-okay     { background: var(--yellow-dim);  color: var(--yellow); }
 .badge-fair     { background: var(--yellow-dim);  color: var(--yellow); } /* legacy alias */
 .badge-avoid    { background: var(--red-dim);     color: var(--red);    }

@@ -250,6 +250,9 @@ def search():
         parse_errors = sum(
             1 for a in ai_assessments if a and a.get("ai_error_type") == "parse_error"
         )
+        timed_out = sum(
+            1 for a in ai_assessments if a and a.get("ai_error_type") == "timeout"
+        )
         if failed:
             logger.warning(
                 "Gemini batch: %d/%d items failed AI assessment.",
@@ -266,6 +269,12 @@ def search():
             logger.warning(
                 "Gemini batch: %d/%d items had parse errors; AI fields set to defaults.",
                 parse_errors,
+                len(ai_assessments),
+            )
+        if timed_out:
+            logger.warning(
+                "Gemini batch: %d/%d items timed out; AI assessment skipped.",
+                timed_out,
                 len(ai_assessments),
             )
 
