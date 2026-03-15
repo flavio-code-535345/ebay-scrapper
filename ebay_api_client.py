@@ -178,12 +178,22 @@ class EbayApiClient:
 
         # Call the search endpoint.
         url = self._base_url + self._SEARCH_PATH
+        # Build the filter string:
+        #   itemLocationCountry — restricts results to items *physically located*
+        #                         in the target country (e.g. DE).  This is the
+        #                         primary filter that ensures "Germany-only" deals.
+        #   deliveryCountry     — additionally restricts to items that ship to the
+        #                         target country, preventing cross-border listings
+        #                         that technically deliver to DE but originate abroad.
+        api_filter = (
+            f"itemLocationCountry:{self.delivery_country},"
+            f"deliveryCountry:{self.delivery_country}"
+        )
         params = {
             "q": query,
             "limit": min(max(1, max_results), 200),
             "sort": "newlyListed",
-            # Restrict to domestic delivery for the selected marketplace.
-            "filter": f"deliveryCountry:{self.delivery_country}",
+            "filter": api_filter,
         }
 
         headers = {
@@ -357,6 +367,21 @@ class EbayApiClient:
         # ── Shipping ───────────────────────────────────────────────────────
         shipping = self._parse_shipping(item.get("shippingOptions") or [])
 
+        # ── Item location ──────────────────────────────────────────────────
+        # itemLocation holds the physical location where the item is stored.
+        # We expose country + city so the UI can show "Germany 🇩🇪" on deal cards.
+        item_location_obj = item.get("itemLocation") or {}
+        item_location_country = (item_location_obj.get("country") or "").strip().upper()
+        item_location_city = (item_location_obj.get("city") or "").strip()
+        if item_location_country and item_location_city:
+            item_location = f"{item_location_city}, {item_location_country}"
+        elif item_location_country:
+            item_location = item_location_country
+        elif item_location_city:
+            item_location = item_location_city
+        else:
+            item_location = ""
+
         # ── Trending ───────────────────────────────────────────────────────
         # The Browse API exposes a "topRatedBuyingExperience" flag and
         # a "priorityListing" flag; treat either as "trending".
@@ -383,6 +408,9 @@ class EbayApiClient:
             "url": url,
             "shipping": shipping,
             "is_trending": is_trending,
+            # Physical location of the item (country code + optional city).
+            # Set by itemLocationCountry filter; e.g. "Berlin, DE" or "DE".
+            "item_location": item_location,
             "image_urls": image_urls,
         }
 

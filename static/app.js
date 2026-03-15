@@ -81,6 +81,11 @@ document.addEventListener('DOMContentLoaded', () => {
         aiToggleBtn.addEventListener('click', toggleAiEnabled);
     }
 
+    const germanyOnlyToggleBtn = document.getElementById('germanyOnlyToggleBtn');
+    if (germanyOnlyToggleBtn) {
+        germanyOnlyToggleBtn.addEventListener('click', toggleGermanyOnly);
+    }
+
     const dataSourceSelect = document.getElementById('dataSourceSelect');
     if (dataSourceSelect) {
         dataSourceSelect.addEventListener('change', saveDataSource);
@@ -117,6 +122,10 @@ async function loadModelSettings() {
         _setDataSourceState(data.data_source, data.active_data_source, data.ebay_api_configured);
         // Show active eBay marketplace/region.
         _setMarketplaceStatus(data.ebay_marketplace_id, data.ebay_language, data.ebay_locale, data.ebay_delivery_country);
+        // Sync the Germany-only toggle.
+        if (typeof data.germany_only === 'boolean') {
+            _setGermanyOnlyState(data.germany_only);
+        }
     } catch (err) {
         console.warn('Failed to load model settings:', err);
     }
@@ -172,6 +181,55 @@ async function toggleAiEnabled() {
             status.textContent = `⚠️ Error: ${err.message}`;
             status.className = 'model-status model-status--error';
         }
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+/**
+ * Update the Germany-only toggle button visual state without making an API call.
+ * @param {boolean} enabled
+ */
+function _setGermanyOnlyState(enabled) {
+    const btn = document.getElementById('germanyOnlyToggleBtn');
+    if (!btn) return;
+    btn.setAttribute('aria-pressed', String(enabled));
+    const label = btn.querySelector('.germany-toggle-label');
+    const icon = btn.querySelector('.germany-toggle-icon');
+    if (label) label.textContent = enabled ? 'DE Only: ON' : 'DE Only: OFF';
+    if (icon) icon.textContent = enabled ? '🇩🇪' : '🌍';
+}
+
+/**
+ * Toggle the Germany-only location filter and persist it via the settings API.
+ * When ON, only deals with items physically located in Germany are returned.
+ */
+async function toggleGermanyOnly() {
+    const btn = document.getElementById('germanyOnlyToggleBtn');
+    if (!btn) return;
+    const currentlyEnabled = btn.getAttribute('aria-pressed') === 'true';
+    const newState = !currentlyEnabled;
+
+    // Optimistically update UI immediately.
+    _setGermanyOnlyState(newState);
+    btn.disabled = true;
+
+    try {
+        const response = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ germany_only: newState }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            // Revert on failure.
+            _setGermanyOnlyState(currentlyEnabled);
+        } else {
+            _setGermanyOnlyState(data.germany_only);
+        }
+    } catch (err) {
+        // Revert on error.
+        _setGermanyOnlyState(currentlyEnabled);
     } finally {
         btn.disabled = false;
     }
@@ -481,6 +539,15 @@ function createDealCard(deal) {
     }
     metaRows.push(metaRow('Seller', (deal.seller_rating || 0).toFixed(1) + '%'));
     metaRows.push(metaRow('Shipping', escapeHtml(shippingClean)));
+    // Show the item's physical location (e.g. "Berlin, DE") when available.
+    // With Germany-only filtering active this should always be a German location.
+    if (deal.item_location) {
+        const loc = deal.item_location.trim().toUpperCase();
+        const isGerman = loc === 'DE' || loc.endsWith(', DE') ||
+                         loc.includes('DEUTSCHLAND') || loc.includes('GERMANY');
+        const locationFlag = isGerman ? ' 🇩🇪' : '';
+        metaRows.push(metaRow('Location', escapeHtml(deal.item_location) + locationFlag));
+    }
     if (deal.is_trending) {
         metaRows.push(metaRow('Trending', '🔥 Yes'));
     }
