@@ -459,6 +459,23 @@ _GEMINI_REQUEST_TIMEOUT = 25
 _ASSESS_TOTAL_BUDGET_S = 90
 
 # ---------------------------------------------------------------------------
+# eBay price pre-fetch / caching settings
+# ---------------------------------------------------------------------------
+
+# Time-to-live (seconds) for in-memory eBay price cache entries.
+_EBAY_CACHE_TTL = 300.0
+
+# Total wall-clock budget (seconds) for the parallel eBay price pre-fetch step
+# at the start of assess_deals_batch().  All pre-fetch threads are abandoned
+# after this limit so the Gunicorn worker is never blocked waiting for slow eBay
+# API responses.  Must be < (_ASSESS_TOTAL_BUDGET_S - _GEMINI_REQUEST_TIMEOUT)
+# so at least one Gemini batch call can still complete within the overall budget.
+_EBAY_PREFETCH_BUDGET_S = 20
+
+# Maximum number of concurrent eBay lookup threads during the pre-fetch step.
+_EBAY_MAX_WORKERS = 5
+
+# ---------------------------------------------------------------------------
 # Rate-limit / back-off state (shared across all GeminiAssessor instances).
 # ---------------------------------------------------------------------------
 _rate_limit_lock = threading.Lock()
@@ -910,6 +927,9 @@ class GeminiAssessor:
         self._model_name: str = _MODEL_NAME
         # Optional eBay API client used to fetch real per-game prices for bundles.
         self._ebay_client: Optional[Any] = None
+        # In-memory cache for eBay price lookup results.
+        # Maps query string → (price_or_None, source_label, expire_at_monotonic)
+        self._ebay_price_cache: Dict[str, Tuple[Optional[float], str, float]] = {}
 
         if self.enabled:
             try:
@@ -1082,6 +1102,16 @@ class GeminiAssessor:
         )
 
         t_start = time.monotonic()
+
+        # Pre-populate the eBay price cache for all deals in this request.
+        # Runs all eBay API lookups in parallel within _EBAY_PREFETCH_BUDGET_S
+        # so that the serial per-deal calls inside _build_batch_contents are
+        # served from cache and add negligible latency.  Without this step the
+        # serial eBay calls (up to 8 games × 2 API tries × 10 s each per deal)
+        # could easily exceed the Gunicorn worker timeout before Gemini is
+        # even invoked.
+        self._prefetch_ebay_prices_parallel(deals)
+
         results: List[Optional[Dict]] = []
         for batch_idx, batch_start in enumerate(range(0, len(deals), _BATCH_SIZE)):
             elapsed = time.monotonic() - t_start
@@ -1155,6 +1185,144 @@ class GeminiAssessor:
         issues: List[str] = deal.get("image_issues", [])
         return f"Image Issues: {', '.join(issues)}\n" if issues else ""
 
+    # ------------------------------------------------------------------
+    # eBay price cache helpers
+    # ------------------------------------------------------------------
+
+    def _cached_ebay_price(self, query: str) -> Optional[Tuple[Optional[float], str]]:
+        """Return ``(price, source)`` from the in-memory cache if the entry is
+        still valid, or ``None`` when there is no cache hit."""
+        entry = self._ebay_price_cache.get(query)
+        if entry is None:
+            return None
+        price, source, expire_at = entry
+        if time.monotonic() < expire_at:
+            return price, source
+        # Entry has expired – evict it so stale data is never used.
+        del self._ebay_price_cache[query]
+        return None
+
+    def _store_ebay_price_in_cache(self, query: str, price: Optional[float], source: str) -> None:
+        """Store an eBay price result in the in-memory cache with a TTL."""
+        self._ebay_price_cache[query] = (price, source, time.monotonic() + _EBAY_CACHE_TTL)
+
+    def _collect_ebay_queries_for_deal(self, deal: Dict) -> List[str]:
+        """Return the list of eBay search queries needed to price *deal*.
+
+        Bundle listings produce one query per extracted game title; single-game
+        listings produce a single ``"GAME (PLATFORM)"`` query.  Returns an empty
+        list when the eBay client is absent or no meaningful query can be built.
+        """
+        if self._ebay_client is None:
+            return []
+        title = deal.get("title", "")
+        if not title:
+            return []
+        if _BUNDLE_TITLE_KEYWORDS_RE.search(title):
+            game_titles = _extract_potential_game_titles(title)
+            if not game_titles:
+                return []
+            platform = _extract_platform_name(title)
+            return [f"{g} ({platform})" if platform else g for g in game_titles]
+        else:
+            q = _build_single_game_search_query(title)
+            return [q] if q else []
+
+    def _prefetch_ebay_prices_parallel(self, deals: List[Dict]) -> None:
+        """Pre-populate the eBay price cache for all queries needed by *deals*.
+
+        Runs all eBay price lookups in parallel (up to ``_EBAY_MAX_WORKERS``
+        concurrent threads) and stores results in :attr:`_ebay_price_cache`.
+        A hard wall-clock budget of ``_EBAY_PREFETCH_BUDGET_S`` seconds is
+        enforced: threads that have not completed by the deadline are abandoned
+        (their queries simply won't appear in the cache, and the prompt builders
+        will omit price data for those games).
+
+        This method must be called before :meth:`_build_batch_contents` /
+        :meth:`assess_deals_batch` so that the per-deal price-fetch calls inside
+        those methods are served from cache rather than blocking serially on the
+        eBay API.
+        """
+        if self._ebay_client is None:
+            return
+
+        # Collect unique queries across all deals.
+        all_queries: List[str] = []
+        seen: set = set()
+        for deal in deals:
+            for q in self._collect_ebay_queries_for_deal(deal):
+                if q not in seen:
+                    seen.add(q)
+                    all_queries.append(q)
+
+        if not all_queries:
+            return
+
+        uncached = [q for q in all_queries if self._cached_ebay_price(q) is None]
+        if not uncached:
+            logger.debug(
+                "GeminiAssessor: eBay prefetch: all %d queries satisfied from cache.",
+                len(all_queries),
+            )
+            return
+
+        logger.info(
+            "GeminiAssessor: eBay prefetch: %d unique queries (%d cached, %d to fetch, ≤%ds budget).",
+            len(all_queries),
+            len(all_queries) - len(uncached),
+            len(uncached),
+            _EBAY_PREFETCH_BUDGET_S,
+        )
+
+        def _fetch_one(query: str) -> Tuple[str, Optional[float], str]:
+            try:
+                price, source, _ = self._ebay_client.get_median_sold_price(query, max_results=10)
+                return query, price, source
+            except Exception as exc:
+                logger.warning(
+                    "GeminiAssessor: eBay prefetch failed for %r: %s", query, exc
+                )
+                return query, None, "no_result"
+
+        t0 = time.monotonic()
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=_EBAY_MAX_WORKERS)
+        try:
+            future_to_query = {executor.submit(_fetch_one, q): q for q in uncached}
+            done, not_done = concurrent.futures.wait(
+                future_to_query, timeout=_EBAY_PREFETCH_BUDGET_S
+            )
+            for fut in done:
+                try:
+                    query, price, source = fut.result()
+                    self._store_ebay_price_in_cache(query, price, source)
+                except Exception as exc:
+                    q = future_to_query[fut]
+                    logger.warning(
+                        "GeminiAssessor: eBay prefetch result error for %r: %s", q, exc
+                    )
+            if not_done:
+                logger.warning(
+                    "GeminiAssessor: eBay prefetch budget (%.0fs) exhausted; "
+                    "%d/%d queries did not complete in time.",
+                    _EBAY_PREFETCH_BUDGET_S,
+                    len(not_done),
+                    len(uncached),
+                )
+        finally:
+            # Shut down without waiting so abandoned threads do not block the
+            # Gunicorn worker past the overall request budget.
+            executor.shutdown(wait=False)
+
+        elapsed = time.monotonic() - t0
+        found = sum(
+            1 for q in all_queries
+            if (self._cached_ebay_price(q) or (None,))[0] is not None
+        )
+        logger.info(
+            "GeminiAssessor: eBay prefetch done in %.1fs: %d/%d prices found.",
+            elapsed, found, len(all_queries),
+        )
+
     def _fetch_ebay_prices_for_bundle(self, deal: Dict) -> List[Dict]:
         """Fetch real eBay prices for individual games in a bundle listing.
 
@@ -1194,24 +1362,30 @@ class GeminiAssessor:
 
         results: List[Dict] = []
         for game in game_titles:
-            try:
-                if platform:
-                    search_query = f"{game} ({platform})"
-                else:
-                    search_query = game
-                logger.debug(
-                    "GeminiAssessor: eBay price query for game %r: %r", game, search_query
-                )
-                price, source, errs = self._ebay_client.get_median_sold_price(search_query, max_results=10)
-            except Exception as exc:
-                logger.warning(
-                    "GeminiAssessor: eBay price lookup failed for %r: %s", game, exc
-                )
-                price, source, errs = None, "no_result", []
+            search_query = f"{game} ({platform})" if platform else game
+            logger.debug(
+                "GeminiAssessor: eBay price query for game %r: %r", game, search_query
+            )
+            # Serve from in-memory cache when available to avoid redundant API
+            # calls (populated by _prefetch_ebay_prices_parallel for batches).
+            cached = self._cached_ebay_price(search_query)
+            if cached is not None:
+                price, source = cached
+                errs: List[str] = []
+            else:
+                try:
+                    price, source, errs = self._ebay_client.get_median_sold_price(
+                        search_query, max_results=10
+                    )
+                    self._store_ebay_price_in_cache(search_query, price, source)
+                except Exception as exc:
+                    logger.warning(
+                        "GeminiAssessor: eBay price lookup failed for %r: %s", game, exc
+                    )
+                    price, source, errs = None, "no_result", []
 
-            if errs:
-                for e in errs:
-                    logger.debug("GeminiAssessor: eBay price lookup note for %r: %s", game, e)
+            for e in errs:
+                logger.debug("GeminiAssessor: eBay price lookup note for %r: %s", game, e)
 
             if price is not None:
                 price_source = "ebay_sold" if source == "sold_listings" else "ebay_active"
@@ -1249,10 +1423,23 @@ class GeminiAssessor:
             return None
 
         query = _build_single_game_search_query(title)
+        # Serve from in-memory cache when available to avoid redundant API calls
+        # (populated by _prefetch_ebay_prices_parallel for batches).
+        cached = self._cached_ebay_price(query)
+        if cached is not None:
+            price, source = cached
+            if price is not None:
+                logger.debug(
+                    "GeminiAssessor: Single-game market price (cache hit) for %r "
+                    "(query=%r): €%.2f (%s)",
+                    title, query, price, source,
+                )
+            return price
         try:
             price, source, errs = self._ebay_client.get_median_sold_price(
                 query, max_results=10
             )
+            self._store_ebay_price_in_cache(query, price, source)
             for e in errs:
                 logger.debug(
                     "GeminiAssessor: Single-game price lookup note for %r: %s",
