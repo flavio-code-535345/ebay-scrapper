@@ -180,7 +180,14 @@ def search():
     if not query:
         return jsonify({'error': 'query is required'}), 400
 
-    # Select the appropriate search engine (API or scraper) based on settings.
+    try:
+        return _run_search(query, max_results)
+    except Exception as exc:
+        logger.exception("Unhandled error in search route for query %r: %s", query, exc)
+        return jsonify({'error': f'Internal server error: {exc}', 'deals': [], 'deal_count': 0}), 500
+
+
+def _run_search(query: str, max_results: int):
     data_source_setting = _db_data_source()
     search_fn, active_source = _resolve_engine(data_source_setting)
 
@@ -252,7 +259,14 @@ def search():
     # is not shared across processes.
     _user_enabled = _db_ai_user_enabled()
     ai_active = gemini.enabled and _user_enabled
-    ai_assessments = gemini.assess_deals_batch(deals_filtered) if (deals_filtered and ai_active) else []
+    try:
+        ai_assessments = gemini.assess_deals_batch(deals_filtered) if (deals_filtered and ai_active) else []
+    except Exception as exc:
+        logger.error(
+            "assess_deals_batch raised unexpectedly (model=%r): %s — falling back to rules engine.",
+            gemini.model_name, exc,
+        )
+        ai_assessments = []
 
     if gemini.enabled and ai_assessments:
         failed = sum(1 for a in ai_assessments if a is None)
@@ -302,12 +316,22 @@ def search():
 
     assessed.sort(key=_sort_key)
 
-    database.save_search(query, assessed)
+    # Persist the search — non-fatal: a DB error must not prevent the results
+    # from being returned to the user.
+    try:
+        database.save_search(query, assessed)
+    except Exception as exc:
+        logger.error("Failed to persist search results to DB: %s", exc)
 
     # Compute how many seconds remain in any rate-limit back-off window.
     paused_seconds = max(0.0, gemini.rate_limited_until - time.monotonic())
 
-    saved_urls = set(d['url'] for d in database.get_saved_deals())
+    # Annotate each deal with whether the user has already saved it.
+    try:
+        saved_urls = set(d['url'] for d in database.get_saved_deals())
+    except Exception as exc:
+        logger.error("Failed to load saved deals from DB: %s", exc)
+        saved_urls = set()
     for deal in assessed:
         deal['is_saved'] = deal.get('url') in saved_urls
 

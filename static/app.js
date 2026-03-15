@@ -83,9 +83,22 @@ function stopProgress(success) {
 // ---------------------------------------------------------------------------
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Search form
-    const searchForm = document.getElementById('searchForm');
-    if (searchForm) searchForm.addEventListener('submit', handleSearch);
+    // Search button – use a direct click listener so the search fires
+    // reliably regardless of form-submit mechanics (HTML5 required-field
+    // validation, browser quirks, etc.).
+    const searchBtn = document.getElementById('searchBtn');
+    if (searchBtn) searchBtn.addEventListener('click', handleSearch);
+
+    // Allow pressing Enter inside the query input to trigger the search.
+    const searchQueryInput = document.getElementById('searchQuery');
+    if (searchQueryInput) {
+        searchQueryInput.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') {
+                ev.preventDefault();
+                handleSearch(ev);
+            }
+        });
+    }
 
     // Cancel search
     const cancelBtn = document.getElementById('cancelSearchBtn');
@@ -167,8 +180,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const params = new URLSearchParams(window.location.search);
     const autoSearch = params.get('search');
     if (autoSearch) {
-        document.getElementById('searchQuery').value = autoSearch;
-        handleSearch(new Event('submit'));
+        const qInput = document.getElementById('searchQuery');
+        if (qInput) qInput.value = autoSearch;
+        handleSearch(null);
     }
 
     // Init
@@ -182,12 +196,18 @@ document.addEventListener('DOMContentLoaded', () => {
 // ---------------------------------------------------------------------------
 
 async function handleSearch(e) {
-    e.preventDefault();
+    // Prevent any default browser action (form submit, Enter key navigation).
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
 
-    const query    = document.getElementById('searchQuery').value.trim();
+    // Guard: if a search is already running, ignore duplicate triggers.
     const searchBtn = document.getElementById('searchBtn');
-    const spinner   = searchBtn.querySelector('.spinner-border');
-    const btnText   = searchBtn.querySelector('.btn-text');
+    if (!searchBtn || searchBtn.disabled) return;
+
+    const queryInput = document.getElementById('searchQuery');
+    const spinner    = searchBtn.querySelector('.spinner-border');
+    const btnText    = searchBtn.querySelector('.btn-text');
+
+    const query = queryInput ? queryInput.value.trim() : '';
 
     if (!query) {
         showError('Please enter a search term');
@@ -198,19 +218,30 @@ async function handleSearch(e) {
     if (_abortController) _abortController.abort();
     _abortController = new AbortController();
 
-    // UI – loading state
-    searchBtn.disabled = true;
-    spinner.classList.remove('d-none');
-    btnText.textContent = 'Searching…';
+    // UI – loading state (wrapped so a missing element never breaks the search)
+    try {
+        searchBtn.disabled = true;
+        if (spinner) spinner.classList.remove('d-none');
+        if (btnText) btnText.textContent = 'Searching…';
 
-    document.getElementById('activePipelineBar').classList.remove('d-none');
-    document.getElementById('errorContainer').classList.add('d-none');
-    document.getElementById('aiWarningContainer').classList.add('d-none');
-    document.getElementById('emptyState').classList.add('d-none');
-    document.getElementById('dealsGrid').innerHTML = '';
+        const pipelineBar  = document.getElementById('activePipelineBar');
+        const errorEl      = document.getElementById('errorContainer');
+        const aiWarningEl  = document.getElementById('aiWarningContainer');
+        const emptyStateEl = document.getElementById('emptyState');
+        const dealsGrid    = document.getElementById('dealsGrid');
 
-    startProgress();
-    switchPipeline('ready', /* suppressLoad */ true);
+        if (pipelineBar)  pipelineBar.classList.remove('d-none');
+        if (errorEl)      errorEl.classList.add('d-none');
+        if (aiWarningEl)  aiWarningEl.classList.add('d-none');
+        if (emptyStateEl) emptyStateEl.classList.add('d-none');
+        if (dealsGrid)    dealsGrid.innerHTML = '';
+
+        startProgress();
+        switchPipeline('ready', /* suppressLoad */ true);
+    } catch (uiErr) {
+        // UI setup errors are non-fatal; log and continue to the fetch.
+        console.error('handleSearch: UI setup error:', uiErr);
+    }
 
     try {
         const response = await fetch('/api/search', {
@@ -234,7 +265,8 @@ async function handleSearch(e) {
                 ? data.errors
                 : ['No matching items found on eBay for this search term.'];
             showDetailedError('No deals found. Try a different search term.', errorLines);
-            document.getElementById('emptyState').classList.remove('d-none');
+            const emptyStateEl = document.getElementById('emptyState');
+            if (emptyStateEl) emptyStateEl.classList.remove('d-none');
         } else {
             _applySearchResults(data);
         }
@@ -252,10 +284,11 @@ async function handleSearch(e) {
             );
         }
     } finally {
-        searchBtn.disabled = false;
-        spinner.classList.add('d-none');
-        btnText.textContent = 'Search';
-        document.getElementById('activePipelineBar').classList.add('d-none');
+        if (searchBtn) searchBtn.disabled = false;
+        if (spinner)   spinner.classList.add('d-none');
+        if (btnText)   btnText.textContent = 'Search';
+        const pipelineBar = document.getElementById('activePipelineBar');
+        if (pipelineBar) pipelineBar.classList.add('d-none');
         _abortController = null;
     }
 }
