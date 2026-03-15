@@ -388,8 +388,8 @@ function _applyFilters(deals) {
         // Rating filter
         if (_ratingFilter) {
             const rating = (deal.ai_deal_rating || '').toLowerCase();
-            // Treat legacy "fair" ratings as "okay" for filter purposes
-            const normRating = rating === 'fair' ? 'okay' : rating;
+            // Treat legacy "fair" ratings as "okay" and "must buy" as "must have" for filter purposes
+            const normRating = rating === 'fair' ? 'okay' : rating === 'must buy' ? 'must have' : rating;
             if (normRating !== _ratingFilter) return false;
         }
 
@@ -1380,7 +1380,8 @@ function buildAiErrorSection(message) {
 
 function getAiBadgeClass(rating) {
     const r = (rating || '').toLowerCase();
-    if (r.includes('must') || r === 'must buy') return 'badge-must-buy';
+    if (r.includes('must')) return 'badge-must-buy';
+    if (r === 'good') return 'badge-good';
     if (r === 'okay' || r === 'fair') return 'badge-okay';
     if (r.includes('avoid') || r.includes('hard pass')) return 'badge-avoid';
     return 'badge-unknown';
