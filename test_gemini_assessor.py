@@ -468,3 +468,65 @@ class TestApplySportsKinectOverride:
         assessment = _make_assessment(ai_verdict_summary="")
         result = _apply_sports_kinect_override(deal, assessment)
         assert result["ai_verdict_summary"].startswith("⛔ **SPORTS/KINECT")
+
+
+# ---------------------------------------------------------------------------
+# _extract_potential_game_titles tests
+# ---------------------------------------------------------------------------
+
+
+from gemini_assessor import _extract_potential_game_titles
+
+
+class TestExtractPotentialGameTitles:
+    """Tests for the bundle game-title extractor."""
+
+    def test_comma_separated_titles(self):
+        """Comma-separated titles in a bundle listing are extracted."""
+        title = "PS4 Bundle: God of War, Spider-Man, Horizon Zero Dawn"
+        result = _extract_potential_game_titles(title)
+        assert len(result) >= 2
+        assert any("God of War" in t for t in result)
+
+    def test_plus_separated_titles(self):
+        """Plus-sign separated titles are extracted."""
+        title = "Switch Bundle Zelda + Mario Odyssey + Kirby"
+        result = _extract_potential_game_titles(title)
+        assert len(result) >= 2
+        assert any("Zelda" in t for t in result)
+
+    def test_generic_bundle_no_titles(self):
+        """Generic 'N Spiele' bundle with no individual titles returns empty."""
+        title = "10 PS4 Spiele Sammlung Lot"
+        result = _extract_potential_game_titles(title)
+        # May return empty or only generic words stripped — count should be low
+        # (no real game names can be extracted)
+        for t in result:
+            # Should not contain generic platform words alone
+            assert t not in {"PS4", "Sammlung", "Lot", "Spiele"}
+
+    def test_empty_title_returns_empty(self):
+        """Empty title returns empty list."""
+        assert _extract_potential_game_titles("") == []
+
+    def test_respects_max_games_limit(self):
+        """Never returns more than _MAX_GAMES_PER_BUNDLE titles."""
+        from gemini_assessor import _MAX_GAMES_PER_BUNDLE
+        many = ", ".join([f"Game {i}" for i in range(20)])
+        title = f"Bundle: {many}"
+        result = _extract_potential_game_titles(title)
+        assert len(result) <= _MAX_GAMES_PER_BUNDLE
+
+    def test_short_tokens_filtered(self):
+        """Tokens shorter than 3 characters are excluded."""
+        title = "PS4 Bundle: A + B + God of War"
+        result = _extract_potential_game_titles(title)
+        for t in result:
+            assert len(t) >= 3
+
+    def test_numeric_only_tokens_filtered(self):
+        """Pure numeric tokens are excluded."""
+        title = "Bundle: 22 + FIFA 22 + 21"
+        result = _extract_potential_game_titles(title)
+        for t in result:
+            assert not t.isdigit()

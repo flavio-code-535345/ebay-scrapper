@@ -31,6 +31,9 @@ gemini = GeminiAssessor()
 
 database.init_db()
 
+# Register eBay client with Gemini so it can fetch real per-game prices for bundles.
+gemini.set_ebay_client(ebay_api)
+
 # Load persisted Gemini model (if any) so it takes effect without a restart.
 _saved_model = database.get_setting("gemini_model")
 if _saved_model:
