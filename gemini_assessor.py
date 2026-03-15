@@ -1005,7 +1005,8 @@ class GeminiAssessor:
         results: List[Dict] = []
         for game in game_titles:
             try:
-                price, source, errs = self._ebay_client.get_median_sold_price(game, max_results=10)
+                search_query = f"{game} (Microsoft Xbox 360)"
+                price, source, errs = self._ebay_client.get_median_sold_price(search_query, max_results=10)
             except Exception as exc:
                 logger.warning(
                     "GeminiAssessor: eBay price lookup failed for %r: %s", game, exc
