@@ -521,14 +521,9 @@ class EbayScraper:
 
         Possible identifiers returned:
         - ``"no_images"``   – the listing has no product images at all.
-        - ``"low_res_only"``– every image is below 230 px (thumbnail-level quality).
         """
         if not image_urls:
             return ["no_images"]
-
-        low_res_count = sum(1 for u in image_urls if _LOW_RES_URL_RE.search(u))
-        if low_res_count == len(image_urls):
-            return ["low_res_only"]
 
         return []
 
