@@ -27,6 +27,23 @@
                 </button>
             </form>
         </div>
+
+        <!-- Settings panel -->
+        <div class="settings-panel">
+            <div class="settings-row">
+                <label for="geminiModelInput" class="settings-label">🤖 Gemini Model</label>
+                <input
+                    type="text"
+                    id="geminiModelInput"
+                    class="settings-input"
+                    placeholder="e.g. gemini-2.0-flash-lite"
+                    autocomplete="off"
+                    spellcheck="false"
+                />
+                <button id="saveModelBtn" class="btn-save-model">Save</button>
+            </div>
+            <div id="modelStatus" class="model-status"></div>
+        </div>
     </header>
 
     <main class="main">

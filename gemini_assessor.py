@@ -214,6 +214,7 @@ class GeminiAssessor:
         self.enabled = bool(api_key)
         self._client = None
         self._types = None
+        self._model_name: str = _MODEL_NAME
 
         if self.enabled:
             try:
@@ -222,7 +223,7 @@ class GeminiAssessor:
 
                 self._client = genai.Client(api_key=api_key)
                 self._types = types
-                logger.info("GeminiAssessor: Gemini API initialised (model=%s)", _MODEL_NAME)
+                logger.info("GeminiAssessor: Gemini API initialised (model=%s)", self._model_name)
             except Exception as exc:
                 logger.error("GeminiAssessor: Failed to initialise Gemini client: %s", exc)
                 self.enabled = False
@@ -246,6 +247,25 @@ class GeminiAssessor:
     def is_rate_limited(self) -> bool:
         """Return True if the Gemini quota is currently exhausted."""
         return time.monotonic() < self.rate_limited_until
+
+    @property
+    def model_name(self) -> str:
+        """Return the Gemini model string currently in use."""
+        return self._model_name
+
+    @model_name.setter
+    def model_name(self, value: str) -> None:
+        """Update the Gemini model used for all future requests (no restart needed)."""
+        value = value.strip()
+        if not value:
+            raise ValueError("model_name must not be empty (e.g., gemini-2.0-flash-lite)")
+        if value != self._model_name:
+            logger.info(
+                "GeminiAssessor: model changed from %s to %s",
+                self._model_name,
+                value,
+            )
+            self._model_name = value
 
     def assess_deal(self, deal: Dict) -> Optional[Dict]:
         """Analyse *deal* with Gemini and return an AI-assessment dict.
@@ -279,7 +299,7 @@ class GeminiAssessor:
             # The new google.genai SDK requires per-request config; there is no
             # global model object that holds a system instruction.
             response = self._client.models.generate_content(
-                model=_MODEL_NAME,
+                model=self._model_name,
                 contents=contents,
                 config=self._types.GenerateContentConfig(
                     system_instruction=_SYSTEM_PROMPT,
@@ -440,7 +460,7 @@ class GeminiAssessor:
             try:
                 contents = self._build_batch_contents(deals)
                 response = self._client.models.generate_content(
-                    model=_MODEL_NAME,
+                    model=self._model_name,
                     contents=contents,
                     config=self._types.GenerateContentConfig(
                         system_instruction=_BATCH_SYSTEM_PROMPT,

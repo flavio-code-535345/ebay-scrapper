@@ -520,3 +520,82 @@ body {
     color: var(--muted);
     margin-top: 0.3rem;
 }
+
+/* ── Settings panel ─────────────────────────────────────────────────────── */
+
+.settings-panel {
+    margin-top: 1.2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.settings-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.settings-label {
+    font-size: 0.88rem;
+    color: rgba(255, 255, 255, 0.85);
+    white-space: nowrap;
+}
+
+.settings-input {
+    padding: 0.4rem 0.75rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+    font-size: 0.88rem;
+    min-width: 220px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.settings-input::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.settings-input:focus {
+    border-color: rgba(255, 255, 255, 0.7);
+    background: rgba(255, 255, 255, 0.22);
+}
+
+.btn-save-model {
+    padding: 0.4rem 1rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+    font-size: 0.88rem;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.btn-save-model:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.32);
+}
+
+.btn-save-model:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.model-status {
+    font-size: 0.82rem;
+    min-height: 1.2em;
+    color: rgba(255, 255, 255, 0.75);
+}
+
+.model-status--active {
+    color: #a8f0c6;
+}
+
+.model-status--error {
+    color: #fca5a5;
+}
