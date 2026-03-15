@@ -64,6 +64,8 @@ def init_db():
     _add_column_if_missing(cursor, "deals", "ai_verdict_summary", "TEXT")
     _add_column_if_missing(cursor, "deals", "ai_assessed", "INTEGER DEFAULT 0")
     _add_column_if_missing(cursor, "deals", "image_issues", "TEXT")
+    _add_column_if_missing(cursor, "deals", "image_urls", "TEXT")
+    _add_column_if_missing(cursor, "deals", "item_location", "TEXT")
 
     # Key-value settings store.
     cursor.executescript("""
@@ -94,6 +96,8 @@ def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> No
         "ai_verdict_summary",
         "ai_assessed",
         "image_issues",
+        "image_urls",
+        "item_location",
     }
     _ALLOWED_TYPES = {
         "TEXT",
@@ -128,10 +132,11 @@ def save_search(query: str, deals: List[Dict]) -> int:
     search_id = cursor.lastrowid
 
     for deal in deals:
-        # Serialise list fields (visual_findings, red_flags, image_issues) as JSON strings.
+        # Serialise list fields (visual_findings, red_flags, image_issues, image_urls) as JSON strings.
         visual_findings = deal.get('ai_visual_findings')
         red_flags = deal.get('ai_red_flags')
         image_issues = deal.get('image_issues')
+        image_urls = deal.get('image_urls')
 
         cursor.execute(
             """INSERT INTO deals
@@ -140,8 +145,8 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 condition_score, trend_score, recommendation,
                 ai_deal_rating, ai_confidence_score, ai_visual_findings,
                 ai_red_flags, ai_fair_market_estimate, ai_verdict_summary,
-                ai_assessed, image_issues, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ai_assessed, image_issues, image_urls, item_location, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 search_id,
                 deal.get('title'),
@@ -165,6 +170,8 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 deal.get('ai_verdict_summary'),
                 int(bool(deal.get('ai_assessed'))),
                 json.dumps(image_issues) if isinstance(image_issues, list) else image_issues,
+                json.dumps(image_urls) if isinstance(image_urls, list) else image_urls,
+                deal.get('item_location'),
                 now,
             ),
         )
@@ -193,6 +200,16 @@ def get_deals_by_search(search_id: int) -> List[Dict]:
     cursor.execute("SELECT * FROM deals WHERE search_id = ?", (search_id,))
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
+    # Deserialise JSON-encoded list fields.
+    _JSON_LIST_FIELDS = ('ai_visual_findings', 'ai_red_flags', 'image_issues', 'image_urls')
+    for row in rows:
+        for field in _JSON_LIST_FIELDS:
+            raw = row.get(field)
+            if isinstance(raw, str):
+                try:
+                    row[field] = json.loads(raw)
+                except (json.JSONDecodeError, ValueError):
+                    pass
     return rows
 
 
