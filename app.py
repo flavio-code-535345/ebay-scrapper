@@ -59,18 +59,11 @@ def _db_data_source() -> str:
 
 
 def _db_germany_only() -> bool:
-    """Read the Germany-only location filter toggle from the database.
+    """Germany-only location filter is always enabled.
 
-    When enabled, only deals with an item location in Germany are returned.
-    Falls back to the ``EBAY_GERMANY_ONLY`` environment variable (set to
-    ``"true"`` to enable), then defaults to ``True`` so that the expected
-    behaviour (Germany-only deals) is active out of the box.
+    All searches and results use Germany (EBAY_DE) exclusively.
     """
-    val = database.get_setting("germany_only")
-    if val is not None:
-        return str(val).lower() == "true"
-    env_val = os.environ.get("EBAY_GERMANY_ONLY", "true").strip().lower()
-    return env_val != "false"
+    return True
 
 
 def _resolve_engine(source: str):
@@ -142,6 +135,30 @@ def _is_german_location(location: str) -> bool:
     return False
 
 
+# Keywords (lower-case) indicating a multi-item lot / bundle listing.
+# Checked against the deal title for bundle-first sort priority.
+_BUNDLE_KEYWORDS = frozenset({
+    # German
+    "sammlung", "konvolut", "paket", "lot", "bundle",
+    "spielesammlung", "spielepaket", "spielekonvolut",
+    # Common numeric-quantity patterns are handled separately below.
+})
+
+_BUNDLE_NUMBER_RE = re.compile(
+    r'\b\d+\s*[xX×]\s*\w+|\b\d+\s*(?:spiele|games|stück|pieces|items)\b',
+    re.IGNORECASE,
+)
+
+
+def _is_bundle(deal: dict) -> bool:
+    """Return True when the deal title suggests a multi-item lot or bundle."""
+    title = (deal.get("title") or "").lower()
+    for kw in _BUNDLE_KEYWORDS:
+        if kw in title:
+            return True
+    if _BUNDLE_NUMBER_RE.search(title):
+        return True
+    return False
 
 
 @app.route('/')
@@ -249,15 +266,18 @@ def search():
         ai_assessment = ai_assessments[i] if i < len(ai_assessments) else None
         assessed.append({**deal, **rules_assessment, **(ai_assessment or {})})
 
-    # Sort deals: best first. AI-rated "Must Buy" with high confidence leads,
-    # followed by "Fair", then "Avoid", then rules-only results by overall_score.
+    # Sort deals: bundles first, then by AI rating and score.
+    # Within each group (bundle / single), AI-rated "Must Buy" with high
+    # confidence leads, followed by "Fair", then "Avoid", then rules-only
+    # results ordered by overall_score.
     _rating_order = {"must buy": 0, "fair": 1, "avoid": 2}
 
     def _sort_key(d: dict):
+        is_single = not _is_bundle(d)  # 0 = bundle, 1 = single game
         ai_order = _rating_order.get((d.get("ai_deal_rating") or "").lower(), 3)
         ai_conf = -(d.get("ai_confidence_score") or 0)
         score = -(d.get("overall_score") or 0)
-        return (not d.get("ai_assessed", False), ai_order, ai_conf, score)
+        return (is_single, not d.get("ai_assessed", False), ai_order, ai_conf, score)
 
     assessed.sort(key=_sort_key)
 
@@ -395,15 +415,6 @@ def update_settings():
             database.set_setting('data_source', ds)
             updated['data_source'] = ds
             logger.info("Settings: data_source updated to %r", ds)
-
-    if 'germany_only' in data:
-        germany_only_val = data['germany_only']
-        if not isinstance(germany_only_val, bool):
-            errors['germany_only'] = 'germany_only must be a boolean (true or false)'
-        else:
-            database.set_setting('germany_only', str(germany_only_val).lower())
-            updated['germany_only'] = germany_only_val
-            logger.info("Settings: germany_only updated to %r", germany_only_val)
 
     if errors:
         return jsonify({'errors': errors}), 400
