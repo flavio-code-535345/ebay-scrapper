@@ -27,7 +27,7 @@ _DE_CONDITION_KEYWORDS = [
 ]
 
 # German shipping keywords
-_DE_SHIPPING_KEYWORDS = ['versand', 'lieferung', 'kostenlos']
+_DE_SHIPPING_KEYWORDS = ['versand', 'lieferung', 'kostenlos', 'gratis', 'free']
 
 # German / eBay trending / popularity keywords
 _DE_TRENDING_KEYWORDS = {'beliebt', 'sehr beliebt', 'angesagt', 'hot', 'trending'}
@@ -63,6 +63,18 @@ _VARIANT_TEXT_PATTERNS = [
 
 # Maximum text length when scanning for variant text patterns.
 _MAX_VARIANT_TEXT_LEN = 80
+
+# eBay injects short badge/label spans directly inside the title element.
+# These must be stripped out to recover the actual listing title.
+# All entries must be lower-cased for case-insensitive comparison.
+_TITLE_NOISE_PHRASES = frozenset({
+    'neues angebot',        # "New Listing" badge – German
+    'new listing',          # "New Listing" badge – English
+    'gesponsert',           # "Sponsored" badge – German
+    'sponsored',            # "Sponsored" badge – English
+    'top-rated plus',
+    'top-bewerteter anbieter',
+})
 
 # Regex that matches eBay CDN image URL size codes indicating very low resolution
 # (below 230 px wide) – e.g. ``s-l140``, ``s-l225``.  These are often placeholder
@@ -260,12 +272,27 @@ class EbayScraper:
         try:
             # Extract title – eBay uses <h3> in newer layouts, <h2> in older ones;
             # using a CSS class selector avoids the tag dependency entirely.
+            # eBay also injects badge spans (e.g. "Neues Angebot", "Gesponsert")
+            # as child elements inside the title wrapper – strip those out so only
+            # the real listing name is kept.
             title_elem = (
                 item_element.select_one('.s-item__title')
+                or item_element.select_one('[data-testid="item-card-title"]')  # newer eBay layout
                 or item_element.find('h3')
                 or item_element.find('h2')
             )
-            title = title_elem.text.strip() if title_elem else "Unknown"
+            if title_elem:
+                # Join all non-empty text nodes, skipping known eBay badge labels.
+                title_parts = []
+                for s in title_elem.strings:
+                    stripped = s.strip()
+                    if stripped and stripped.lower() not in _TITLE_NOISE_PHRASES:
+                        title_parts.append(stripped)
+                title = ' '.join(title_parts).strip()
+                if not title:
+                    title = "Unknown"
+            else:
+                title = "Unknown"
 
             # Skip eBay's placeholder cards (English and German variants).
             _skip = {"shop on ebay", "zu ebay", "results matching fewer words"}
