@@ -426,17 +426,29 @@ _IMAGE_FETCH_TIMEOUT = 5
 _DEFAULT_BACKOFF_SECONDS = 60
 
 # Maximum number of deals bundled into a single Gemini generateContent call.
-_BATCH_SIZE = 50
+# Capped at 10 to match the Gemini AFC (Adaptive Flow Control) limit of 10
+# max remote calls per request.  Smaller batches also reduce per-request
+# latency and memory usage.
+_BATCH_SIZE = 10
 
 # Retry configuration for transient (non-rate-limit) API errors.
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 2.0  # seconds; doubled on each retry (exponential back-off)
 
-# Hard timeout (seconds) applied around each Gemini generateContent call,
-# including all internal SDK retries.  Set below the Gunicorn worker timeout
-# (120 s) so that the worker can return a graceful error instead of being
-# killed by the supervisor.
-_GEMINI_REQUEST_TIMEOUT = 90
+# Hard timeout (seconds) applied around a single Gemini generateContent call,
+# including all internal SDK retries.  With _BATCH_SIZE=10 each call is small
+# enough to complete well within this window under normal network conditions.
+# If the call stalls, the ThreadPoolExecutor future times out here and returns
+# graceful timeout errors rather than blocking the Gunicorn worker.
+_GEMINI_REQUEST_TIMEOUT = 25
+
+# Total wall-clock budget (seconds) for the entire assess_deals_batch() call
+# (all sub-batches combined).  This is the last line of defence against a
+# Gunicorn worker timeout: if the cumulative Gemini time exceeds this limit,
+# remaining batches are skipped and their deals are returned as timeout errors.
+# Set well below the Gunicorn worker timeout (180 s) to leave room for eBay
+# API calls and other per-request work.
+_ASSESS_TOTAL_BUDGET_S = 90
 
 # ---------------------------------------------------------------------------
 # Rate-limit / back-off state (shared across all GeminiAssessor instances).
@@ -966,9 +978,17 @@ class GeminiAssessor:
     def assess_deals_batch(self, deals: List[Dict]) -> List[Optional[Dict]]:
         """Assess a list of *deals* in as few Gemini requests as possible.
 
-        Deals are grouped into batches of up to ``_BATCH_SIZE`` items and sent
-        together in a single ``generateContent`` call, dramatically reducing
-        API quota consumption compared to one call per deal.
+        Deals are grouped into batches of up to ``_BATCH_SIZE`` items (matching
+        the Gemini AFC max-remote-calls limit) and sent together in a single
+        ``generateContent`` call, dramatically reducing API quota consumption
+        compared to one call per deal.
+
+        A hard wall-clock budget of ``_ASSESS_TOTAL_BUDGET_S`` seconds is
+        enforced across **all** sub-batches so that the Gunicorn worker is
+        never blocked indefinitely even when many batches are queued.  Deals
+        from batches that could not be assessed within the budget are returned
+        as ``{"ai_error_type": "timeout", "ai_assessed": False}`` so the caller
+        always receives a list of the same length as *deals*.
 
         Returns a list of the same length as *deals*.  Each element is either:
         - A dict with AI assessment fields (``ai_assessed=True``).
@@ -992,9 +1012,55 @@ class GeminiAssessor:
             )
             return [{"ai_error_type": "rate_limit", "ai_assessed": False}] * len(deals)
 
+        total_batches = (len(deals) + _BATCH_SIZE - 1) // _BATCH_SIZE
+        logger.info(
+            "GeminiAssessor: assess_deals_batch start – %d deal(s) across "
+            "%d batch(es) of ≤%d (AFC cap), budget=%.0f s, per-call timeout=%.0f s.",
+            len(deals),
+            total_batches,
+            _BATCH_SIZE,
+            _ASSESS_TOTAL_BUDGET_S,
+            _GEMINI_REQUEST_TIMEOUT,
+        )
+
+        t_start = time.monotonic()
         results: List[Optional[Dict]] = []
-        for batch_start in range(0, len(deals), _BATCH_SIZE):
+        for batch_idx, batch_start in enumerate(range(0, len(deals), _BATCH_SIZE)):
+            elapsed = time.monotonic() - t_start
+            budget_remaining = _ASSESS_TOTAL_BUDGET_S - elapsed
+
+            # ── Total-budget guard ────────────────────────────────────────────
+            # If the remaining budget is not strictly greater than one full call
+            # timeout, any further Gemini call risks running over the Gunicorn
+            # worker limit.  Return graceful timeout errors for all remaining
+            # deals instead of hanging the worker process.
+            if budget_remaining <= _GEMINI_REQUEST_TIMEOUT:
+                skipped = len(deals) - len(results)
+                logger.warning(
+                    "GeminiAssessor: assess_deals_batch budget exhausted after "
+                    "%.1f s (budget=%.0f s). Skipping %d remaining deal(s) "
+                    "in %d remaining batch(es) – returning timeout errors.",
+                    elapsed,
+                    _ASSESS_TOTAL_BUDGET_S,
+                    skipped,
+                    total_batches - batch_idx,
+                )
+                results.extend(
+                    [{"ai_error_type": "timeout", "ai_assessed": False}] * skipped
+                )
+                break
+
             batch = deals[batch_start : batch_start + _BATCH_SIZE]
+            logger.info(
+                "GeminiAssessor: batch %d/%d – %d deal(s), elapsed=%.1f s, "
+                "budget_remaining=%.1f s.",
+                batch_idx + 1,
+                total_batches,
+                len(batch),
+                elapsed,
+                budget_remaining,
+            )
+
             batch_results = self._assess_batch_with_retry(batch)
             # Apply deterministic overrides for each deal in the batch.
             # Sports/Kinect override runs first, then scam override (scam takes
@@ -1004,6 +1070,20 @@ class GeminiAssessor:
                     assessment = _apply_sports_kinect_override(deal, assessment)
                     batch_results[i] = _apply_scam_override(deal, assessment)
             results.extend(batch_results)
+
+        total_elapsed = time.monotonic() - t_start
+        assessed_ok = sum(1 for a in results if a and a.get("ai_assessed"))
+        timed_out = sum(
+            1 for a in results if a and a.get("ai_error_type") == "timeout"
+        )
+        logger.info(
+            "GeminiAssessor: assess_deals_batch done – %d assessed, %d timeout, "
+            "%d other in %.1f s total.",
+            assessed_ok,
+            timed_out,
+            len(results) - assessed_ok - timed_out,
+            total_elapsed,
+        )
 
         return results
 
