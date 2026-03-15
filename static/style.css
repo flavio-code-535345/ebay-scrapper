@@ -824,7 +824,8 @@ a:hover { text-decoration: underline; }
 }
 
 .badge-must-buy { background: var(--green-dim);  color: var(--green);  }
-.badge-fair     { background: var(--yellow-dim); color: var(--yellow); }
+.badge-okay     { background: var(--yellow-dim); color: var(--yellow); }
+.badge-fair     { background: var(--yellow-dim); color: var(--yellow); } /* legacy alias */
 .badge-avoid    { background: var(--red-dim);    color: var(--red);    }
 .badge-unknown  { background: var(--surface3);   color: var(--muted);  }
 
@@ -1180,6 +1181,59 @@ a:hover { text-decoration: underline; }
     color: var(--muted);
     font-size: 0.82rem;
     padding: 1rem;
+}
+
+/* ── Rating legend ───────────────────────────────────────────────────────── */
+.rating-legend {
+    margin: 0.75rem 0 0.25rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface2);
+    overflow: hidden;
+}
+
+.rating-legend-summary {
+    cursor: pointer;
+    padding: 0.55rem 0.9rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--muted);
+    user-select: none;
+    list-style: none;
+}
+.rating-legend-summary::-webkit-details-marker { display: none; }
+.rating-legend[open] .rating-legend-summary { color: var(--text); }
+
+.rating-legend-body {
+    padding: 0.6rem 0.9rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.rating-legend-item {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    font-size: 0.8rem;
+}
+
+.rating-legend-item .ai-badge {
+    flex-shrink: 0;
+    min-width: 6.5rem;
+    text-align: center;
+}
+
+.rating-legend-desc {
+    color: var(--text);
+    line-height: 1.4;
+}
+
+.rating-legend-note {
+    margin: 0.4rem 0 0;
+    color: var(--muted);
+    font-size: 0.75rem;
+    line-height: 1.5;
 }
 
 /* ── Responsive ─────────────────────────────────────────────────────────── */

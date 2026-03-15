@@ -57,16 +57,16 @@ identified **rare or high-value non-sports titles** that outweigh the \
 sports/Kinect content in resale value and provide meaningful net profit.
 
 ### RATING DECISION — RESALE PROFIT ONLY
-Your `deal_rating` is determined **solely by resale profit potential**:
-- **"Must Buy"**: Estimated resale clearly exceeds (asking price + \
-shipping) by at least 30–40 % gross margin **or** ≥ €8 net profit. A \
-genuinely profitable flip that a reseller should act on immediately.
-- **"Fair"**: Small positive margin (< 30 % gross margin or < €8 net \
-profit), break-even, or uncertain — worth considering only if the price \
-drops further or you already have a buyer lined up.
-- **"Avoid"**: Estimated resale ≤ cost (no profit), high risk, scam/fraud \
-detected, or the listing is dominated by low-demand categories (sports/ \
-Kinect bundles, common shovelware).
+Your `deal_rating` is determined **solely by resale profit potential** \
+(gross profit = estimated resale − total cost; total cost = asking price + \
+shipping):
+- **"Must Buy"**: Gross profit ≥ total cost (i.e. ≥ 100 % return on cost). \
+A genuinely exceptional flip that a reseller should act on immediately.
+- **"Okay"**: Gross profit ≥ 33 % of total cost but < 100 % of total cost. \
+A moderate margin worth considering.
+- **"Avoid"**: Gross profit < 33 % of total cost (including break-even or \
+loss), scam/fraud detected, or the listing is dominated by low-demand \
+categories (sports/Kinect bundles, common shovelware).
 
 ### ANALYSIS PROTOCOL
 1. **SCAM / BAIT-AND-SWITCH DETECTION (CHECK THIS FIRST)**
@@ -175,7 +175,7 @@ preference influence the rating — only profit counts.
 ### OUTPUT FORMAT
 Return **only** a JSON object (no markdown fences, no commentary) with \
 exactly these keys:
-- `"deal_rating"`: `"Must Buy"` / `"Fair"` / `"Avoid"`
+- `"deal_rating"`: `"Must Buy"` / `"Okay"` / `"Avoid"`
 - `"confidence_score"`: integer 1–100
 - `"potential_scam"`: boolean — `true` if this listing shows signs of \
 bundle-bait or bait-and-switch (buyer likely receives only one game despite \
@@ -240,15 +240,16 @@ identified **rare or high-value non-sports titles** that outweigh the \
 sports/Kinect content in resale value and provide meaningful net profit.
 
 ### RATING DECISION — RESALE PROFIT ONLY
-Your `deal_rating` is determined **solely by resale profit potential**:
-- **"Must Buy"**: Estimated resale clearly exceeds (asking price + \
-shipping) by at least 30–40 % gross margin **or** ≥ €8 net profit. A \
-genuinely profitable flip.
-- **"Fair"**: Small positive margin (< 30 % gross margin or < €8 net \
-profit), break-even, or uncertain — worth considering only if the price \
-drops or you have a buyer.
-- **"Avoid"**: Estimated resale ≤ cost (no profit), scam/fraud detected, \
-or dominated by low-demand categories (sports/Kinect, common shovelware).
+Your `deal_rating` is determined **solely by resale profit potential** \
+(gross profit = estimated resale − total cost; total cost = asking price + \
+shipping):
+- **"Must Buy"**: Gross profit ≥ total cost (i.e. ≥ 100 % return on cost). \
+A genuinely exceptional flip.
+- **"Okay"**: Gross profit ≥ 33 % of total cost but < 100 % of total cost. \
+A moderate margin worth considering.
+- **"Avoid"**: Gross profit < 33 % of total cost (including break-even or \
+loss), scam/fraud detected, or dominated by low-demand categories \
+(sports/Kinect, common shovelware).
 
 ### BUNDLE RESALE RULE
 > Whenever a listing appears to be a **multi-game lot or bundle** \
@@ -372,7 +373,7 @@ preference influence the rating — only profit counts.
 You MUST return a **single JSON array** where each element corresponds to one \
 listing in the order they were presented. Each element must have exactly \
 these keys:
-- `"deal_rating"`: `"Must Buy"` / `"Fair"` / `"Avoid"`
+- `"deal_rating"`: `"Must Buy"` / `"Okay"` / `"Avoid"`
 - `"confidence_score"`: integer 1–100
 - `"potential_scam"`: boolean — `true` if this listing shows signs of \
 bundle-bait or bait-and-switch (buyer likely receives only one game despite \

@@ -388,7 +388,9 @@ function _applyFilters(deals) {
         // Rating filter
         if (_ratingFilter) {
             const rating = (deal.ai_deal_rating || '').toLowerCase();
-            if (rating !== _ratingFilter) return false;
+            // Treat legacy "fair" ratings as "okay" for filter purposes
+            const normRating = rating === 'fair' ? 'okay' : rating;
+            if (normRating !== _ratingFilter) return false;
         }
 
         return true;
@@ -1368,7 +1370,7 @@ function buildAiErrorSection(message) {
 function getAiBadgeClass(rating) {
     const r = (rating || '').toLowerCase();
     if (r.includes('must') || r === 'must buy') return 'badge-must-buy';
-    if (r === 'fair') return 'badge-fair';
+    if (r === 'okay' || r === 'fair') return 'badge-okay';
     if (r.includes('avoid') || r.includes('hard pass')) return 'badge-avoid';
     return 'badge-unknown';
 }
