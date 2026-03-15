@@ -68,6 +68,8 @@ def init_db():
     _add_column_if_missing(cursor, "deals", "image_issues", "TEXT")
     _add_column_if_missing(cursor, "deals", "image_urls", "TEXT")
     _add_column_if_missing(cursor, "deals", "item_location", "TEXT")
+    _add_column_if_missing(cursor, "deals", "description", "TEXT")
+    _add_column_if_missing(cursor, "deals", "seller_count", "TEXT")
 
     # Key-value settings store.
     cursor.executescript("""
@@ -102,6 +104,8 @@ def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> No
         "image_issues",
         "image_urls",
         "item_location",
+        "description",
+        "seller_count",
     }
     _ALLOWED_TYPES = {
         "TEXT",
@@ -150,8 +154,9 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 ai_deal_rating, ai_confidence_score, ai_visual_findings,
                 ai_red_flags, ai_fair_market_estimate, ai_verdict_summary,
                 ai_assessed, ai_potential_scam, ai_scam_warning,
-                image_issues, image_urls, item_location, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                image_issues, image_urls, item_location, description, seller_count,
+                created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 search_id,
                 deal.get('title'),
@@ -179,6 +184,8 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 json.dumps(image_issues) if isinstance(image_issues, list) else image_issues,
                 json.dumps(image_urls) if isinstance(image_urls, list) else image_urls,
                 deal.get('item_location'),
+                deal.get('description'),
+                deal.get('seller_count'),
                 now,
             ),
         )

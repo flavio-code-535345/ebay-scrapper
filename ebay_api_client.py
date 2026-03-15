@@ -391,6 +391,36 @@ class EbayApiClient:
             or item.get("watchCount", 0) > 10
         )
 
+        # ── Description ────────────────────────────────────────────────────
+        # Browse API may return a short description; use it when available.
+        description = (item.get("shortDescription") or "").strip()
+
+        # ── Seller count (available/sold quantity) ──────────────────────────
+        # "X verfügbar Y verkauft" style info that can indicate bait-and-switch
+        # scams where one item from a bundle is sold per transaction.
+        try:
+            _qty_left_raw = item.get("availableQuantity")
+            if _qty_left_raw is None:
+                _qty_left_raw = item.get("quantityLeft")
+            qty_left = int(_qty_left_raw) if _qty_left_raw is not None else 0
+        except (TypeError, ValueError):
+            qty_left = 0
+        try:
+            _qty_sold_raw = item.get("soldQuantity")
+            if _qty_sold_raw is None:
+                _qty_sold_raw = item.get("itemSoldCount")
+            qty_sold = int(_qty_sold_raw) if _qty_sold_raw is not None else 0
+        except (TypeError, ValueError):
+            qty_sold = 0
+        if qty_left > 0 and qty_sold > 0:
+            seller_count = f"{qty_left} verfügbar, {qty_sold} verkauft"
+        elif qty_left > 0:
+            seller_count = f"{qty_left} verfügbar"
+        elif qty_sold > 0:
+            seller_count = f"{qty_sold} verkauft"
+        else:
+            seller_count = ""
+
         # ── Images ─────────────────────────────────────────────────────────
         image_urls: List[str] = []
         primary_image = item.get("image") or item.get("thumbnailImages", [{}])[0]
@@ -412,6 +442,11 @@ class EbayApiClient:
             # Set by itemLocationCountry filter; e.g. "Berlin, DE" or "DE".
             "item_location": item_location,
             "image_urls": image_urls,
+            # Short description text from the listing (may be empty).
+            "description": description,
+            # Quantity/sold info formatted as a human-readable string, e.g.
+            # "4 verfügbar, 1 verkauft" — a key bait-and-switch scam indicator.
+            "seller_count": seller_count,
         }
 
     @staticmethod
