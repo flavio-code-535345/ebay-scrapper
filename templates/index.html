@@ -7,108 +7,132 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-
     <!-- Hero / Search bar -->
     <header class="hero">
-        <h1>🛍️ eBay Deal Finder</h1>
-        <p>Search eBay listings and get instant deal scores powered by AI assessment</p>
-        <div class="search-container">
-            <form id="searchForm">
-                <input
-                    type="text"
-                    id="searchQuery"
-                    placeholder="Search for deals… e.g. iPhone 14, RTX 4080"
-                    autocomplete="off"
-                    required
-                />
-                <button type="submit" id="searchBtn" class="btn-search">
-                    <span class="spinner-border d-none" role="status" aria-hidden="true"></span>
-                    <span class="btn-text">Search</span>
-                </button>
-            </form>
-        </div>
-
-        <!-- Settings panel -->
-        <div class="settings-panel">
-            <div class="settings-row">
-                <label for="geminiModelInput" class="settings-label">🤖 Gemini Model</label>
-                <input
-                    type="text"
-                    id="geminiModelInput"
-                    class="settings-input"
-                    placeholder="e.g. gemini-2.0-flash-lite"
-                    autocomplete="off"
-                    spellcheck="false"
-                />
-                <button id="saveModelBtn" class="btn-save-model">Save</button>
-                <button id="aiToggleBtn" class="btn-ai-toggle" aria-pressed="true" title="Toggle AI evaluation on or off">
-                    <span class="ai-toggle-icon">✨</span>
-                    <span class="ai-toggle-label">AI: ON</span>
-                </button>
+        <div class="hero-inner">
+            <h1>🛍️ Deal Finder</h1>
+            <div class="search-container">
+                <form id="searchForm">
+                    <input type="text" id="searchQuery" placeholder="Search for deals… e.g. Xbox 360 Spiele Sammlung" autocomplete="off" required />
+                    <button type="submit" id="searchBtn" class="btn-search">
+                        <span class="spinner-border d-none" role="status" aria-hidden="true"></span>
+                        <span class="btn-text">Search</span>
+                    </button>
+                </form>
             </div>
-            <div class="settings-row">
-                <label for="dataSourceSelect" class="settings-label">🔌 Data Source</label>
-                <select id="dataSourceSelect" class="settings-select" title="Choose between the official eBay API and legacy HTML scraping">
-                    <option value="auto">Auto (API if configured, else Scraper)</option>
-                    <option value="api">eBay Official API</option>
-                    <option value="scraper">Legacy Scraper</option>
-                </select>
-                <span id="dataSourceStatus" class="data-source-status"></span>
-            </div>
-            <div id="modelStatus" class="model-status"></div>
+            <!-- Settings panel (collapsible) -->
+            <details class="settings-details" id="settingsDetails">
+                <summary class="settings-summary">⚙️ Settings</summary>
+                <div class="settings-panel">
+                    <div class="settings-row">
+                        <label for="geminiModelInput" class="settings-label">🤖 Gemini Model</label>
+                        <input type="text" id="geminiModelInput" class="settings-input" placeholder="e.g. gemini-2.0-flash-lite" autocomplete="off" spellcheck="false" />
+                        <button id="saveModelBtn" class="btn-save-model">Save</button>
+                        <button id="aiToggleBtn" class="btn-ai-toggle" aria-pressed="true" title="Toggle AI evaluation on or off">
+                            <span class="ai-toggle-icon">✨</span>
+                            <span class="ai-toggle-label">AI: ON</span>
+                        </button>
+                    </div>
+                    <div class="settings-row">
+                        <label for="dataSourceSelect" class="settings-label">🔌 Data Source</label>
+                        <select id="dataSourceSelect" class="settings-select" title="Choose between the official eBay API and legacy HTML scraping">
+                            <option value="auto">Auto (API if configured, else Scraper)</option>
+                            <option value="api">eBay Official API</option>
+                            <option value="scraper">Legacy Scraper</option>
+                        </select>
+                        <span id="dataSourceStatus" class="data-source-status"></span>
+                    </div>
+                    <div id="modelStatus" class="model-status"></div>
+                </div>
+            </details>
         </div>
     </header>
 
     <main class="main">
+        <!-- Pipeline tabs -->
+        <nav class="pipeline-nav" id="pipelineNav">
+            <button class="pipeline-tab active" data-pipeline="ready" id="tab-ready">
+                <span class="tab-icon">🎯</span> Ready
+                <span class="tab-badge" id="badge-ready">0</span>
+            </button>
+            <button class="pipeline-tab" data-pipeline="saved" id="tab-saved">
+                <span class="tab-icon">⭐</span> Saved
+                <span class="tab-badge" id="badge-saved">0</span>
+            </button>
+            <button class="pipeline-tab" data-pipeline="skipped" id="tab-skipped">
+                <span class="tab-icon">🚫</span> Skipped
+                <span class="tab-badge" id="badge-skipped">0</span>
+            </button>
+            <button class="pipeline-tab" data-pipeline="history" id="tab-history">
+                <span class="tab-icon">📚</span> History
+            </button>
+        </nav>
 
-        <!-- Error -->
+        <!-- Active search pipeline bar (shown during search) -->
+        <div id="activePipelineBar" class="active-pipeline-bar d-none">
+            <div class="active-pipeline-info">
+                <span class="active-pipeline-label" id="progressLabel">🔍 Searching…</span>
+                <span class="active-pipeline-pct" id="progressPct">0%</span>
+            </div>
+            <div class="active-pipeline-track">
+                <div class="active-pipeline-fill" id="progressBarFill"></div>
+            </div>
+            <button id="cancelSearchBtn" class="btn-cancel-search" title="Cancel search">⏹ Cancel</button>
+        </div>
+
+        <!-- Error banner -->
         <div id="errorContainer" class="alert alert-danger d-none"></div>
 
-        <!-- Loading -->
-        <div id="loadingContainer" class="loading-container d-none">
-            <div class="progress-section">
-                <div class="progress-label" id="progressLabel">⏳ Searching eBay…</div>
-                <div class="progress-bar-container">
-                    <div class="progress-bar-fill" id="progressBarFill"></div>
+        <!-- AI warning banner -->
+        <div id="aiWarningContainer" class="alert alert-warning d-none"></div>
+
+        <!-- Filters bar (shown in ready/saved/skipped views) -->
+        <div id="filtersBar" class="filters-bar">
+            <div class="filters-left">
+                <input type="text" id="keywordFilter" placeholder="🔍 Filter keywords…" class="filter-input" autocomplete="off">
+                <select id="ageFilterSelect" class="filter-select" title="Hide deals older than selected number of days">
+                    <option value="0">All ages</option>
+                    <option value="7">≤ 7 days</option>
+                    <option value="14">≤ 14 days</option>
+                    <option value="30">≤ 30 days</option>
+                    <option value="90">≤ 90 days</option>
+                </select>
+                <select id="ratingFilter" class="filter-select" title="Filter by AI rating">
+                    <option value="">All ratings</option>
+                    <option value="must buy">Must Buy</option>
+                    <option value="fair">Fair</option>
+                    <option value="avoid">Avoid</option>
+                </select>
+            </div>
+            <div class="filters-right">
+                <span id="dealCountBadge" class="deal-count-badge">0 deals</span>
+                <span id="dataSourceBadge" class="data-source-badge d-none"></span>
+                <button id="selectAllBtn" class="btn-filter-action" title="Select all visible deals">☑ Select All</button>
+                <div id="batchActions" class="batch-actions d-none">
+                    <span id="selectedCount" class="selected-count">0 selected</span>
+                    <button id="batchSaveBtn" class="btn-batch-save">⭐ Save</button>
+                    <button id="batchSkipBtn" class="btn-batch-skip">🚫 Skip</button>
+                    <button id="clearSelectionBtn" class="btn-clear-selection">✕ Clear</button>
                 </div>
-                <div class="progress-pct" id="progressPct">0%</div>
+                <button id="exportBtn" class="btn-export">📥 Export CSV</button>
             </div>
         </div>
 
         <!-- Empty state -->
         <div id="emptyState" class="empty-state d-none">
-            <p>😕 No deals found. Try a different search term.</p>
+            <p>😕 No deals found. Try a different search term or adjust your filters.</p>
         </div>
 
-        <!-- Results -->
-        <div id="resultsContainer" class="d-none">
-            <div class="results-header">
-                <h2><span id="dealCount">0</span> deals found</h2>
-                <span id="dataSourceBadge" class="data-source-badge d-none"></span>
-                <div class="results-controls">
-                    <label for="ageFilterSelect" class="age-filter-label">🗓️ Max age:</label>
-                    <select id="ageFilterSelect" class="age-filter-select" title="Hide deals older than the selected number of days">
-                        <option value="0">All time</option>
-                        <option value="7">7 days</option>
-                        <option value="14">14 days</option>
-                        <option value="30">30 days</option>
-                        <option value="90">90 days</option>
-                    </select>
-                    <button id="savedDealsBtn" class="btn-saved-deals">⭐ Saved</button>
-                    <button id="exportBtn" class="btn-export">📥 Export CSV</button>
-                </div>
-            </div>
-            <div id="aiWarningContainer" class="alert alert-warning d-none"></div>
-            <div id="dealsGrid" class="deals-grid"></div>
-        </div>
+        <!-- Deals grid (ready / saved / skipped views) -->
+        <div id="dealsGrid" class="deals-grid"></div>
 
-        <!-- Saved deals panel -->
-        <div id="savedPanel" class="saved-panel d-none">
-            <div class="saved-panel-header">
-                <h2>⭐ Saved Deals</h2>
-                <button id="closeSavedBtn" class="btn-close-saved" title="Close saved deals">✕</button>
+        <!-- History view -->
+        <div id="historyView" class="history-view d-none">
+            <div class="history-toolbar">
+                <input type="text" id="historySearch" class="filter-input" placeholder="🔍 Search history…" autocomplete="off">
+                <span id="historyCountBadge" class="deal-count-badge">0 searches</span>
             </div>
-            <div id="savedList" class="saved-list"></div>
+            <div id="historyList" class="history-list"></div>
         </div>
 
     </main>
