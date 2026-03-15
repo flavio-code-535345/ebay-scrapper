@@ -30,6 +30,33 @@ _CONDITION_ID_MAP: Dict[str, str] = {
     "7000": "For parts or not working",
 }
 
+# Mapping eBay marketplace ID → (Accept-Language header value, ISO-3166 country code).
+# The Accept-Language header tells eBay which language to use for item titles,
+# category names, and other localised metadata in API responses.
+# The country code is used for the deliveryCountry filter to restrict results
+# to items that ship domestically within the target market.
+_MARKETPLACE_LOCALE_MAP: Dict[str, Dict[str, str]] = {
+    "EBAY_AT": {"language": "de-AT,de;q=0.9", "country": "AT"},
+    "EBAY_AU": {"language": "en-AU,en;q=0.9", "country": "AU"},
+    "EBAY_BE": {"language": "nl-BE,nl;q=0.9,fr-BE;q=0.8", "country": "BE"},
+    "EBAY_CA": {"language": "en-CA,en;q=0.9", "country": "CA"},
+    "EBAY_CH": {"language": "de-CH,de;q=0.9", "country": "CH"},
+    "EBAY_DE": {"language": "de-DE,de;q=0.9", "country": "DE"},
+    "EBAY_ES": {"language": "es-ES,es;q=0.9", "country": "ES"},
+    "EBAY_FR": {"language": "fr-FR,fr;q=0.9", "country": "FR"},
+    "EBAY_GB": {"language": "en-GB,en;q=0.9", "country": "GB"},
+    "EBAY_HK": {"language": "zh-HK,zh;q=0.9,en;q=0.8", "country": "HK"},
+    "EBAY_IE": {"language": "en-IE,en;q=0.9", "country": "IE"},
+    "EBAY_IN": {"language": "en-IN,en;q=0.9", "country": "IN"},
+    "EBAY_IT": {"language": "it-IT,it;q=0.9", "country": "IT"},
+    "EBAY_MY": {"language": "en-MY,en;q=0.9", "country": "MY"},
+    "EBAY_NL": {"language": "nl-NL,nl;q=0.9", "country": "NL"},
+    "EBAY_PH": {"language": "en-PH,en;q=0.9", "country": "PH"},
+    "EBAY_PL": {"language": "pl-PL,pl;q=0.9", "country": "PL"},
+    "EBAY_SG": {"language": "en-SG,en;q=0.9", "country": "SG"},
+    "EBAY_US": {"language": "en-US,en;q=0.9", "country": "US"},
+}
+
 
 class EbayApiClient:
     """eBay Browse API search client.
@@ -44,7 +71,11 @@ class EbayApiClient:
     ----------------------
     EBAY_CLIENT_ID       — eBay developer application Client ID (required)
     EBAY_CLIENT_SECRET   — eBay developer application Client Secret (required)
-    EBAY_MARKETPLACE_ID  — eBay marketplace (default: ``EBAY_DE``)
+    EBAY_MARKETPLACE_ID  — eBay marketplace (default: ``EBAY_DE``).
+                           The marketplace ID controls the regional catalogue,
+                           ``Accept-Language`` header, and ``deliveryCountry``
+                           filter so that results come from the correct national
+                           eBay site and are returned in the local language.
     EBAY_ENVIRONMENT     — ``production`` (default) or ``sandbox``
     """
 
@@ -58,7 +89,7 @@ class EbayApiClient:
     def __init__(self) -> None:
         self.client_id: str = os.environ.get("EBAY_CLIENT_ID", "").strip()
         self.client_secret: str = os.environ.get("EBAY_CLIENT_SECRET", "").strip()
-        self.marketplace_id: str = os.environ.get("EBAY_MARKETPLACE_ID", "EBAY_DE").strip()
+        self.marketplace_id: str = os.environ.get("EBAY_MARKETPLACE_ID", "EBAY_DE").strip().upper()
 
         env = os.environ.get("EBAY_ENVIRONMENT", "production").strip().lower()
         if env == "sandbox":
@@ -66,9 +97,27 @@ class EbayApiClient:
         else:
             self._base_url = "https://api.ebay.com"
 
+        # Resolve locale settings from the marketplace ID.
+        _locale = _MARKETPLACE_LOCALE_MAP.get(self.marketplace_id)
+        if _locale is None:
+            logger.warning(
+                "Unknown EBAY_MARKETPLACE_ID %r — falling back to EBAY_DE locale. "
+                "Supported marketplaces: %s",
+                self.marketplace_id,
+                ", ".join(sorted(_MARKETPLACE_LOCALE_MAP)),
+            )
+            _locale = _MARKETPLACE_LOCALE_MAP["EBAY_DE"]
+        self.accept_language: str = _locale["language"]
+        self.delivery_country: str = _locale["country"]
+
         self._token: Optional[str] = None
         self._token_expires_at: float = 0.0
         self.session = requests.Session()
+
+        logger.info(
+            "EbayApiClient: marketplace=%s language=%s country=%s env=%s",
+            self.marketplace_id, self.accept_language, self.delivery_country, env,
+        )
 
     # ── Public interface ───────────────────────────────────────────────────
 
@@ -117,14 +166,18 @@ class EbayApiClient:
             "q": query,
             "limit": min(max(1, max_results), 200),
             "sort": "newlyListed",
+            # Restrict to domestic delivery for the selected marketplace.
+            "filter": f"deliveryCountry:{self.delivery_country}",
         }
-        # Restrict to domestic delivery for the selected marketplace.
-        if self.marketplace_id == "EBAY_DE":
-            params["filter"] = "deliveryCountry:DE"
 
         headers = {
             "Authorization": f"Bearer {token}",
             "X-EBAY-C-MARKETPLACE-ID": self.marketplace_id,
+            # Tell eBay which language to use for item titles and metadata.
+            "Accept-Language": self.accept_language,
+            # Provide contextual location so eBay routes to the correct regional
+            # catalogue and returns localised pricing/shipping.
+            "X-EBAY-C-ENDUSERCTX": f"contextualLocation=country%3D{self.delivery_country}",
             "Content-Type": "application/json",
         }
 

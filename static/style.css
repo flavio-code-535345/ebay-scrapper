@@ -692,6 +692,21 @@ body {
     color: #fca5a5;
 }
 
+/* ── eBay marketplace/region status ────────────────────────────────────── */
+
+.marketplace-status {
+    font-size: 0.82rem;
+    white-space: nowrap;
+    min-height: 1.2em;
+    color: rgba(255, 255, 255, 0.75);
+    font-family: monospace;
+    cursor: default;
+}
+
+.marketplace-status--active {
+    color: #fde68a;
+}
+
 /* ── Data-source badge in results header ────────────────────────────────── */
 
 .data-source-badge {
