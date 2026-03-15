@@ -11,7 +11,7 @@ import os
 import re
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import requests
 
@@ -1000,15 +1000,15 @@ class GeminiAssessor:
         results: List[Dict] = []
         for game in game_titles:
             try:
-                price, source, errs = self._ebay_client.get_median_sold_price(game, max_results=10)
+                price, source, lookup_errors = self._ebay_client.get_median_sold_price(game, max_results=10)
             except Exception as exc:
                 logger.warning(
                     "GeminiAssessor: eBay price lookup failed for %r: %s", game, exc
                 )
-                price, source, errs = None, "no_result", []
+                price, source, lookup_errors = None, "no_result", []
 
-            if errs:
-                for e in errs:
+            if lookup_errors:
+                for e in lookup_errors:
                     logger.debug("GeminiAssessor: eBay price lookup note for %r: %s", game, e)
 
             if price is not None:

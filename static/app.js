@@ -1321,7 +1321,7 @@ function buildAiSection(deal) {
             const priceStr = (item.price_eur != null) ? `€${Number(item.price_eur).toFixed(2)}` : '—';
             return `<tr><td>${escapeHtml(item.game || '?')}</td><td class="price-cell">${escapeHtml(priceStr)}</td><td>${sourceLabel(item.price_source)}</td></tr>`;
         }).join('');
-        const totalResale = itemized.reduce((s, i) => s + (i.price_eur || 0), 0);
+        const totalResale = itemized.reduce((acc, item) => acc + (item.price_eur || 0), 0);
         const profitSign = grossProfit >= 0 ? '+' : '';
         const profitClass = grossProfit >= 0 ? 'profit-positive' : 'profit-negative';
         itemizedHtml = `

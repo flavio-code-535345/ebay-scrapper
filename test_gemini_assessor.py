@@ -512,8 +512,8 @@ class TestExtractPotentialGameTitles:
     def test_respects_max_games_limit(self):
         """Never returns more than _MAX_GAMES_PER_BUNDLE titles."""
         from gemini_assessor import _MAX_GAMES_PER_BUNDLE
-        many = ", ".join([f"Game {i}" for i in range(20)])
-        title = f"Bundle: {many}"
+        many_games = ", ".join([f"Game {i}" for i in range(20)])
+        title = f"Bundle: {many_games}"
         result = _extract_potential_game_titles(title)
         assert len(result) <= _MAX_GAMES_PER_BUNDLE
 
