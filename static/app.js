@@ -437,6 +437,21 @@ function createDealCard(deal) {
     // ── Clean shipping text ────────────────────────────────────────────────
     const shippingClean = cleanShippingText(deal.shipping);
 
+    // ── Image section ──────────────────────────────────────────────────────
+    const imageUrls = Array.isArray(deal.image_urls) ? deal.image_urls : [];
+    let imageSection = '';
+    if (imageUrls.length > 0) {
+        const mainUrl = escapeHtml(imageUrls[0]);
+        const titleAlt = escapeHtml(deal.title || 'Deal image');
+        imageSection = `
+            <div class="deal-image-section">
+                <img class="deal-img" src="${mainUrl}" alt="${titleAlt}" loading="lazy"
+                     onerror="this.style.display='none';this.parentElement.classList.add('deal-img-error')">
+            </div>`;
+    } else {
+        imageSection = `<div class="deal-image-section"><div class="deal-img-placeholder">🎮</div></div>`;
+    }
+
     // ── Image issue warning section ────────────────────────────────────────
     const imageIssues = Array.isArray(deal.image_issues) ? deal.image_issues : [];
     const imageWarningSection = buildImageIssueSection(imageIssues);
@@ -484,7 +499,7 @@ function createDealCard(deal) {
                 </div>
                 <div class="deal-recommendation">${recommendation}</div>
             </div>
-            
+            ${imageSection}
             <div class="deal-body">
                 <div class="deal-title">${escapeHtml(deal.title)}</div>
                 
