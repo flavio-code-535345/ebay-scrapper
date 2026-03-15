@@ -1326,6 +1326,8 @@ function buildAiSection(deal) {
     // Build itemized resale breakdown table when available.
     let itemizedHtml = '';
     if (itemized.length > 0) {
+        const ratingLower = rating.toLowerCase();
+        const isGoodOrBetter = ['good', 'must have', 'must buy'].includes(ratingLower);
         const sourceLabel = src => {
             if (src === 'ebay_sold') return '<span class="price-source price-source-sold" title="Based on eBay sold/completed listings">📊 eBay sold</span>';
             if (src === 'ebay_active') return '<span class="price-source price-source-active" title="Based on eBay active listings (proxy)">🔍 eBay active</span>';
@@ -1334,7 +1336,10 @@ function buildAiSection(deal) {
         };
         const rows = itemized.map(item => {
             const priceStr = (item.price_eur != null) ? `€${Number(item.price_eur).toFixed(2)}` : '—';
-            return `<tr><td>${escapeHtml(item.game || '?')}</td><td class="price-cell">${escapeHtml(priceStr)}</td><td>${sourceLabel(item.price_source)}</td></tr>`;
+            const exceptional = isGoodOrBetter && !!item.is_exceptional;
+            const rowClass = exceptional ? ' class="row-exceptional"' : '';
+            const gameLabel = exceptional ? `⭐ ${escapeHtml(item.game || '?')}` : escapeHtml(item.game || '?');
+            return `<tr${rowClass}><td>${gameLabel}</td><td class="price-cell">${escapeHtml(priceStr)}</td><td>${sourceLabel(item.price_source)}</td></tr>`;
         }).join('');
         const totalResale = itemized.reduce((s, i) => s + (i.price_eur || 0), 0);
         const profitSign = grossProfit >= 0 ? '+' : '';

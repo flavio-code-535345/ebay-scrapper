@@ -198,9 +198,13 @@ resold; for bundles, one entry per identified game; for **single-item \
 listings**, include exactly one entry for the item itself with its estimated \
 resale value — **never use an empty list for a single-item listing**; each \
 entry must have keys `"game"` (string title), `"price_eur"` (number, \
-estimated resale price in EUR), and `"price_source"` (`"ebay_sold"`, \
-`"ebay_active"`, or `"ai_estimate"`); use provided `Fetched eBay Market \
-Price` or `Fetched eBay Prices` data when available, otherwise estimate
+estimated resale price in EUR), `"price_source"` (`"ebay_sold"`, \
+`"ebay_active"`, or `"ai_estimate"`), and `"is_exceptional"` (boolean — \
+`true` only for standout high-value games in the bundle whose resale price \
+is notably above the bundle average or which are rare/high-demand titles; \
+always `false` for single-item listings and for bundles rated below "Good"); \
+use provided `Fetched eBay Market Price` or `Fetched eBay Prices` data when \
+available, otherwise estimate
 - `"estimated_total_cost"`: number — asking price + shipping in EUR (0 if unknown)
 - `"estimated_gross_profit"`: number — sum of all itemized_resale_estimates \
 price_eur values minus estimated_total_cost; **always compute this value** — \
@@ -270,6 +274,10 @@ ebay.de (or Kleinanzeigen).
 > - Calculate approximate gross profit (resale total − asking price − \
 shipping) and flag any particularly valuable or worthless titles in the lot.
 > - Advise whether to flip the lot whole or split it.
+> - For any game that is a standout value-driver in the bundle (notably \
+higher resale price than the bundle average, rare or high-demand title), \
+set `"is_exceptional": true` in its `itemized_resale_estimates` entry. \
+Only mark a game exceptional when the bundle rating is "Good" or better.
 
 ### ANALYSIS PROTOCOL (apply to EACH listing)
 1. **SCAM / BAIT-AND-SWITCH DETECTION (CHECK THIS FIRST)**
@@ -402,9 +410,13 @@ resold; for bundles, one entry per identified game; for **single-item \
 listings**, include exactly one entry for the item itself with its estimated \
 resale value — **never use an empty list for a single-item listing**; each \
 entry must have keys `"game"` (string title), `"price_eur"` (number, \
-estimated resale price in EUR), and `"price_source"` (`"ebay_sold"`, \
-`"ebay_active"`, or `"ai_estimate"`); use provided `Fetched eBay Market \
-Price` or `Fetched eBay Prices` data when available, otherwise estimate
+estimated resale price in EUR), `"price_source"` (`"ebay_sold"`, \
+`"ebay_active"`, or `"ai_estimate"`), and `"is_exceptional"` (boolean — \
+`true` only for standout high-value games in the bundle whose resale price \
+is notably above the bundle average or which are rare/high-demand titles; \
+always `false` for single-item listings and for bundles rated below "Good"); \
+use provided `Fetched eBay Market Price` or `Fetched eBay Prices` data when \
+available, otherwise estimate
 - `"estimated_total_cost"`: number — asking price + shipping in EUR (0 if unknown)
 - `"estimated_gross_profit"`: number — sum of all itemized_resale_estimates \
 price_eur values minus estimated_total_cost; **always compute this value** — \
