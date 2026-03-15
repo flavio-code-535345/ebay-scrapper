@@ -13,7 +13,7 @@ from flask import Flask, request, jsonify, render_template, Response
 from scraper import EbayScraper
 from ebay_api_client import EbayApiClient
 from deal_assessor import DealAssessor
-from gemini_assessor import GeminiAssessor
+from gemini_assessor import GeminiAssessor, _detect_sports_kinect_deal
 import database
 
 logging.basicConfig(
@@ -204,6 +204,18 @@ def search():
             logger.info(
                 "Germany-only filter removed %d non-German deal(s)", filtered_out
             )
+
+    # Post-filter: drop sports/Kinect-themed deals — these have very low
+    # resale value (FIFA, Forza, Kinect, TopSpin, etc.) and should never
+    # surface as desirable results.
+    before_sports = len(deals)
+    deals = [d for d in deals if not _detect_sports_kinect_deal(d)]
+    filtered_sports = before_sports - len(deals)
+    if filtered_sports:
+        logger.info(
+            "Sports/Kinect filter removed %d deal(s) with low resale value",
+            filtered_sports,
+        )
 
     # Rules-based assessment (always available as baseline/fallback).
     rules_assessments = [assessor.assess_deal(deal) for deal in deals]

@@ -2,14 +2,17 @@
 """
 Unit tests for gemini_assessor.py — focusing on the deterministic
 bundle bait-and-switch scam detector introduced to catch the canonical
-'Spielesammlung + Stückzahl + verfügbar/verkauft > 1' pattern.
+'Spielesammlung + Stückzahl + verfügbar/verkauft > 1' pattern, and
+the sports/Kinect deal detector that filters out low-resale-value listings.
 """
 
 import pytest
 
 from gemini_assessor import (
     _apply_scam_override,
+    _apply_sports_kinect_override,
     _detect_bundle_individual_sale_scam,
+    _detect_sports_kinect_deal,
 )
 
 # ---------------------------------------------------------------------------
@@ -284,3 +287,184 @@ class TestApplyScamOverride:
         assessment = _make_assessment()
         result = _apply_scam_override(deal, assessment)
         assert result is assessment
+
+
+# ---------------------------------------------------------------------------
+# _detect_sports_kinect_deal tests
+# ---------------------------------------------------------------------------
+
+
+class TestDetectSportsKinectDeal:
+    """Tests for the deterministic sports/Kinect content detector."""
+
+    # ------------------------------------------------------------------
+    # Positive cases (should detect sports/Kinect content)
+    # ------------------------------------------------------------------
+
+    def test_detects_kinect_in_title(self):
+        """'Kinect' keyword triggers detection."""
+        deal = {"title": "Xbox 360 Kinect Sensor + 3 Spiele Bundle"}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is not None
+        assert "SPORTS/KINECT" in result
+
+    def test_detects_fifa_in_title(self):
+        """'FIFA' keyword triggers detection."""
+        deal = {"title": "PS4 Spielesammlung FIFA 22 FIFA 21 FIFA 20 5 Spiele"}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is not None
+        assert "SPORTS/KINECT CONTENT DETECTED" in result
+        assert "FIFA" in result
+
+    def test_detects_topspin_in_title(self):
+        """'TopSpin' keyword triggers detection."""
+        deal = {"title": "Xbox 360 Bundle TopSpin 4 + Forza 3 + FIFA 18"}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is not None
+
+    def test_detects_forza_in_title(self):
+        """'Forza' keyword triggers detection."""
+        deal = {"title": "Xbox 360 Lot Forza Motorsport 4 + FIFA 14"}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is not None
+
+    def test_detects_nba_in_title(self):
+        """'NBA 2K' keyword triggers detection."""
+        deal = {"title": "PS4 NBA 2K22 + FIFA 22 Spielesammlung"}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is not None
+
+    def test_detects_pes_in_title(self):
+        """'PES' keyword triggers detection."""
+        deal = {"title": "PS2 Spielesammlung PES 6 PES 5 Konvolut"}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is not None
+
+    def test_detects_just_dance_in_title(self):
+        """'Just Dance' keyword triggers detection."""
+        deal = {"title": "Wii Just Dance 2019 + Just Dance 2020 Bundle"}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is not None
+
+    def test_detects_kinect_case_insensitive(self):
+        """Detection is case-insensitive."""
+        deal = {"title": "XBOX 360 KINECT ADVENTURES BUNDLE"}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is not None
+
+    def test_detects_wii_sports_in_title(self):
+        """'Wii Sports' keyword triggers detection."""
+        deal = {"title": "Wii Sports + Wii Sports Resort Bundle"}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is not None
+
+    # ------------------------------------------------------------------
+    # Negative cases (should NOT detect sports/Kinect content)
+    # ------------------------------------------------------------------
+
+    def test_no_detection_for_halo_bundle(self):
+        """A non-sports bundle like Halo is NOT flagged."""
+        deal = {"title": "Xbox 360 Spielesammlung Halo 3 Halo 4 Gears of War"}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is None
+
+    def test_no_detection_for_zelda_bundle(self):
+        """Nintendo first-party bundle is not flagged."""
+        deal = {"title": "Nintendo Switch Bundle Zelda Breath of the Wild + Mario Kart"}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is None
+
+    def test_no_detection_for_empty_title(self):
+        """Empty title is not flagged."""
+        deal = {"title": ""}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is None
+
+    def test_no_detection_for_missing_title(self):
+        """Missing title key is not flagged."""
+        deal = {}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is None
+
+    def test_no_detection_for_cod_bundle(self):
+        """Call of Duty bundle (non-sports) is not flagged."""
+        deal = {"title": "PS4 Bundle Call of Duty Black Ops 3 + GTA V 10 Spiele"}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is None
+
+    def test_no_detection_for_rpg_bundle(self):
+        """RPG-heavy bundle is not flagged."""
+        deal = {"title": "PS3 Spielesammlung Final Fantasy Dark Souls Skyrim"}
+        result = _detect_sports_kinect_deal(deal)
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _apply_sports_kinect_override tests
+# ---------------------------------------------------------------------------
+
+
+class TestApplySportsKinectOverride:
+    """Tests for the sports/Kinect assessment-override function."""
+
+    def test_override_forces_avoid_for_kinect_deal(self):
+        """Kinect deal overrides Must Buy to Avoid."""
+        deal = {"title": "Xbox 360 Kinect Sensor + Adventures Bundle"}
+        assessment = _make_assessment(ai_deal_rating="Must Buy")
+        result = _apply_sports_kinect_override(deal, assessment)
+        assert result["ai_deal_rating"] == "Avoid"
+
+    def test_override_forces_avoid_for_fifa_deal(self):
+        """FIFA bundle overrides Fair to Avoid."""
+        deal = {"title": "PS4 Spielesammlung FIFA 22 FIFA 21 FIFA 20"}
+        assessment = _make_assessment(ai_deal_rating="Fair")
+        result = _apply_sports_kinect_override(deal, assessment)
+        assert result["ai_deal_rating"] == "Avoid"
+
+    def test_override_prepends_to_verdict_summary(self):
+        """Existing verdict summary is preserved after the sports/Kinect prefix."""
+        deal = {"title": "Xbox 360 Bundle Forza Motorsport + FIFA"}
+        assessment = _make_assessment(
+            ai_deal_rating="Fair",
+            ai_verdict_summary="Cheap lot.",
+        )
+        result = _apply_sports_kinect_override(deal, assessment)
+        assert result["ai_verdict_summary"].startswith("⛔ **SPORTS/KINECT")
+        assert "Cheap lot." in result["ai_verdict_summary"]
+
+    def test_override_adds_red_flag(self):
+        """Sports/Kinect flag is added to red_flags list."""
+        deal = {"title": "Wii Just Dance 2020 + Wii Sports Bundle"}
+        assessment = _make_assessment(ai_red_flags=[])
+        result = _apply_sports_kinect_override(deal, assessment)
+        assert any("Sports/Kinect" in f for f in result["ai_red_flags"])
+
+    def test_override_does_not_duplicate_red_flag(self):
+        """Running override twice does not add duplicate red flags."""
+        deal = {"title": "Xbox 360 Kinect Bundle"}
+        assessment = _make_assessment(ai_red_flags=[])
+        _apply_sports_kinect_override(deal, assessment)
+        _apply_sports_kinect_override(deal, assessment)
+        sports_flags = [f for f in assessment["ai_red_flags"] if "Sports/Kinect" in f]
+        assert len(sports_flags) == 1
+
+    def test_no_override_for_non_sports_deal(self):
+        """Non-sports deal is not overridden."""
+        deal = {"title": "Xbox 360 Bundle Halo 3 + Gears of War + Mass Effect"}
+        assessment = _make_assessment(ai_deal_rating="Must Buy")
+        result = _apply_sports_kinect_override(deal, assessment)
+        assert result["ai_deal_rating"] == "Must Buy"
+
+    def test_override_returns_same_dict(self):
+        """_apply_sports_kinect_override mutates and returns the same dict."""
+        deal = {"title": "PS3 Bundle FIFA 22 + TopSpin 4"}
+        assessment = _make_assessment()
+        result = _apply_sports_kinect_override(deal, assessment)
+        assert result is assessment
+
+    def test_override_with_empty_summary(self):
+        """If verdict summary is empty, sports prefix becomes the full summary."""
+        deal = {"title": "Xbox Kinect Sports Bundle"}
+        assessment = _make_assessment(ai_verdict_summary="")
+        result = _apply_sports_kinect_override(deal, assessment)
+        assert result["ai_verdict_summary"].startswith("⛔ **SPORTS/KINECT")
