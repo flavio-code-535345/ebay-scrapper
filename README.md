@@ -4,10 +4,79 @@
 
 ### Features
 - Graphical User Interface (GUI)
-- Automated scraping of eBay listings
+- Automated scraping of eBay listings **and** native eBay Browse API integration
 - Deal assessment engine to identify the best deals
+- Gemini AI scoring with an on/off toggle
 - Option to filter listings by various criteria
 - User-friendly and intuitive design
+
+---
+
+## eBay Official API Integration
+
+The app supports the **eBay Browse API** (part of the [eBay Developer Program](https://developer.ebay.com/)) as a first-class data source alongside the legacy HTML scraper.
+
+### Why use the official API?
+| Feature | Official API | HTML Scraper |
+|---------|-------------|--------------|
+| Reliability | ✅ Stable structured data | ⚠️ Breaks on eBay markup changes |
+| Speed | ✅ Faster, no HTML parsing | Slower |
+| Extra metadata | ✅ (seller score, condition ID, images) | Limited |
+| TOS compliant | ✅ Yes | ⚠️ Restricted |
+| Requires credentials | Yes (free dev account) | No |
+
+### Getting eBay API credentials
+
+1. Sign up (free) at <https://developer.ebay.com/>.
+2. Create a new **application** in the developer portal.
+3. Under **Credentials**, locate your production **App ID (Client ID)** and **Cert ID (Client Secret)**.
+4. Ensure your application has the **Browse API** in its OAuth scope list.
+
+### Configuring credentials
+
+Copy `.env.example` to `.env` and fill in the eBay section:
+
+```env
+EBAY_CLIENT_ID=your-app-id-here
+EBAY_CLIENT_SECRET=your-cert-id-here
+EBAY_MARKETPLACE_ID=EBAY_DE   # or EBAY_US, EBAY_GB, EBAY_FR, etc.
+EBAY_ENVIRONMENT=production   # or sandbox for testing
+DATA_SOURCE=auto              # auto | api | scraper
+```
+
+> **Never commit `.env`** — it is already listed in `.gitignore`.
+
+### `DATA_SOURCE` modes
+
+| Value | Behaviour |
+|-------|-----------|
+| `auto` | **(default)** Use the official API when credentials are set; fall back to the HTML scraper otherwise. |
+| `api` | Always use the official eBay Browse API. Returns an error if credentials are missing. |
+| `scraper` | Always use legacy HTML scraping, even if API credentials are present. |
+
+The setting can also be changed **at runtime** via the settings panel in the UI or the `POST /api/settings` endpoint:
+
+```bash
+curl -X POST http://localhost:5000/api/settings \
+  -H 'Content-Type: application/json' \
+  -d '{"data_source": "api"}'
+```
+
+The active value is persisted in the SQLite database and survives restarts.
+
+### Docker / Portainer environment variables
+
+Add the following to your `docker-compose.yml` environment section (or Portainer stack variables):
+
+```yaml
+- EBAY_CLIENT_ID=${EBAY_CLIENT_ID:-}
+- EBAY_CLIENT_SECRET=${EBAY_CLIENT_SECRET:-}
+- EBAY_MARKETPLACE_ID=${EBAY_MARKETPLACE_ID:-EBAY_DE}
+- EBAY_ENVIRONMENT=${EBAY_ENVIRONMENT:-production}
+- DATA_SOURCE=${DATA_SOURCE:-auto}
+```
+
+---
 
 ### Installation Instructions
 1. Clone the repository:
@@ -15,48 +84,53 @@
    git clone https://github.com/flavio-code-535345/ebay-scrapper.git
    cd ebay-scrapper
    ```
-2. Ensure you have Python installed (version 3.6 or higher).
+2. Ensure you have Python installed (version 3.8 or higher).
 3. Install the required packages:
    ```
    pip install -r requirements.txt
    ```
-4. Run the application:
+4. Copy `.env.example` to `.env` and fill in your credentials.
+5. Run the application:
    ```
-   python gui.py
+   python app.py
    ```
 
 ### API Endpoints
-- **GET /api/scrape**: Initiates the scraping process.
-- **GET /api/deals**: Retrieves the list of assessed deals.
-- **POST /api/settings**: Updates user preferences for scraping.
+- **POST /api/search**: Search for eBay deals. Body: `{"query": "...", "max_results": 50}`
+- **GET /api/health**: Health check; includes `data_source`, `ebay_api_configured`, and AI status.
+- **GET /api/settings**: Returns current settings.
+- **POST /api/settings**: Updates settings. Body fields: `gemini_model`, `ai_enabled`, `data_source`.
+- **GET /api/history**: Recent search history.
+- **GET /api/export**: Export all deals as CSV.
+- **GET /api/stats**: Database statistics.
 
 ### Project Structure
 ```
 /ebay-scrapper
-    ├── gui.py
-    ├── scraper
-    │   ├── __init__.py
-    │   ├── ebay_scraper.py
-    ├── api
-    │   ├── __init__.py
-    │   ├── api_routes.py
-    ├── requirements.txt
-    └── README.md
+    ├── app.py               Flask application & API routes
+    ├── scraper.py           Legacy HTML scraper (eBay.de)
+    ├── ebay_api_client.py   eBay Browse API client (OAuth + search)
+    ├── deal_assessor.py     Rules-based deal scoring
+    ├── gemini_assessor.py   Gemini AI assessment
+    ├── database.py          SQLite persistence
+    ├── templates/
+    │   └── index.html
+    ├── static/
+    │   ├── app.js
+    │   └── style.css
+    ├── .env.example         Environment variable template
+    ├── Dockerfile
+    ├── docker-compose.yml
+    └── requirements.txt
 ```
 
 ### Technology Stack
-- **Python**: The primary programming language.
-- **Flask**: For building the RESTful API.
-- **Beautiful Soup**: For web scraping.
-- **Tkinter**: For creating the GUI.
-
-### Usage Examples
-- Launch the application and navigate through the GUI to start scraping eBay listings.
-- Use filters to refine your search for deals based on categories, prices, etc.
-- View results and assess deals directly through the GUI interface.
-
-## Conclusion
-This project aims to simplify the process of finding the best deals on eBay using a user-friendly interface and robust back-end scraping capabilities.
+- **Python 3.8+**: Primary language
+- **Flask**: REST API framework
+- **requests**: HTTP client (used by both scraper and API client)
+- **Beautiful Soup**: HTML parsing (legacy scraper)
+- **google-genai**: Gemini AI SDK
+- **SQLite**: Persistent storage
 
 ---
 
@@ -113,8 +187,9 @@ Once set, every push to `main` will automatically build and push a fresh image t
 1. Open Portainer (typically `http://<your-host>:9000`).
 2. Go to **Stacks → + Add Stack**.
 3. Paste the contents of `docker-compose.yml` from this repository.
-4. Click **Deploy the stack**.
-5. The container starts automatically, pulling the latest image from Docker Hub.
+4. Set any environment variables (e.g. `EBAY_CLIENT_ID`, `GEMINI_API_KEY`).
+5. Click **Deploy the stack**.
+6. The container starts automatically, pulling the latest image from Docker Hub.
 
 ### Option 2 — Portainer Git repository
 1. Go to **Stacks → + Add Stack → Git repository**.
@@ -126,37 +201,9 @@ Once set, every push to `main` will automatically build and push a fresh image t
 ### Option 3 — Docker Compose (command line)
 ```bash
 curl -O https://raw.githubusercontent.com/flavio-code-535345/ebay-scrapper/main/docker-compose.yml
+# Create a .env file with your API keys
 docker compose up -d
 # Access the app at http://localhost:5000
-```
-
-### docker-compose.yml (for reference)
-```yaml
-version: "3.8"
-
-services:
-  ebay-scrapper:
-    image: flavio11113/ebay-scrapper:latest
-    container_name: ebay-scrapper
-    restart: unless-stopped
-    ports:
-      - "5000:5000"
-    environment:
-      - FLASK_ENV=production
-      - FLASK_APP=app.py
-      - DB_PATH=/data/ebay_deals.db
-    volumes:
-      - ebay_db:/data
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-
-volumes:
-  ebay_db:
-    driver: local
 ```
 
 The SQLite database is stored in the `ebay_db` named volume so it persists across container restarts and image updates.

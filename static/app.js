@@ -81,6 +81,11 @@ document.addEventListener('DOMContentLoaded', () => {
         aiToggleBtn.addEventListener('click', toggleAiEnabled);
     }
 
+    const dataSourceSelect = document.getElementById('dataSourceSelect');
+    if (dataSourceSelect) {
+        dataSourceSelect.addEventListener('change', saveDataSource);
+    }
+
     // Check URL parameters for auto-search
     const params = new URLSearchParams(window.location.search);
     const searchParam = params.get('search');
@@ -108,6 +113,8 @@ async function loadModelSettings() {
         if (typeof data.ai_enabled === 'boolean') {
             _setAiToggleState(data.ai_enabled);
         }
+        // Sync the data source selector.
+        _setDataSourceState(data.data_source, data.active_data_source, data.ebay_api_configured);
     } catch (err) {
         console.warn('Failed to load model settings:', err);
     }
@@ -165,6 +172,70 @@ async function toggleAiEnabled() {
         }
     } finally {
         btn.disabled = false;
+    }
+}
+
+/**
+ * Update the data source selector and status badge.
+ * @param {string} setting  - Persisted setting: "auto", "api", or "scraper".
+ * @param {string} active   - The engine actually in use: "api" or "scraper".
+ * @param {boolean} apiConfigured - Whether eBay API credentials are set.
+ */
+function _setDataSourceState(setting, active, apiConfigured) {
+    const sel = document.getElementById('dataSourceSelect');
+    const statusEl = document.getElementById('dataSourceStatus');
+    if (sel && setting) {
+        sel.value = setting;
+    }
+    if (statusEl) {
+        if (active === 'api') {
+            statusEl.textContent = '🟢 eBay API active';
+            statusEl.className = 'data-source-status data-source-status--api';
+        } else if (active === 'scraper') {
+            const hint = (!apiConfigured && setting !== 'scraper')
+                ? ' (API creds not set)'
+                : '';
+            statusEl.textContent = `🔵 Scraper active${hint}`;
+            statusEl.className = 'data-source-status data-source-status--scraper';
+        } else {
+            statusEl.textContent = '';
+            statusEl.className = 'data-source-status';
+        }
+    }
+}
+
+async function saveDataSource() {
+    const sel = document.getElementById('dataSourceSelect');
+    const statusEl = document.getElementById('dataSourceStatus');
+    if (!sel) return;
+
+    const newSource = sel.value;
+    if (statusEl) {
+        statusEl.textContent = '⏳ Saving…';
+        statusEl.className = 'data-source-status';
+    }
+
+    try {
+        const response = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data_source: newSource }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            const msg = (data.errors && data.errors.data_source) || data.error || 'Failed to save.';
+            if (statusEl) {
+                statusEl.textContent = `⚠️ ${msg}`;
+                statusEl.className = 'data-source-status data-source-status--error';
+            }
+        } else {
+            _setDataSourceState(data.data_source, data.active_data_source, data.ebay_api_configured);
+        }
+    } catch (err) {
+        if (statusEl) {
+            statusEl.textContent = `⚠️ Error: ${err.message}`;
+            statusEl.className = 'data-source-status data-source-status--error';
+        }
     }
 }
 
@@ -291,6 +362,22 @@ async function handleSearch(e) {
 function displayResults(data) {
     document.getElementById('loadingContainer').classList.add('d-none');
     document.getElementById('dealCount').textContent = data.deal_count;
+
+    // Show the data-source badge in the results header.
+    const dsBadge = document.getElementById('dataSourceBadge');
+    if (dsBadge) {
+        if (data.data_source === 'api') {
+            dsBadge.textContent = '🟢 Via eBay Official API';
+            dsBadge.className = 'data-source-badge data-source-badge--api';
+            dsBadge.classList.remove('d-none');
+        } else if (data.data_source === 'scraper') {
+            dsBadge.textContent = '🔵 Via Legacy Scraper';
+            dsBadge.className = 'data-source-badge data-source-badge--scraper';
+            dsBadge.classList.remove('d-none');
+        } else {
+            dsBadge.classList.add('d-none');
+        }
+    }
 
     // Show a warning banner if Gemini quota is exhausted or AI is disabled.
     const aiWarning = document.getElementById('aiWarningContainer');

@@ -11,6 +11,7 @@ import time
 from flask import Flask, request, jsonify, render_template, Response
 
 from scraper import EbayScraper
+from ebay_api_client import EbayApiClient
 from deal_assessor import DealAssessor
 from gemini_assessor import GeminiAssessor
 import database
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 scraper = EbayScraper()
+ebay_api = EbayApiClient()
 assessor = DealAssessor()
 gemini = GeminiAssessor()
 
@@ -39,6 +41,47 @@ _saved_ai_enabled = database.get_setting("ai_enabled")
 if _saved_ai_enabled is not None:
     gemini.user_enabled = str(_saved_ai_enabled).lower() == "true"
 
+# ── Data source helpers ────────────────────────────────────────────────────
+
+_VALID_DATA_SOURCES = {"auto", "api", "scraper"}
+
+
+def _db_data_source() -> str:
+    """Read the active data source from the database.
+
+    Falls back to the DATA_SOURCE environment variable, then to "auto".
+    """
+    val = database.get_setting("data_source")
+    if val and val in _VALID_DATA_SOURCES:
+        return val
+    env_val = os.environ.get("DATA_SOURCE", "auto").strip().lower()
+    return env_val if env_val in _VALID_DATA_SOURCES else "auto"
+
+
+def _resolve_engine(source: str):
+    """Return the search callable and a label for the given *source* setting.
+
+    ``source`` is one of ``"auto"``, ``"api"``, or ``"scraper"``.
+    Returns ``(callable, label)`` where *callable* matches the
+    ``search(query, max_results)`` signature of both engines.
+    """
+    if source == "api":
+        if not ebay_api.is_configured:
+            logger.warning(
+                "data_source='api' but eBay API credentials are not set; "
+                "falling back to scraper."
+            )
+            return scraper.search, "scraper"
+        return ebay_api.search, "api"
+
+    if source == "scraper":
+        return scraper.search, "scraper"
+
+    # "auto": prefer API when credentials are present.
+    if ebay_api.is_configured:
+        return ebay_api.search, "api"
+    return scraper.search, "scraper"
+
 
 def _db_ai_user_enabled() -> bool:
     """Read the user's AI-enabled toggle from the database.
@@ -52,6 +95,8 @@ def _db_ai_user_enabled() -> bool:
     """
     val = database.get_setting("ai_enabled")
     return str(val).lower() == "true" if val is not None else True
+
+
 
 
 @app.route('/')
@@ -73,8 +118,15 @@ def search():
     if not query:
         return jsonify({'error': 'query is required'}), 400
 
-    deals, search_errors = scraper.search(query, max_results=max_results)
-    logger.info("Search for %r returned %d deals, %d error(s)", query, len(deals), len(search_errors))
+    # Select the appropriate search engine (API or scraper) based on settings.
+    data_source_setting = _db_data_source()
+    search_fn, active_source = _resolve_engine(data_source_setting)
+
+    deals, search_errors = search_fn(query, max_results=max_results)
+    logger.info(
+        "Search for %r via %s returned %d deals, %d error(s)",
+        query, active_source, len(deals), len(search_errors),
+    )
 
     # Rules-based assessment (always available as baseline/fallback).
     rules_assessments = [assessor.assess_deal(deal) for deal in deals]
@@ -162,6 +214,7 @@ def search():
         'ai_enabled': gemini.enabled and _user_enabled,
         'ai_rate_limited': gemini.is_rate_limited,
         'ai_paused_seconds': round(paused_seconds),
+        'data_source': active_source,
     })
 
 
@@ -194,20 +247,30 @@ def stats():
 @app.route('/api/health')
 def health():
     paused_seconds = max(0.0, gemini.rate_limited_until - time.monotonic())
+    data_source_setting = _db_data_source()
+    _, active_source = _resolve_engine(data_source_setting)
     return jsonify({
         'status': 'healthy',
         'ai_enabled': gemini.enabled and _db_ai_user_enabled(),
         'ai_rate_limited': gemini.is_rate_limited,
         'ai_paused_seconds': round(paused_seconds),
         'ai_model': gemini.model_name,
+        'data_source': active_source,
+        'data_source_setting': data_source_setting,
+        'ebay_api_configured': ebay_api.is_configured,
     })
 
 
 @app.route('/api/settings', methods=['GET'])
 def get_settings():
+    data_source_setting = _db_data_source()
+    _, active_source = _resolve_engine(data_source_setting)
     return jsonify({
         'gemini_model': gemini.model_name,
         'ai_enabled': _db_ai_user_enabled(),
+        'data_source': data_source_setting,
+        'active_data_source': active_source,
+        'ebay_api_configured': ebay_api.is_configured,
     })
 
 
@@ -251,10 +314,30 @@ def update_settings():
             updated['ai_enabled'] = ai_enabled
             logger.info("Settings: ai_enabled updated to %r", ai_enabled)
 
+    if 'data_source' in data:
+        ds = str(data['data_source']).strip().lower()
+        if ds not in _VALID_DATA_SOURCES:
+            errors['data_source'] = (
+                f"data_source must be one of: {', '.join(sorted(_VALID_DATA_SOURCES))}"
+            )
+        else:
+            database.set_setting('data_source', ds)
+            updated['data_source'] = ds
+            logger.info("Settings: data_source updated to %r", ds)
+
     if errors:
         return jsonify({'errors': errors}), 400
 
-    return jsonify({'updated': updated, 'gemini_model': gemini.model_name, 'ai_enabled': gemini.user_enabled})
+    data_source_setting = _db_data_source()
+    _, active_source = _resolve_engine(data_source_setting)
+    return jsonify({
+        'updated': updated,
+        'gemini_model': gemini.model_name,
+        'ai_enabled': gemini.user_enabled,
+        'data_source': data_source_setting,
+        'active_data_source': active_source,
+        'ebay_api_configured': ebay_api.is_configured,
+    })
 
 
 if __name__ == '__main__':
