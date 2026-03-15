@@ -284,9 +284,9 @@ def search():
         assessed.append({**deal, **(ai_assessment or {})})
 
     # Sort deals: bundles first, then by AI rating and confidence score.
-    # Within each group (bundle / single), AI-rated "Must Buy" with high
-    # confidence leads, followed by "Okay", then "Avoid", then unrated results.
-    _rating_order = {"must buy": 0, "okay": 1, "avoid": 2}
+    # Within each group (bundle / single), AI-rated "Must Have"/"Good" with
+    # high confidence leads, followed by "Okay", then "Avoid", then unrated.
+    _rating_order = {"must have": 0, "must buy": 0, "good": 1, "okay": 2, "avoid": 3}
 
     def _sort_key(d: dict):
         is_single = not _is_bundle(d)  # 0 = bundle, 1 = single game
