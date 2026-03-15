@@ -430,6 +430,10 @@ class EbayApiClient:
             if isinstance(img, dict) and img.get("imageUrl"):
                 image_urls.append(img["imageUrl"])
 
+        # ── Listing date ───────────────────────────────────────────────────
+        # itemCreationDate is an ISO-8601 string like "2024-03-01T10:00:00.000Z".
+        listing_date: Optional[str] = (item.get("itemCreationDate") or "").strip() or None
+
         return {
             "title": title or "Unknown",
             "price": price,
@@ -447,6 +451,9 @@ class EbayApiClient:
             # Quantity/sold info formatted as a human-readable string, e.g.
             # "4 verfügbar, 1 verkauft" — a key bait-and-switch scam indicator.
             "seller_count": seller_count,
+            # ISO-8601 date when the listing was created on eBay (may be None
+            # for older API responses or the legacy scraper).
+            "listing_date": listing_date,
         }
 
     @staticmethod

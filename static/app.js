@@ -59,6 +59,19 @@ function stopProgress(success) {
 }
 
 // ---------------------------------------------------------------------------
+// Save / Skip / Age-filter state
+// ---------------------------------------------------------------------------
+
+/** @type {Set<string>} URLs currently saved by the user. */
+let _savedUrls = new Set();
+
+/** Current age filter in days (0 = no filter). */
+let _maxAgeDays = 0;
+
+/** Last search result deals array (for re-filtering without re-searching). */
+let _lastDeals = [];
+
+// ---------------------------------------------------------------------------
 // Main search handler
 // ---------------------------------------------------------------------------
 
@@ -90,6 +103,38 @@ document.addEventListener('DOMContentLoaded', () => {
     if (dataSourceSelect) {
         dataSourceSelect.addEventListener('change', saveDataSource);
     }
+
+    // Age filter change handler.
+    const ageFilterSelect = document.getElementById('ageFilterSelect');
+    if (ageFilterSelect) {
+        ageFilterSelect.addEventListener('change', () => {
+            _maxAgeDays = parseInt(ageFilterSelect.value, 10) || 0;
+            if (_lastDeals.length > 0) {
+                _renderDeals(_lastDeals);
+            }
+        });
+    }
+
+    // Saved deals panel toggle.
+    const savedDealsBtn = document.getElementById('savedDealsBtn');
+    if (savedDealsBtn) {
+        savedDealsBtn.addEventListener('click', toggleSavedPanel);
+    }
+    const closeSavedBtn = document.getElementById('closeSavedBtn');
+    if (closeSavedBtn) {
+        closeSavedBtn.addEventListener('click', () => {
+            document.getElementById('savedPanel').classList.add('d-none');
+        });
+    }
+
+    // Event delegation for save/skip buttons inside deal cards.
+    const dealsGrid = document.getElementById('dealsGrid');
+    if (dealsGrid) {
+        dealsGrid.addEventListener('click', handleDealCardAction);
+    }
+
+    // Load saved URLs so the UI reflects saved state on initial render.
+    loadSavedUrls();
 
     // Check URL parameters for auto-search
     const params = new URLSearchParams(window.location.search);
@@ -405,16 +450,48 @@ function displayResults(data) {
             aiWarning.classList.add('d-none');
         }
     }
-    
-    const dealsGrid = document.getElementById('dealsGrid');
-    dealsGrid.innerHTML = data.deals.map(deal => createDealCard(deal)).join('');
-    
+
+    // Store deals and render with current filters.
+    _lastDeals = data.deals || [];
+    _renderDeals(_lastDeals);
+
     document.getElementById('resultsContainer').classList.remove('d-none');
 
     // Setup export button
     const exportBtn = document.getElementById('exportBtn');
     if (exportBtn) {
         exportBtn.onclick = () => exportToCSV(data.query);
+    }
+}
+
+/**
+ * Render the deals grid, applying age filter and saved state.
+ * @param {Array} deals - Full unfiltered deal list from the last search.
+ */
+function _renderDeals(deals) {
+    const cutoffDate = _maxAgeDays > 0
+        ? new Date(Date.now() - _maxAgeDays * 86400 * 1000)
+        : null;
+
+    const filtered = deals.filter(deal => {
+        if (cutoffDate && deal.listing_date) {
+            const listed = new Date(deal.listing_date);
+            if (!isNaN(listed) && listed < cutoffDate) return false;
+        }
+        return true;
+    });
+
+    const dealsGrid = document.getElementById('dealsGrid');
+    dealsGrid.innerHTML = filtered.map(deal => createDealCard(deal)).join('');
+
+    // Update visible deal count to reflect filtered total.
+    const dealCountEl = document.getElementById('dealCount');
+    if (dealCountEl) {
+        if (filtered.length !== deals.length) {
+            dealCountEl.textContent = `${filtered.length} of ${deals.length}`;
+        } else {
+            dealCountEl.textContent = deals.length;
+        }
     }
 }
 
@@ -491,13 +568,36 @@ function createDealCard(deal) {
         metaRows.push(metaRow('Trending', '🔥 Yes'));
     }
 
+    // ── Listing age ────────────────────────────────────────────────────────
+    const ageHtml = buildListingAgeBadge(deal.listing_date);
+
+    // ── Save / Skip buttons ────────────────────────────────────────────────
+    const isSaved = deal.is_saved || _savedUrls.has(deal.url);
+    const encodedUrl = escapeHtml(deal.url);
+    const saveLabel = isSaved ? '★ Saved' : '☆ Save';
+    const saveBtnClass = isSaved ? 'btn-deal-action btn-save btn-save--saved' : 'btn-deal-action btn-save';
+    const actionsHtml = `
+        <div class="deal-actions">
+            <button class="${saveBtnClass}" data-action="${isSaved ? 'unsave' : 'save'}"
+                    data-url="${encodedUrl}"
+                    data-title="${escapeHtml(deal.title || '')}"
+                    data-price="${deal.price || 0}"
+                    title="${isSaved ? 'Remove from saved' : 'Save this deal'}">${saveLabel}</button>
+            <button class="btn-deal-action btn-skip" data-action="skip"
+                    data-url="${encodedUrl}"
+                    title="Hide this deal from future searches">✕ Skip</button>
+        </div>`;
+
     return `
         <div class="deal-card">
             <div class="deal-header">
                 <div class="deal-score" style="color: ${scoreColor}">
                     ${score.toFixed(1)}
                 </div>
-                <div class="deal-recommendation">${recommendation}</div>
+                <div class="deal-header-right">
+                    <div class="deal-recommendation">${recommendation}</div>
+                    ${ageHtml}
+                </div>
             </div>
             ${imageSection}
             <div class="deal-body">
@@ -553,6 +653,7 @@ function createDealCard(deal) {
                 <a href="${deal.url}" target="_blank" rel="noopener noreferrer" class="btn-view">
                     View on eBay →
                 </a>
+                ${actionsHtml}
             </div>
         </div>
     `;
@@ -566,6 +667,228 @@ function createDealCard(deal) {
  */
 function metaRow(label, value) {
     return `<div class="meta-row"><span class="meta-label">${label}</span><span class="meta-value">${value}</span></div>`;
+}
+
+/**
+ * Build a listing-age badge from an ISO-8601 listing date string.
+ * Returns an empty string when no date is available.
+ * @param {string|null|undefined} listingDate
+ * @returns {string} HTML string
+ */
+function buildListingAgeBadge(listingDate) {
+    if (!listingDate) return '';
+    const listed = new Date(listingDate);
+    if (isNaN(listed)) return '';
+    const ageDays = Math.floor((Date.now() - listed) / (86400 * 1000));
+    let label, cls;
+    if (ageDays === 0) {
+        label = 'Today';
+        cls = 'deal-age-badge deal-age-badge--fresh';
+    } else if (ageDays === 1) {
+        label = '1 day old';
+        cls = 'deal-age-badge deal-age-badge--fresh';
+    } else if (ageDays <= 7) {
+        label = `${ageDays} days old`;
+        cls = 'deal-age-badge deal-age-badge--fresh';
+    } else if (ageDays <= 30) {
+        label = `${ageDays} days old`;
+        cls = 'deal-age-badge deal-age-badge--recent';
+    } else {
+        label = ageDays >= 365
+            ? `${Math.floor(ageDays / 365)}y old`
+            : `${ageDays} days old`;
+        cls = 'deal-age-badge deal-age-badge--old';
+    }
+    return `<span class="${cls}" title="Listed: ${listed.toLocaleDateString()}">${label}</span>`;
+}
+
+// ---------------------------------------------------------------------------
+// Save / Skip event delegation
+// ---------------------------------------------------------------------------
+
+/**
+ * Delegated click handler for save/skip buttons inside deal cards.
+ * @param {MouseEvent} e
+ */
+async function handleDealCardAction(e) {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+
+    const action = btn.dataset.action;
+    const url = btn.dataset.url;
+    if (!url) return;
+
+    if (action === 'save') {
+        await handleSaveDeal(btn, url);
+    } else if (action === 'unsave') {
+        await handleUnsaveDeal(btn, url);
+    } else if (action === 'skip') {
+        await handleSkipDeal(btn, url);
+    }
+}
+
+async function handleSaveDeal(btn, url) {
+    const title = btn.dataset.title || '';
+    const price = parseFloat(btn.dataset.price) || 0;
+    btn.disabled = true;
+    try {
+        const resp = await fetch('/api/deals/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, title, price }),
+        });
+        if (resp.ok) {
+            _savedUrls.add(url);
+            btn.textContent = '★ Saved';
+            btn.className = 'btn-deal-action btn-save btn-save--saved';
+            btn.dataset.action = 'unsave';
+            btn.title = 'Remove from saved';
+        }
+    } catch (err) {
+        console.error('Save deal error:', err);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function handleUnsaveDeal(btn, url) {
+    btn.disabled = true;
+    try {
+        const resp = await fetch('/api/deals/unsave', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url }),
+        });
+        if (resp.ok) {
+            _savedUrls.delete(url);
+            btn.textContent = '☆ Save';
+            btn.className = 'btn-deal-action btn-save';
+            btn.dataset.action = 'save';
+            btn.title = 'Save this deal';
+            // Also refresh saved panel if visible.
+            const savedPanel = document.getElementById('savedPanel');
+            if (savedPanel && !savedPanel.classList.contains('d-none')) {
+                loadSavedPanel();
+            }
+        }
+    } catch (err) {
+        console.error('Unsave deal error:', err);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function handleSkipDeal(btn, url) {
+    btn.disabled = true;
+    try {
+        const resp = await fetch('/api/deals/skip', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url }),
+        });
+        if (resp.ok) {
+            // Hide the card immediately.
+            const card = btn.closest('.deal-card');
+            if (card) {
+                card.style.transition = 'opacity 0.25s ease, transform 0.25s ease';
+                card.style.opacity = '0';
+                card.style.transform = 'scale(0.95)';
+                setTimeout(() => card.remove(), 270);
+            }
+            // Remove from local deals array so age-filter re-render won't bring it back.
+            _lastDeals = _lastDeals.filter(d => d.url !== url);
+        }
+    } catch (err) {
+        console.error('Skip deal error:', err);
+        btn.disabled = false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Saved deals panel
+// ---------------------------------------------------------------------------
+
+async function loadSavedUrls() {
+    try {
+        const resp = await fetch('/api/deals/saved');
+        if (!resp.ok) return;
+        const deals = await resp.json();
+        _savedUrls = new Set(deals.map(d => d.url));
+    } catch (err) {
+        console.warn('Could not load saved deals:', err);
+    }
+}
+
+async function toggleSavedPanel() {
+    const panel = document.getElementById('savedPanel');
+    if (!panel) return;
+    if (panel.classList.contains('d-none')) {
+        panel.classList.remove('d-none');
+        await loadSavedPanel();
+    } else {
+        panel.classList.add('d-none');
+    }
+}
+
+async function loadSavedPanel() {
+    const savedList = document.getElementById('savedList');
+    if (!savedList) return;
+    try {
+        const resp = await fetch('/api/deals/saved');
+        if (!resp.ok) throw new Error('Failed to load saved deals');
+        const deals = await resp.json();
+        if (!deals.length) {
+            savedList.innerHTML = '<p class="saved-empty">No saved deals yet. Click ☆ Save on any deal card.</p>';
+            return;
+        }
+        savedList.innerHTML = deals.map(d => `
+            <div class="saved-item" data-url="${escapeHtml(d.url)}">
+                <div class="saved-item-info">
+                    <div class="saved-item-title" title="${escapeHtml(d.title || '')}">${escapeHtml(d.title || 'Unknown deal')}</div>
+                    ${d.price ? `<div class="saved-item-price">€${(+d.price).toFixed(2)}</div>` : ''}
+                </div>
+                <div class="saved-item-actions">
+                    <a href="${escapeHtml(d.url)}" target="_blank" rel="noopener noreferrer" class="btn-view-saved">View →</a>
+                    <button class="btn-unsave" data-url="${escapeHtml(d.url)}" onclick="removeSavedItem(this)">✕</button>
+                </div>
+            </div>
+        `).join('');
+    } catch (err) {
+        savedList.innerHTML = '<p class="saved-empty">⚠️ Could not load saved deals.</p>';
+    }
+}
+
+async function removeSavedItem(btn) {
+    const url = btn.dataset.url;
+    if (!url) return;
+    btn.disabled = true;
+    try {
+        const resp = await fetch('/api/deals/unsave', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url }),
+        });
+        if (resp.ok) {
+            _savedUrls.delete(url);
+            const item = btn.closest('.saved-item');
+            if (item) item.remove();
+            // Update save button state in deal cards if present.
+            const saveBtn = document.querySelector(`.btn-save[data-url="${CSS.escape(url)}"]`);
+            if (saveBtn) {
+                saveBtn.textContent = '☆ Save';
+                saveBtn.className = 'btn-deal-action btn-save';
+                saveBtn.dataset.action = 'save';
+            }
+            // Show empty state if no more saved deals.
+            const savedList = document.getElementById('savedList');
+            if (savedList && !savedList.querySelector('.saved-item')) {
+                savedList.innerHTML = '<p class="saved-empty">No saved deals yet. Click ☆ Save on any deal card.</p>';
+            }
+        }
+    } catch (err) {
+        console.error('Unsave error:', err);
+        btn.disabled = false;
+    }
 }
 
 /**
