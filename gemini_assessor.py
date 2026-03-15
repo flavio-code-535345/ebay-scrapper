@@ -121,8 +121,8 @@ text, no concatenated separate objects. The entire response must be parseable \
 as a single `json.loads()` call that returns a list.
 """
 
-# Gemini model to use – gemini-flash-latest supports multimodal (text + images).
-_MODEL_NAME = "gemini-flash-latest"
+# Gemini model to use – gemini-2.0-flash-lite supports multimodal (text + images).
+_MODEL_NAME = "gemini-2.0-flash-lite"
 
 # Maximum number of listing images sent per item per request (keeps latency reasonable).
 _MAX_IMAGES = 3
