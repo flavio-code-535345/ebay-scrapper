@@ -4,11 +4,16 @@ Unit tests for gemini_assessor.py — focusing on the deterministic
 bundle bait-and-switch scam detector introduced to catch the canonical
 'Spielesammlung + Stückzahl + verfügbar/verkauft > 1' pattern, and
 the sports/Kinect deal detector that filters out low-resale-value listings.
+Also covers the batch response parser (including the new structured output
+keys) and the single-item-as-batch path used by assess_deal.
 """
+
+import json
 
 import pytest
 
 from gemini_assessor import (
+    GeminiAssessor,
     _apply_scam_override,
     _apply_sports_kinect_override,
     _detect_bundle_individual_sale_scam,
@@ -27,6 +32,9 @@ _BASE_ASSESSMENT = {
     "ai_visual_findings": [],
     "ai_red_flags": [],
     "ai_fair_market_estimate": "~€25–35",
+    "ai_itemized_resale_estimates": [],
+    "ai_estimated_total_cost": 10.0,
+    "ai_estimated_gross_profit": 20.0,
     "ai_verdict_summary": "Great bundle deal.",
     "ai_assessed": True,
 }
@@ -468,3 +476,117 @@ class TestApplySportsKinectOverride:
         assessment = _make_assessment(ai_verdict_summary="")
         result = _apply_sports_kinect_override(deal, assessment)
         assert result["ai_verdict_summary"].startswith("⛔ **SPORTS/KINECT")
+
+
+# ---------------------------------------------------------------------------
+# _parse_batch_response tests
+# ---------------------------------------------------------------------------
+
+
+class TestParseBatchResponse:
+    """Tests for the batch JSON parser, including new structured output keys."""
+
+    def _valid_item(self, **overrides):
+        """Return a dict that mimics a valid Gemini batch response item."""
+        base = {
+            "deal_rating": "Fair",
+            "confidence_score": 70,
+            "potential_scam": False,
+            "scam_warning": "",
+            "visual_findings": ["Minor scratches"],
+            "red_flags": [],
+            "fair_market_estimate": "~€15–20",
+            "itemized_resale_estimates": [
+                {"item": "Zelda BotW", "estimated_resale_eur": 12.0},
+                {"item": "Mario Kart 8", "estimated_resale_eur": 8.0},
+            ],
+            "estimated_total_cost": 10.0,
+            "estimated_gross_profit": 10.0,
+            "verdict_summary": "Decent bundle with some profit potential.",
+        }
+        base.update(overrides)
+        return base
+
+    def test_parses_new_fields_correctly(self):
+        """New output keys are extracted and prefixed with ai_."""
+        payload = json.dumps([self._valid_item()])
+        results = GeminiAssessor._parse_batch_response(payload, 1)
+        assert len(results) == 1
+        r = results[0]
+        assert r["ai_estimated_total_cost"] == 10.0
+        assert r["ai_estimated_gross_profit"] == 10.0
+        assert len(r["ai_itemized_resale_estimates"]) == 2
+        assert r["ai_itemized_resale_estimates"][0]["item"] == "Zelda BotW"
+        assert r["ai_itemized_resale_estimates"][0]["estimated_resale_eur"] == 12.0
+
+    def test_parses_multiple_items(self):
+        """Parser returns one result per item in the JSON array."""
+        payload = json.dumps([self._valid_item(), self._valid_item(deal_rating="Avoid")])
+        results = GeminiAssessor._parse_batch_response(payload, 2)
+        assert len(results) == 2
+        assert results[0]["ai_deal_rating"] == "Fair"
+        assert results[1]["ai_deal_rating"] == "Avoid"
+
+    def test_pads_short_response(self):
+        """If Gemini returns fewer items than requested, the list is padded with parse-error sentinels."""
+        payload = json.dumps([self._valid_item()])
+        results = GeminiAssessor._parse_batch_response(payload, 3)
+        assert len(results) == 3
+        assert results[0]["ai_assessed"] is True
+        assert results[1]["ai_assessed"] is False
+        assert results[1]["ai_error_type"] == "parse_error"
+        assert results[2]["ai_assessed"] is False
+
+    def test_truncates_long_response(self):
+        """If Gemini returns more items than expected, the list is truncated."""
+        payload = json.dumps([self._valid_item()] * 5)
+        results = GeminiAssessor._parse_batch_response(payload, 3)
+        assert len(results) == 3
+
+    def test_missing_new_fields_default_to_zero_empty(self):
+        """Old-format responses without new keys get safe defaults."""
+        old_item = {
+            "deal_rating": "Must Buy",
+            "confidence_score": 90,
+            "potential_scam": False,
+            "scam_warning": "",
+            "visual_findings": [],
+            "red_flags": [],
+            "fair_market_estimate": "~€30",
+            "verdict_summary": "Great deal.",
+        }
+        payload = json.dumps([old_item])
+        results = GeminiAssessor._parse_batch_response(payload, 1)
+        assert len(results) == 1
+        r = results[0]
+        assert r["ai_itemized_resale_estimates"] == []
+        assert r["ai_estimated_total_cost"] == 0.0
+        assert r["ai_estimated_gross_profit"] == 0.0
+        assert r["ai_assessed"] is True
+
+    def test_invalid_json_returns_parse_error_sentinels(self):
+        """Completely unparseable text returns parse-error sentinels."""
+        results = GeminiAssessor._parse_batch_response("not json at all", 2)
+        assert len(results) == 2
+        for r in results:
+            assert r["ai_assessed"] is False
+            assert r["ai_error_type"] == "parse_error"
+            assert r["ai_itemized_resale_estimates"] == []
+            assert r["ai_estimated_total_cost"] == 0.0
+            assert r["ai_estimated_gross_profit"] == 0.0
+
+    def test_handles_fenced_json(self):
+        """Markdown code fences around the JSON are stripped before parsing."""
+        payload = "```json\n" + json.dumps([self._valid_item()]) + "\n```"
+        results = GeminiAssessor._parse_batch_response(payload, 1)
+        assert len(results) == 1
+        assert results[0]["ai_assessed"] is True
+        assert results[0]["ai_estimated_total_cost"] == 10.0
+
+    def test_parse_error_sentinel_has_all_new_fields(self):
+        """The parse-error sentinel includes all new structured keys."""
+        results = GeminiAssessor._parse_batch_response("bad", 1)
+        r = results[0]
+        assert "ai_itemized_resale_estimates" in r
+        assert "ai_estimated_total_cost" in r
+        assert "ai_estimated_gross_profit" in r

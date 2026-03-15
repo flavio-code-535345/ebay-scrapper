@@ -65,6 +65,9 @@ def init_db():
     _add_column_if_missing(cursor, "deals", "ai_assessed", "INTEGER DEFAULT 0")
     _add_column_if_missing(cursor, "deals", "ai_potential_scam", "INTEGER DEFAULT 0")
     _add_column_if_missing(cursor, "deals", "ai_scam_warning", "TEXT")
+    _add_column_if_missing(cursor, "deals", "ai_itemized_resale_estimates", "TEXT")
+    _add_column_if_missing(cursor, "deals", "ai_estimated_total_cost", "REAL")
+    _add_column_if_missing(cursor, "deals", "ai_estimated_gross_profit", "REAL")
     _add_column_if_missing(cursor, "deals", "image_issues", "TEXT")
     _add_column_if_missing(cursor, "deals", "image_urls", "TEXT")
     _add_column_if_missing(cursor, "deals", "item_location", "TEXT")
@@ -123,6 +126,9 @@ def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> No
         "ai_assessed",
         "ai_potential_scam",
         "ai_scam_warning",
+        "ai_itemized_resale_estimates",
+        "ai_estimated_total_cost",
+        "ai_estimated_gross_profit",
         "image_issues",
         "image_urls",
         "item_location",
@@ -165,11 +171,12 @@ def save_search(query: str, deals: List[Dict]) -> int:
     search_id = cursor.lastrowid
 
     for deal in deals:
-        # Serialise list fields (visual_findings, red_flags, image_issues, image_urls) as JSON strings.
+        # Serialise list/dict fields as JSON strings.
         visual_findings = deal.get('ai_visual_findings')
         red_flags = deal.get('ai_red_flags')
         image_issues = deal.get('image_issues')
         image_urls = deal.get('image_urls')
+        resale_estimates = deal.get('ai_itemized_resale_estimates')
 
         cursor.execute(
             """INSERT INTO deals
@@ -179,10 +186,12 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 ai_deal_rating, ai_confidence_score, ai_visual_findings,
                 ai_red_flags, ai_fair_market_estimate, ai_verdict_summary,
                 ai_assessed, ai_potential_scam, ai_scam_warning,
+                ai_itemized_resale_estimates, ai_estimated_total_cost,
+                ai_estimated_gross_profit,
                 image_issues, image_urls, item_location, description, seller_count,
                 listing_date,
                 created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 search_id,
                 deal.get('title'),
@@ -207,6 +216,9 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 int(bool(deal.get('ai_assessed'))),
                 int(bool(deal.get('ai_potential_scam'))),
                 deal.get('ai_scam_warning'),
+                json.dumps(resale_estimates) if isinstance(resale_estimates, list) else json.dumps([]),
+                deal.get('ai_estimated_total_cost'),
+                deal.get('ai_estimated_gross_profit'),
                 json.dumps(image_issues) if isinstance(image_issues, list) else image_issues,
                 json.dumps(image_urls) if isinstance(image_urls, list) else image_urls,
                 deal.get('item_location'),
@@ -242,7 +254,11 @@ def get_deals_by_search(search_id: int) -> List[Dict]:
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
     # Deserialise JSON-encoded list fields.
-    _JSON_LIST_FIELDS = ('ai_visual_findings', 'ai_red_flags', 'image_issues', 'image_urls')
+    _JSON_LIST_FIELDS = (
+        'ai_visual_findings', 'ai_red_flags',
+        'ai_itemized_resale_estimates',
+        'image_issues', 'image_urls',
+    )
     for row in rows:
         for field in _JSON_LIST_FIELDS:
             raw = row.get(field)

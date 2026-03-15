@@ -18,182 +18,9 @@ import requests
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Professional eBay Deal Examiner system instructions
+# Unified Professional eBay Deal Examiner system instructions (batch version).
+# Used for all Gemini requests — single listings are sent as an array of one.
 # ---------------------------------------------------------------------------
-_SYSTEM_PROMPT = """\
-### ROLE
-You are a **Professional eBay Deal Examiner** specialising in the German \
-secondhand gaming market. Your job is to give the buyer a thorough, \
-actionable verdict on whether this deal is worth taking. Think like an \
-experienced reseller who buys purely for **resale profit** and who \
-understands the German eBay market deeply. Do NOT factor in personal \
-enjoyment, nostalgia, or collector value — only resale profit matters.
-
-### ABSOLUTE RULE — THE 2 € THRESHOLD
-> If a game (or bundle) is listed as **working/functional** and the total \
-price (including shipping) is **≤ 2 €**, it is ALWAYS rated **"Must Buy"** \
-regardless of market value, popularity, or condition.  
-> State this rule explicitly in your verdict when it applies.
-
-### SPORTS & KINECT BUNDLES — INSTANT AVOID
-Sports game franchises and Kinect titles have **minimal resale value** on \
-the German secondhand market. Apply these rules immediately, before any \
-other analysis:
-- Any listing dominated by **FIFA**, **Forza**, **TopSpin**, **NBA 2K**, \
-**PES** (Pro Evolution Soccer), **Madden**, **NHL**, **WRC**, **MotoGP**, \
-**Just Dance**, **Dance Central**, **Wii Sports**, or similar annual sports \
-franchise titles → rate **"Avoid"** immediately. These titles flood the \
-secondhand market and rarely fetch more than €1–3 each, making profit \
-impossible on a bundle.
-- Any listing featuring **Kinect** hardware or games (Kinect Adventures, \
-Kinect Sports, Kinect Star Wars, Just Dance for Kinect, Dance Central, \
-etc.) → rate **"Avoid"**. Kinect accessories and Kinect-only games have \
-near-zero resale value today.
-- Exception: only bump above "Avoid" if the listing also contains clearly \
-identified **rare or high-value non-sports titles** that outweigh the \
-sports/Kinect content in resale value and provide meaningful net profit.
-
-### RATING DECISION — RESALE PROFIT ONLY
-Your `deal_rating` is determined **solely by resale profit potential**:
-- **"Must Buy"**: Estimated resale clearly exceeds (asking price + \
-shipping) by at least 30–40 % gross margin **or** ≥ €8 net profit. A \
-genuinely profitable flip that a reseller should act on immediately.
-- **"Fair"**: Small positive margin (< 30 % gross margin or < €8 net \
-profit), break-even, or uncertain — worth considering only if the price \
-drops further or you already have a buyer lined up.
-- **"Avoid"**: Estimated resale ≤ cost (no profit), high risk, scam/fraud \
-detected, or the listing is dominated by low-demand categories (sports/ \
-Kinect bundles, common shovelware).
-
-### ANALYSIS PROTOCOL
-1. **SCAM / BAIT-AND-SWITCH DETECTION (CHECK THIS FIRST)**
-   This is a gating check — a scam suspicion overrides all other advice.
-   Shady sellers often list a multi-game **bundle or lot** but actually sell \
-only a single game chosen from a dropdown or variant selector, baiting buyers \
-with the bundle image/price.
-
-   **Check the title for red-flag keywords:**
-   - "you pick", "choose 1", "Auswahl", "nur 1 Spiel", "1 Spiel nach Wahl", \
-"1 aus", "1 Stück wählen", "bitte auswählen", "Ihre Wahl", "nach Wahl"
-
-   **Check the description (CRITICAL — read every sentence):**
-   Descriptions are the primary vehicle for bait-and-switch deception. Flag \
-immediately if the description contains ANY of the following patterns:
-   - "Sie wählen" / "Sie wählen ein Spiel" / "Sie wählen sich" — buyer must \
-pick one item
-   - "bitte teilen Sie mir mit" / "bitte mitteilen" / "bitte nennen Sie" / \
-"bitte angeben" — buyer must tell the seller which game they want
-   - "Auswahl" / "aus der Auswahl" / "aus dem Angebot wählen" — choose from \
-a selection
-   - "ein Spiel Ihrer Wahl" / "ein Titel Ihrer Wahl" / "Wunschspiel" — one \
-game of your choice
-   - "nur ein Spiel" / "nur 1 Spiel" / "ein Spiel pro Kauf" — only one game \
-per purchase
-   - "bitte im Nachrichtenfenster" / "bitte per Nachricht" — buyer must send \
-a message to specify
-   - "pro Stück" / "je Stück" / "einzeln" (when the title implies a bundle) \
-— per-piece pricing on a bundle-titled listing
-   - Any phrase asking the buyer to specify, choose, or message which item \
-they want from a displayed collection
-
-   **Check the seller count (quantity available / sold) — CANONICAL SCAM \
-PATTERN:**
-   - **DEFINITIVE BAIT-AND-SWITCH RULE**: If the title contains bundle/lot \
-keywords (Spielesammlung, Sammlung, Konvolut, Paket, Lot, Bundle, Spieleset, \
-Spielepaket, Set, or multiple titles listed) AND `Seller Count` shows any \
-number **greater than 1** (e.g. "4 verfügbar", "4 verfügbar, 1 verkauft", \
-"2 verkauft"), you MUST set `potential_scam: true` and `deal_rating: "Avoid"`. \
-This is non-negotiable — no other evidence is required.
-   - A genuine one-of-a-kind bundle has quantity **exactly 1** and sold \
-count **0**. Multiple available/sold units + a bundle title is a \
-near-certain bait-and-switch: the seller is listing individual games from \
-the collection one by one, NOT selling the whole lot.
-   - The absence of a dropdown/variant selector (only a plain "Stückzahl" / \
-quantity field visible in the listing) further confirms the seller has no \
-mechanism to let the buyer choose from the collection — they just send one \
-random or cheapest game. This "lazy Stückzahl trick" is a classic scam on \
-German eBay.
-   - Example canonical scam: title contains "Spielesammlung", images show a \
-stack of games, but `Seller Count` is "4 verfügbar, 1 verkauft" — this MUST \
-be rated `"Avoid"` with `potential_scam: true` regardless of price or profit.
-
-   **Check images:**
-   - Does the photo show a whole stack/pile of games while the description \
-only mentions one?
-   - Look for a plain **"Stückzahl"** quantity box (not a variant/game-selector \
-dropdown) — this confirms the buyer chooses quantity but NOT which game, \
-making it impossible to guarantee the full bundle.
-   - Look for dropdown/variant selectors or phrases like "see drop-down", \
-"see options", "Variante wählen", or item specifics that list multiple titles \
-as variants.
-
-   - If the listing is genuinely a complete lot (buyer receives every game \
-shown), state this explicitly: "Bundle verified: buyer receives all items."
-   - If there is ANY credible sign that the buyer might receive only one game \
-(not the whole lot), set `"potential_scam": true` and explain in \
-`"scam_warning"` exactly what raised suspicion (quote the specific phrase or \
-data point that triggered the flag).
-   - When `potential_scam` is true, also set `deal_rating` to `"Avoid"` \
-regardless of price or resale value. The scam warning OVERRIDES all other \
-advice — even a profitable resale estimate does not rescue this verdict.
-
-2. **IMAGE SCAN**
-   - Condition Check: Look for scratches, cracks, yellowing, missing labels, \
-heavy controller-stick drift wear, disc rot, broken hinges, etc.
-   - Completeness: Are all expected items present? (OVP/box, manual, cables, \
-power supply, memory cards, controllers, disc/cartridge)
-   - Authenticity: Check labels, holograms, disc printing, font/logo details \
-for signs of counterfeits or bootlegs.
-   - Placeholder/Stock Photo (CRITICAL Red Flag): Manufacturer renders or \
-watermarked stock images instead of real seller photos mean the actual \
-condition is unknown. Flag immediately and reduce confidence.
-   - No/Low-Res Images: Treat `no_images` or `low_res_only` in image_issues \
-as a significant risk factor.
-
-3. **TEXTUAL DATA SCAN**
-   - Flag risky phrases: "Ungetestet" / "Untested", "Defekt" / "For parts", \
-"As-is", "Verkaufe ohne Gewähr".
-   - Cross-check title vs. item specifics (e.g., "Neu" in title but "Gebraucht" \
-in specifics).
-   - Seller feedback: ≥ 99 % = trustworthy; < 95 % = risky; new seller = \
-higher caution.
-   - Location (Germany-based seller expected).
-
-4. **MARKET & RESELL ANALYSIS**
-   - Estimate fair market value for this item **in the condition shown** on \
-German eBay (ebay.de sold listings benchmark).
-   - Assess real-world resell-ability: Is this game/console in demand right \
-now? Is it rare or common on Kleinanzeigen/eBay.de?
-   - Calculate estimated gross profit: resale value − asking price − \
-shipping. Use this number to determine the rating per the RATING DECISION \
-thresholds above. Do NOT let nostalgia, collector interest, or personal \
-preference influence the rating — only profit counts.
-
-### OUTPUT FORMAT
-Return **only** a JSON object (no markdown fences, no commentary) with \
-exactly these keys:
-- `"deal_rating"`: `"Must Buy"` / `"Fair"` / `"Avoid"`
-- `"confidence_score"`: integer 1–100
-- `"potential_scam"`: boolean — `true` if this listing shows signs of \
-bundle-bait or bait-and-switch (buyer likely receives only one game despite \
-bundle appearance), `false` otherwise
-- `"scam_warning"`: string — if `potential_scam` is true, a concise \
-human-readable explanation of why (e.g. "Title says 'Spielesammlung' but \
-seller_count shows '4 verfügbar, 1 verkauft' — multiple units available \
-means seller is selling games individually, NOT the whole bundle"); empty \
-string otherwise
-- `"visual_findings"`: list of strings — physical condition observations from \
-images (empty list if no images)
-- `"red_flags"`: list of strings — risks from text, photos, or seller profile
-- `"fair_market_estimate"`: string — estimated market value in current \
-condition, e.g. `"~€12–18"`
-- `"verdict_summary"`: markdown string — 3–5 sentences covering price vs. \
-market value, condition, resell-ability, and a clear recommendation with \
-reasoning; invoke the 2 € rule explicitly when applicable; if \
-`potential_scam` is true, lead with the scam warning and make clear this \
-overrides all other advice
-"""
-
 _BATCH_SYSTEM_PROMPT = """\
 ### ROLE
 You are a **Professional eBay Deal Examiner** specialising in the German \
@@ -238,89 +65,40 @@ drops or you have a buyer.
 - **"Avoid"**: Estimated resale ≤ cost (no profit), scam/fraud detected, \
 or dominated by low-demand categories (sports/Kinect, common shovelware).
 
-### BUNDLE RESALE RULE
-> Whenever a listing appears to be a **multi-game lot or bundle** \
-(keywords: Lot, Bundle, Sammlung, Konvolut, Paket, or multiple titles \
-listed), you **MUST** include a resale breakdown in `verdict_summary`:
-> - Estimate what each individual game would fetch if sold separately on \
-ebay.de (or Kleinanzeigen).
-> - Estimate the total potential resale revenue.
-> - Calculate approximate gross profit (resale total − asking price − \
-shipping) and flag any particularly valuable or worthless titles in the lot.
-> - Advise whether to flip the lot whole or split it.
-
 ### ANALYSIS PROTOCOL (apply to EACH listing)
 1. **SCAM / BAIT-AND-SWITCH DETECTION (CHECK THIS FIRST)**
    This is a gating check — a scam suspicion overrides all other advice.
-   Shady sellers often list a multi-game **bundle or lot** but actually sell \
-only a single game chosen from a dropdown or variant selector, baiting buyers \
-with the bundle image/price.
 
-   **Check the title for red-flag keywords:**
-   - "you pick", "choose 1", "Auswahl", "nur 1 Spiel", "1 Spiel nach Wahl", \
-"1 aus", "1 Stück wählen", "bitte auswählen", "Ihre Wahl", "nach Wahl"
+   **Check the title** for any "choose one" phrasing: "you pick", "choose 1", \
+"1 aus", "nur 1 Spiel", "Auswahl", "Ihre Wahl", "nach Wahl", "1 Stück wählen".
 
-   **Check the description (CRITICAL — read every sentence):**
-   Descriptions are the primary vehicle for bait-and-switch deception. Flag \
-immediately if the description contains ANY of the following patterns:
-   - "Sie wählen" / "Sie wählen ein Spiel" / "Sie wählen sich" — buyer must \
-pick one item
-   - "bitte teilen Sie mir mit" / "bitte mitteilen" / "bitte nennen Sie" / \
-"bitte angeben" — buyer must tell the seller which game they want
-   - "Auswahl" / "aus der Auswahl" / "aus dem Angebot wählen" — choose from \
-a selection
-   - "ein Spiel Ihrer Wahl" / "ein Titel Ihrer Wahl" / "Wunschspiel" — one \
-game of your choice
-   - "nur ein Spiel" / "nur 1 Spiel" / "ein Spiel pro Kauf" — only one game \
-per purchase
-   - "bitte im Nachrichtenfenster" / "bitte per Nachricht" — buyer must send \
-a message to specify
-   - "pro Stück" / "je Stück" / "einzeln" (when the title implies a bundle) \
-— per-piece pricing on a bundle-titled listing
-   - Any phrase asking the buyer to specify, choose, or message which item \
-they want from a displayed collection
+   **Check the description (CRITICAL):** Flag immediately for any of these \
+conceptual patterns:
+   - **"Choose one" variations**: any phrase implying the buyer selects a \
+single item from the collection (e.g. "Sie wählen", "Wunschspiel", "Auswahl", \
+"ein Spiel Ihrer Wahl", "ein Titel Ihrer Wahl", "nur 1 Spiel", "1 Spiel \
+nach Wahl").
+   - **"Buyer must message" variations**: any request for the buyer to contact \
+the seller to specify which item they want (e.g. "bitte mitteilen", "bitte \
+nennen", "bitte angeben", "bitte im Nachrichtenfenster", "bitte per Nachricht").
+   - **"Per-piece pricing" on a bundle-titled listing**: any indication of \
+individual-item pricing (e.g. "pro Stück", "je Stück", "einzeln").
 
-   **Check the seller count (quantity available / sold) — CANONICAL SCAM \
-PATTERN:**
-   - **DEFINITIVE BAIT-AND-SWITCH RULE**: If the title contains bundle/lot \
-keywords (Spielesammlung, Sammlung, Konvolut, Paket, Lot, Bundle, Spieleset, \
-Spielepaket, Set, or multiple titles listed) AND `Seller Count` shows any \
-number **greater than 1** (e.g. "4 verfügbar", "4 verfügbar, 1 verkauft", \
-"2 verkauft"), you MUST set `potential_scam: true` and `deal_rating: "Avoid"`. \
-This is non-negotiable — no other evidence is required.
-   - A genuine one-of-a-kind bundle has quantity **exactly 1** and sold \
-count **0**. Multiple available/sold units + a bundle title is a \
-near-certain bait-and-switch: the seller is listing individual games from \
-the collection one by one, NOT selling the whole lot.
-   - The absence of a dropdown/variant selector (only a plain "Stückzahl" / \
-quantity field visible in the listing) further confirms the seller has no \
-mechanism to let the buyer choose from the collection — they just send one \
-random or cheapest game. This "lazy Stückzahl trick" is a classic scam on \
-German eBay.
-   - Example canonical scam: title contains "Spielesammlung", images show a \
-stack of games, but `Seller Count` is "4 verfügbar, 1 verkauft" — this MUST \
-be rated `"Avoid"` with `potential_scam: true` regardless of price or profit.
+   **Check the seller count — CANONICAL SCAM PATTERN:**
+   If the title contains bundle/lot keywords (Spielesammlung, Sammlung, \
+Konvolut, Paket, Lot, Bundle, Spieleset, Spielepaket, Set, or multiple titles \
+listed) AND `seller_count` shows any number **greater than 1** \
+(e.g. "4 verfügbar", "4 verfügbar, 1 verkauft"), you MUST set \
+`potential_scam: true` and `deal_rating: "Avoid"`. This is non-negotiable. \
+A genuine one-of-a-kind bundle has quantity exactly 1 and sold count 0.
 
-   **Check images:**
-   - Does the photo show a whole stack/pile of games while the description \
-only mentions one?
-   - Look for a plain **"Stückzahl"** quantity box (not a variant/game-selector \
-dropdown) — this confirms the buyer chooses quantity but NOT which game, \
-making it impossible to guarantee the full bundle.
-   - Look for dropdown/variant selectors or phrases like "see drop-down", \
-"see options", "Variante wählen", or item specifics that list multiple titles \
-as variants.
+   **Check images:** Look for a plain "Stückzahl" quantity box (not a \
+variant/game-selector dropdown) confirming the buyer cannot choose which \
+game they receive. If the listing is genuinely a complete lot, state: \
+"Bundle verified: buyer receives all items."
 
-   - If the listing is genuinely a complete lot (buyer receives every game \
-shown), state this explicitly in the verdict: "Bundle verified: buyer \
-receives all items."
-   - If there is ANY credible sign that the buyer might receive only one game \
-(not the whole lot), set `"potential_scam": true` and explain in \
-`"scam_warning"` exactly what raised suspicion (quote the specific phrase or \
-data point that triggered the flag).
-   - When `potential_scam` is true, also set `deal_rating` to `"Avoid"` \
-regardless of price or resale value. The scam warning OVERRIDES all other \
-advice — even a profitable resale estimate does not rescue this verdict.
+   When `potential_scam` is true, set `deal_rating` to `"Avoid"` — the scam \
+warning OVERRIDES all other advice.
 
 2. **IMAGE SCAN**
    - Condition Check: Look for scratches, cracks, yellowing, missing labels, \
@@ -332,58 +110,71 @@ for signs of counterfeits or bootlegs.
    - Placeholder/Stock Photo (CRITICAL Red Flag): Manufacturer renders or \
 watermarked stock images instead of real seller photos mean the actual \
 condition is unknown. Flag immediately and reduce confidence.
-   - No/Low-Res Images: Treat `no_images` or `low_res_only` in image_issues \
-as a significant risk factor.
+   - No/Low-Res Images: Treat `no_images` or `low_res_only` in \
+`image_issues` as a significant risk factor.
 
 3. **TEXTUAL DATA SCAN**
    - Flag risky phrases: "Ungetestet" / "Untested", "Defekt" / "For parts", \
 "As-is", "Verkaufe ohne Gewähr".
-   - Cross-check title vs. item specifics (e.g., "Neu" in title but "Gebraucht" \
-in specifics).
+   - Cross-check title vs. item specifics (e.g., "Neu" in title but \
+"Gebraucht" in specifics).
    - Seller feedback: ≥ 99 % = trustworthy; < 95 % = risky; new seller = \
 higher caution.
-   - Location (Germany-based seller expected).
 
 4. **MARKET & RESELL ANALYSIS**
    - Estimate fair market value for the item **in the condition shown** on \
 German eBay (ebay.de sold listings benchmark).
-   - Assess real-world resell-ability: Is this game/console in demand right \
-now? Is it rare or common on Kleinanzeigen/eBay.de?
-   - For **bundles**: identify the most and least valuable games in the lot; \
-estimate per-game and total resale value; compute profit margin.
-   - Calculate estimated gross profit: resale value − asking price − \
-shipping. Use this number to determine the rating per the RATING DECISION \
-thresholds above. Do NOT let nostalgia, collector interest, or personal \
-preference influence the rating — only profit counts.
+   - For **single items**: populate `itemized_resale_estimates` with one \
+entry for the item.
+   - For **bundles**: populate `itemized_resale_estimates` with one entry \
+per identifiable game/item; identify the most and least valuable titles.
+   - Always set `estimated_total_cost = price_eur + shipping_eur` (use the \
+exact values from the input).
+   - Always set `estimated_gross_profit = sum(itemized_resale_estimates) \
+- estimated_total_cost`.
+   - Use `estimated_gross_profit` to determine `deal_rating` per the RATING \
+DECISION thresholds. Do NOT let nostalgia or collector interest influence \
+the rating — only profit counts.
+
+### INPUT FORMAT
+You will receive each listing as a JSON object with these keys:
+- `item_index`: integer — use to order the response array
+- `title`: string
+- `price_eur`: float — asking price, NOT including shipping
+- `shipping_eur`: float — shipping cost (0.0 if free)
+- `condition`: string
+- `seller_feedback_pct`: float — seller rating percentage
+- `seller_count`: string — e.g. "4 verfügbar, 1 verkauft" (empty if unknown)
+- `description`: string (may be empty)
+- `image_issues`: array of strings — e.g. ["no_images"], ["low_res_only"]
+
+Images for each listing follow the JSON object as inline image data.
 
 ### OUTPUT FORMAT
-You MUST return a **single JSON array** where each element corresponds to one \
-listing in the order they were presented. Each element must have exactly \
-these keys:
+Return a **JSON array** where each element corresponds to one listing in the \
+order they were presented. Each element must have exactly these keys:
 - `"deal_rating"`: `"Must Buy"` / `"Fair"` / `"Avoid"`
 - `"confidence_score"`: integer 1–100
-- `"potential_scam"`: boolean — `true` if this listing shows signs of \
-bundle-bait or bait-and-switch (buyer likely receives only one game despite \
-bundle appearance), `false` otherwise
-- `"scam_warning"`: string — if `potential_scam` is true, a concise \
-human-readable explanation of why (e.g. "Title says 'Spielesammlung' but \
-seller_count shows '4 verfügbar, 1 verkauft' — multiple units available \
-means seller is selling games individually, NOT the whole bundle"); empty \
-string otherwise
-- `"visual_findings"`: list of strings — physical condition observations from \
-images (empty list if no images)
-- `"red_flags"`: list of strings — risks from text, photos, or seller profile
+- `"potential_scam"`: boolean — `true` if bait-and-switch signs detected
+- `"scam_warning"`: string — concise explanation if `potential_scam` is \
+true (quote the specific phrase or data point); empty string otherwise
+- `"visual_findings"`: array of strings — physical condition observations \
+from images (empty array if no images)
+- `"red_flags"`: array of strings — risks from text, photos, or seller \
+profile
 - `"fair_market_estimate"`: string — estimated market value in current \
 condition, e.g. `"~€12–18"`
-- `"verdict_summary"`: markdown string — 3–5 sentences covering price vs. \
-market value, condition, resell-ability, and a clear recommendation; for \
-bundles include the resale breakdown described above; invoke the 2 € rule \
+- `"itemized_resale_estimates"`: array of `{"item": string, \
+"estimated_resale_eur": float}` — one entry per identifiable game or item; \
+empty array `[]` for unidentifiable single items
+- `"estimated_total_cost"`: float — must equal `price_eur + shipping_eur` \
+from the input
+- `"estimated_gross_profit"`: float — \
+`sum(itemized_resale_estimates[].estimated_resale_eur) - estimated_total_cost`
+- `"verdict_summary"`: string — 2–3 readable sentences referencing \
+`estimated_gross_profit` and any standout titles; invoke the 2 € rule \
 explicitly when applicable; if `potential_scam` is true, lead with the scam \
-warning and make clear this overrides all other advice
-
-CRITICAL: Output ONLY the JSON array — no markdown fences, no explanation \
-text, no concatenated separate objects. The entire response must be parseable \
-as a single `json.loads()` call that returns a list.
+risk
 """
 
 # Gemini model to use – gemini-2.0-flash-lite supports multimodal (text + images).
@@ -404,6 +195,53 @@ _BATCH_SIZE = 50
 # Retry configuration for transient (non-rate-limit) API errors.
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 2.0  # seconds; doubled on each retry (exponential back-off)
+
+# ---------------------------------------------------------------------------
+# JSON response schema enforced via the Gemini API (response_mime_type +
+# response_schema).  Using the API to enforce structure is more reliable than
+# prompting the model to avoid markdown fences.
+# ---------------------------------------------------------------------------
+_RESPONSE_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "deal_rating": {"type": "string"},
+            "confidence_score": {"type": "integer"},
+            "potential_scam": {"type": "boolean"},
+            "scam_warning": {"type": "string"},
+            "visual_findings": {"type": "array", "items": {"type": "string"}},
+            "red_flags": {"type": "array", "items": {"type": "string"}},
+            "fair_market_estimate": {"type": "string"},
+            "itemized_resale_estimates": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "item": {"type": "string"},
+                        "estimated_resale_eur": {"type": "number"},
+                    },
+                },
+            },
+            "estimated_total_cost": {"type": "number"},
+            "estimated_gross_profit": {"type": "number"},
+            "verdict_summary": {"type": "string"},
+        },
+        "required": [
+            "deal_rating",
+            "confidence_score",
+            "potential_scam",
+            "scam_warning",
+            "visual_findings",
+            "red_flags",
+            "fair_market_estimate",
+            "itemized_resale_estimates",
+            "estimated_total_cost",
+            "estimated_gross_profit",
+            "verdict_summary",
+        ],
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Rate-limit / back-off state (shared across all GeminiAssessor instances).
@@ -744,63 +582,15 @@ class GeminiAssessor:
     def assess_deal(self, deal: Dict) -> Optional[Dict]:
         """Analyse *deal* with Gemini and return an AI-assessment dict.
 
-        Returns ``None`` when:
-        - The API key is not configured.
-        - The Gemini API call fails (network error, etc.).
-        Returns a dict with ``ai_error_type`` set when:
-        - A 429 rate-limit is hit (``ai_error_type="rate_limit"``).
-        - The response cannot be parsed as JSON (``ai_error_type="parse_error"``).
-        Callers should fall back to the rules-based engine in these cases.
+        Delegates to :meth:`assess_deals_batch` with a single-item list so
+        that all requests follow the same code path.
+
+        Returns ``None`` when the API key is not configured or an
+        unrecoverable error occurred.  Returns a dict with ``ai_error_type``
+        set on rate-limit or parse errors.
         """
-        global _rate_limited_until
-
-        if not self.enabled or self._client is None or self._types is None:
-            return None
-
-        # If we are currently in a rate-limit back-off window, skip the call.
-        pause_remaining = self.rate_limited_until - time.monotonic()
-        if pause_remaining > 0:
-            logger.warning(
-                "GeminiAssessor: rate-limited – skipping AI assessment for %r "
-                "(%.0f s remaining in back-off).",
-                deal.get("title", "?"),
-                pause_remaining,
-            )
-            return {"ai_error_type": "rate_limit", "ai_assessed": False}
-
-        try:
-            contents = self._build_contents(deal)
-            # The new google.genai SDK requires per-request config; there is no
-            # global model object that holds a system instruction.
-            response = self._client.models.generate_content(
-                model=self._model_name,
-                contents=contents,
-                config=self._types.GenerateContentConfig(
-                    system_instruction=_SYSTEM_PROMPT,
-                ),
-            )
-            result = self._parse_response(response.text)
-            result = _apply_sports_kinect_override(deal, result)
-            return _apply_scam_override(deal, result)
-        except Exception as exc:
-            if _is_rate_limit_error(exc):
-                delay = _parse_retry_delay(exc) or _DEFAULT_BACKOFF_SECONDS
-                with _rate_limit_lock:
-                    _rate_limited_until = time.monotonic() + delay
-                logger.warning(
-                    "GeminiAssessor: 429 RESOURCE_EXHAUSTED for %r – "
-                    "backing off %.0f s. Gemini AI temporarily paused.",
-                    deal.get("title", "?"),
-                    delay,
-                )
-                return {"ai_error_type": "rate_limit", "ai_assessed": False}
-
-            logger.error(
-                "GeminiAssessor: API error for listing %r: %s",
-                deal.get("title", "?"),
-                exc,
-            )
-            return None
+        results = self.assess_deals_batch([deal])
+        return results[0] if results else None
 
     def assess_deals_batch(self, deals: List[Dict]) -> List[Optional[Dict]]:
         """Assess a list of *deals* in as few Gemini requests as possible.
@@ -850,106 +640,50 @@ class GeminiAssessor:
     # Private helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _format_image_issues_line(deal: Dict) -> str:
-        """Return a formatted 'Image Issues: …\n' line for a deal, or empty string."""
-        issues: List[str] = deal.get("image_issues", [])
-        return f"Image Issues: {', '.join(issues)}\n" if issues else ""
-
-    def _build_contents(self, deal: Dict) -> List:
-        """Construct the Gemini contents list (text + image parts)."""
-        title = deal.get("title", "Unknown")
-        price = deal.get("price", 0)
-        condition = deal.get("condition", "Unknown")
-        shipping = deal.get("shipping", "Unknown")
-        seller_rating = deal.get("seller_rating", 0)
-        description = deal.get("description", "")
-        seller_count = deal.get("seller_count", "")
-
-        prompt_lines = [
-            "Analyze this eBay listing:\n",
-            f"Title: {title}",
-            f"Price: €{price:.2f}",
-            f"Condition: {condition}",
-            f"Shipping: {shipping}",
-            f"Seller Rating: {seller_rating}%",
-        ]
-        if seller_count:
-            prompt_lines.append(f"Seller Count (available/sold): {seller_count}")
-        if description:
-            prompt_lines.append(f"Description: {description}")
-        image_issues_line = self._format_image_issues_line(deal)
-        if image_issues_line:
-            prompt_lines.append(image_issues_line.rstrip())
-        prompt_lines.append("\nReturn your analysis in the required JSON format.")
-        text_prompt = "\n".join(prompt_lines)
-
-        parts: List = [self._types.Part.from_text(text=text_prompt)]
-
-        image_urls: List[str] = deal.get("image_urls", [])
-        for url in image_urls[:_MAX_IMAGES]:
-            image_part = self._fetch_image_part(url)
-            if image_part is not None:
-                parts.append(image_part)
-
-        return parts
-
     def _build_batch_contents(self, deals: List[Dict]) -> List:
         """Construct the Gemini contents list for a batch of *deals*.
 
-        Each deal is introduced with a numbered separator so that Gemini can
-        unambiguously map its array response back to the original items.
+        Each deal is sent as a JSON object (matching the INPUT FORMAT defined
+        in :data:`_BATCH_SYSTEM_PROMPT`) followed by any inline image parts.
         """
         parts: List = []
 
         intro = (
-            f"Below are {len(deals)} eBay listings to analyze. "
-            f"Return a JSON array of exactly {len(deals)} objects in the same "
-            "order. Each object must contain: deal_rating, confidence_score, "
-            "visual_findings, red_flags, fair_market_estimate, verdict_summary."
+            f"Analyze the following {len(deals)} eBay listing(s) and return a "
+            f"JSON array of exactly {len(deals)} assessment object(s) in the "
+            "same order."
         )
         parts.append(self._types.Part.from_text(text=intro))
 
         for idx, deal in enumerate(deals, 1):
-            title = deal.get("title", "Unknown")
-            price = deal.get("price", 0)
-            condition = deal.get("condition", "Unknown")
-            shipping = deal.get("shipping", "Unknown")
-            seller_rating = deal.get("seller_rating", 0)
-            description = deal.get("description", "")
-            seller_count = deal.get("seller_count", "")
+            # Normalise shipping to a float so estimated_total_cost is reliable.
+            raw_shipping = deal.get("shipping", 0)
+            try:
+                shipping_eur = float(raw_shipping)
+            except (TypeError, ValueError):
+                shipping_eur = 0.0
 
-            item_lines = [
-                f"\n--- ITEM {idx} ---",
-                f"Title: {title}",
-                f"Price: €{price:.2f}",
-                f"Condition: {condition}",
-                f"Shipping: {shipping}",
-                f"Seller Rating: {seller_rating}%",
-            ]
-            if seller_count:
-                item_lines.append(f"Seller Count (available/sold): {seller_count}")
-            if description:
-                item_lines.append(f"Description: {description}")
-            image_issues_line = self._format_image_issues_line(deal)
-            if image_issues_line:
-                item_lines.append(image_issues_line.rstrip())
-            item_text = "\n".join(item_lines)
-            parts.append(self._types.Part.from_text(text=item_text))
+            item_payload = {
+                "item_index": idx,
+                "title": deal.get("title", ""),
+                "price_eur": float(deal.get("price", 0) or 0),
+                "shipping_eur": shipping_eur,
+                "condition": deal.get("condition", ""),
+                "seller_feedback_pct": float(deal.get("seller_rating", 0) or 0),
+                "seller_count": deal.get("seller_count", ""),
+                "description": deal.get("description", ""),
+                "image_issues": deal.get("image_issues", []),
+            }
+            parts.append(
+                # ensure_ascii=False preserves German characters (ä, ö, ü, ß) as-is.
+                self._types.Part.from_text(text=json.dumps(item_payload, ensure_ascii=False))
+            )
 
             for url in deal.get("image_urls", [])[:_MAX_IMAGES]:
                 image_part = self._fetch_image_part(url)
                 if image_part is not None:
                     parts.append(image_part)
 
-        parts.append(
-            self._types.Part.from_text(
-                text=(
-                    f"\nNow return a JSON array of exactly {len(deals)} analysis "
-                    "objects, one per item in order, with no other text."
-                )
-            )
-        )
         return parts
 
     def _assess_batch_with_retry(self, deals: List[Dict]) -> List[Optional[Dict]]:
@@ -965,6 +699,8 @@ class GeminiAssessor:
                     contents=contents,
                     config=self._types.GenerateContentConfig(
                         system_instruction=_BATCH_SYSTEM_PROMPT,
+                        response_mime_type="application/json",
+                        response_schema=_RESPONSE_SCHEMA,
                     ),
                 )
                 return self._parse_batch_response(response.text, len(deals))
@@ -1029,69 +765,13 @@ class GeminiAssessor:
             return None
 
     @staticmethod
-    def _parse_response(text: str) -> Dict:
-        """Extract the JSON payload from Gemini's response text."""
-        original_text = text
-        text = text.strip()
-
-        # Strip optional markdown code fences.
-        fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, re.IGNORECASE)
-        if fenced:
-            text = fenced.group(1).strip()
-
-        data = None
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            # Last-ditch: try to find a JSON object anywhere in the text.
-            obj_match = re.search(r"\{[\s\S]*\}", text)
-            if obj_match:
-                try:
-                    data = json.loads(obj_match.group())
-                except json.JSONDecodeError as inner_exc:
-                    logger.error(
-                        "GeminiAssessor: JSON parse failed after extraction – %s. "
-                        "Raw response (first 500 chars): %r",
-                        inner_exc,
-                        original_text[:500],
-                    )
-            else:
-                logger.error(
-                    "GeminiAssessor: No JSON object found in Gemini response. "
-                    "Raw response (first 500 chars): %r",
-                    original_text[:500],
-                )
-
-        if data is None:
-            return {
-                "ai_deal_rating": "Unknown",
-                "ai_confidence_score": 0,
-                "ai_potential_scam": False,
-                "ai_scam_warning": "",
-                "ai_visual_findings": [],
-                "ai_red_flags": [],
-                "ai_fair_market_estimate": "",
-                "ai_verdict_summary": "AI response could not be parsed.",
-                "ai_assessed": False,
-                "ai_error_type": "parse_error",
-            }
-
-        potential_scam = bool(data.get("potential_scam", False))
-        return {
-            "ai_deal_rating": str(data.get("deal_rating", "Unknown")),
-            "ai_confidence_score": int(data.get("confidence_score", 0)),
-            "ai_potential_scam": potential_scam,
-            "ai_scam_warning": str(data.get("scam_warning", "")),
-            "ai_visual_findings": data.get("visual_findings", []),
-            "ai_red_flags": data.get("red_flags", []),
-            "ai_fair_market_estimate": str(data.get("fair_market_estimate", "")),
-            "ai_verdict_summary": str(data.get("verdict_summary", "")),
-            "ai_assessed": True,
-        }
-
-    @staticmethod
     def _parse_batch_response(text: str, expected_count: int) -> List[Dict]:
         """Parse a batch Gemini response as a JSON array.
+
+        With ``response_mime_type="application/json"`` the API should return
+        clean JSON directly, but we keep the existing fallback chain so that
+        responses from older or misconfigured requests are still handled
+        gracefully.
 
         Returns a list of exactly *expected_count* assessment dicts.  Missing
         or unparseable items are filled with a parse-error sentinel so the
@@ -1105,6 +785,9 @@ class GeminiAssessor:
             "ai_visual_findings": [],
             "ai_red_flags": [],
             "ai_fair_market_estimate": "",
+            "ai_itemized_resale_estimates": [],
+            "ai_estimated_total_cost": 0.0,
+            "ai_estimated_gross_profit": 0.0,
             "ai_verdict_summary": "AI response could not be parsed.",
             "ai_assessed": False,
             "ai_error_type": "parse_error",
@@ -1113,7 +796,7 @@ class GeminiAssessor:
         original_text = text
         text = text.strip()
 
-        # Strip optional markdown code fences.
+        # Strip optional markdown code fences (kept as a safety net).
         fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, re.IGNORECASE)
         if fenced:
             text = fenced.group(1).strip()
@@ -1177,7 +860,18 @@ class GeminiAssessor:
                     confidence = int(float(item_data.get("confidence_score", 0)))
                 except (TypeError, ValueError):
                     confidence = 0
+                try:
+                    total_cost = float(item_data.get("estimated_total_cost", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    total_cost = 0.0
+                try:
+                    gross_profit = float(item_data.get("estimated_gross_profit", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    gross_profit = 0.0
                 potential_scam = bool(item_data.get("potential_scam", False))
+                resale_estimates = item_data.get("itemized_resale_estimates", [])
+                if not isinstance(resale_estimates, list):
+                    resale_estimates = []
                 results.append(
                     {
                         "ai_deal_rating": str(item_data.get("deal_rating", "Unknown")),
@@ -1189,6 +883,9 @@ class GeminiAssessor:
                         "ai_fair_market_estimate": str(
                             item_data.get("fair_market_estimate", "")
                         ),
+                        "ai_itemized_resale_estimates": resale_estimates,
+                        "ai_estimated_total_cost": total_cost,
+                        "ai_estimated_gross_profit": gross_profit,
                         "ai_verdict_summary": str(item_data.get("verdict_summary", "")),
                         "ai_assessed": True,
                     }
