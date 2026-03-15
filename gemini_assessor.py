@@ -25,14 +25,45 @@ _SYSTEM_PROMPT = """\
 You are a **Professional eBay Deal Examiner** specialising in the German \
 secondhand gaming market. Your job is to give the buyer a thorough, \
 actionable verdict on whether this deal is worth taking. Think like an \
-experienced reseller who buys for profit *and* personal enjoyment and who \
-understands the German eBay market deeply.
+experienced reseller who buys purely for **resale profit** and who \
+understands the German eBay market deeply. Do NOT factor in personal \
+enjoyment, nostalgia, or collector value — only resale profit matters.
 
 ### ABSOLUTE RULE — THE 2 € THRESHOLD
 > If a game (or bundle) is listed as **working/functional** and the total \
 price (including shipping) is **≤ 2 €**, it is ALWAYS rated **"Must Buy"** \
 regardless of market value, popularity, or condition.  
 > State this rule explicitly in your verdict when it applies.
+
+### SPORTS & KINECT BUNDLES — INSTANT AVOID
+Sports game franchises and Kinect titles have **minimal resale value** on \
+the German secondhand market. Apply these rules immediately, before any \
+other analysis:
+- Any listing dominated by **FIFA**, **Forza**, **TopSpin**, **NBA 2K**, \
+**PES** (Pro Evolution Soccer), **Madden**, **NHL**, **WRC**, **MotoGP**, \
+**Just Dance**, **Dance Central**, **Wii Sports**, or similar annual sports \
+franchise titles → rate **"Avoid"** immediately. These titles flood the \
+secondhand market and rarely fetch more than €1–3 each, making profit \
+impossible on a bundle.
+- Any listing featuring **Kinect** hardware or games (Kinect Adventures, \
+Kinect Sports, Kinect Star Wars, Just Dance for Kinect, Dance Central, \
+etc.) → rate **"Avoid"**. Kinect accessories and Kinect-only games have \
+near-zero resale value today.
+- Exception: only bump above "Avoid" if the listing also contains clearly \
+identified **rare or high-value non-sports titles** that outweigh the \
+sports/Kinect content in resale value and provide meaningful net profit.
+
+### RATING DECISION — RESALE PROFIT ONLY
+Your `deal_rating` is determined **solely by resale profit potential**:
+- **"Must Buy"**: Estimated resale clearly exceeds (asking price + \
+shipping) by at least 30–40 % gross margin **or** ≥ €8 net profit. A \
+genuinely profitable flip that a reseller should act on immediately.
+- **"Fair"**: Small positive margin (< 30 % gross margin or < €8 net \
+profit), break-even, or uncertain — worth considering only if the price \
+drops further or you already have a buyer lined up.
+- **"Avoid"**: Estimated resale ≤ cost (no profit), high risk, scam/fraud \
+detected, or the listing is dominated by low-demand categories (sports/ \
+Kinect bundles, common shovelware).
 
 ### ANALYSIS PROTOCOL
 1. **SCAM / BAIT-AND-SWITCH DETECTION (CHECK THIS FIRST)**
@@ -132,9 +163,11 @@ higher caution.
    - Estimate fair market value for this item **in the condition shown** on \
 German eBay (ebay.de sold listings benchmark).
    - Assess real-world resell-ability: Is this game/console in demand right \
-now? Is it rare or common?
-   - Factor in game popularity, nostalgia value, collector demand, and whether \
-it tends to sell quickly on Kleinanzeigen/eBay.de.
+now? Is it rare or common on Kleinanzeigen/eBay.de?
+   - Calculate estimated gross profit: resale value − asking price − \
+shipping. Use this number to determine the rating per the RATING DECISION \
+thresholds above. Do NOT let nostalgia, collector interest, or personal \
+preference influence the rating — only profit counts.
 
 ### OUTPUT FORMAT
 Return **only** a JSON object (no markdown fences, no commentary) with \
@@ -166,14 +199,44 @@ _BATCH_SYSTEM_PROMPT = """\
 You are a **Professional eBay Deal Examiner** specialising in the German \
 secondhand gaming market. Your job is to give the buyer a thorough, \
 actionable verdict on each deal. Think like an experienced reseller who \
-buys for profit *and* personal enjoyment and who understands the German \
-eBay market deeply.
+buys purely for **resale profit** and who understands the German eBay \
+market deeply. Do NOT factor in personal enjoyment, nostalgia, or \
+collector value — only resale profit matters.
 
 ### ABSOLUTE RULE — THE 2 € THRESHOLD
 > If a game (or bundle) is listed as **working/functional** and the total \
 price (including shipping) is **≤ 2 €**, it is ALWAYS rated **"Must Buy"** \
 regardless of market value, popularity, or condition.  
 > State this rule explicitly in the verdict when it applies.
+
+### SPORTS & KINECT BUNDLES — INSTANT AVOID
+Sports game franchises and Kinect titles have **minimal resale value** on \
+the German secondhand market. Apply these rules immediately, before any \
+other analysis:
+- Any listing dominated by **FIFA**, **Forza**, **TopSpin**, **NBA 2K**, \
+**PES** (Pro Evolution Soccer), **Madden**, **NHL**, **WRC**, **MotoGP**, \
+**Just Dance**, **Dance Central**, **Wii Sports**, or similar annual sports \
+franchise titles → rate **"Avoid"** immediately. These titles flood the \
+secondhand market and rarely fetch more than €1–3 each, making profit \
+impossible on a bundle.
+- Any listing featuring **Kinect** hardware or games (Kinect Adventures, \
+Kinect Sports, Kinect Star Wars, Just Dance for Kinect, Dance Central, \
+etc.) → rate **"Avoid"**. Kinect accessories and Kinect-only games have \
+near-zero resale value today.
+- Exception: only bump above "Avoid" if the listing also contains clearly \
+identified **rare or high-value non-sports titles** that outweigh the \
+sports/Kinect content in resale value and provide meaningful net profit.
+
+### RATING DECISION — RESALE PROFIT ONLY
+Your `deal_rating` is determined **solely by resale profit potential**:
+- **"Must Buy"**: Estimated resale clearly exceeds (asking price + \
+shipping) by at least 30–40 % gross margin **or** ≥ €8 net profit. A \
+genuinely profitable flip.
+- **"Fair"**: Small positive margin (< 30 % gross margin or < €8 net \
+profit), break-even, or uncertain — worth considering only if the price \
+drops or you have a buyer.
+- **"Avoid"**: Estimated resale ≤ cost (no profit), scam/fraud detected, \
+or dominated by low-demand categories (sports/Kinect, common shovelware).
 
 ### BUNDLE RESALE RULE
 > Whenever a listing appears to be a **multi-game lot or bundle** \
@@ -285,11 +348,13 @@ higher caution.
    - Estimate fair market value for the item **in the condition shown** on \
 German eBay (ebay.de sold listings benchmark).
    - Assess real-world resell-ability: Is this game/console in demand right \
-now? Is it rare or common?
-   - Factor in game popularity, nostalgia value, collector demand, and whether \
-it tends to sell quickly on Kleinanzeigen/eBay.de.
+now? Is it rare or common on Kleinanzeigen/eBay.de?
    - For **bundles**: identify the most and least valuable games in the lot; \
 estimate per-game and total resale value; compute profit margin.
+   - Calculate estimated gross profit: resale value − asking price − \
+shipping. Use this number to determine the rating per the RATING DECISION \
+thresholds above. Do NOT let nostalgia, collector interest, or personal \
+preference influence the rating — only profit counts.
 
 ### OUTPUT FORMAT
 You MUST return a **single JSON array** where each element corresponds to one \
@@ -418,6 +483,112 @@ _BUNDLE_TITLE_KEYWORDS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ---------------------------------------------------------------------------
+# Deterministic sports / Kinect deal detector
+# ---------------------------------------------------------------------------
+
+# Sports franchises and Kinect titles that have minimal resale value.
+# Checked against the deal title (case-insensitive).
+_SPORTS_KINECT_KEYWORDS_RE = re.compile(
+    r"\b("
+    r"kinect"
+    r"|fifa"
+    r"|topspin|top[\s\-]spin"
+    r"|forza"
+    r"|nba\s*2k|nba\s*live|nba\b"
+    r"|nhl\b"
+    r"|madden"
+    r"|pes\b|pro\s+evolution\s+soccer"
+    r"|wwe\b"
+    r"|ufc\b"
+    r"|motogp"
+    r"|tour\s+de\s+france"
+    r"|just\s+dance"
+    r"|dance\s+central"
+    r"|wii\s+sports"
+    r"|wrc\b"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+# Human-readable prefix prepended to verdict_summary when a sports/Kinect
+# override fires, so the user sees a clear, consistent explanation.
+_SPORTS_KINECT_AVOID_PREFIX = (
+    "⛔ **SPORTS/KINECT — AVOID**: This listing contains sports or "
+    "Kinect game titles (FIFA, Forza, TopSpin, Kinect, etc.) that "
+    "have minimal resale value in the current German eBay market. "
+    "These titles rarely generate profit and are best avoided unless "
+    "the bundle also contains clearly high-value non-sports games."
+)
+
+
+def _detect_sports_kinect_deal(deal: Dict) -> Optional[str]:
+    """Deterministic check for sports-franchise or Kinect-themed listings.
+
+    Sports game franchises (FIFA, Forza, TopSpin, NBA, PES, Madden, etc.)
+    and Kinect titles have very low resale value in the German eBay market
+    and should be rated "Avoid" by default.
+
+    Returns a warning string if sports/Kinect content is detected in the
+    title, ``None`` otherwise.
+    """
+    title = (deal.get("title") or "").strip()
+    if not title:
+        return None
+
+    match = _SPORTS_KINECT_KEYWORDS_RE.search(title)
+    if not match:
+        return None
+
+    keyword = match.group(0)
+    short_title = title[:80] + ("..." if len(title) > 80 else "")
+    return (
+        f"SPORTS/KINECT CONTENT DETECTED: Title '{short_title}' contains "
+        f"sports or Kinect keyword '{keyword}'. Sports game franchises "
+        f"(FIFA, Forza, TopSpin, etc.) and Kinect titles have very low "
+        f"resale value in the German eBay market and rarely generate "
+        f"meaningful profit."
+    )
+
+
+def _apply_sports_kinect_override(deal: Dict, assessment: Dict) -> Dict:
+    """Apply a deterministic 'Avoid' override for sports/Kinect themed deals.
+
+    If ``_detect_sports_kinect_deal`` fires, this function forces
+    ``ai_deal_rating`` to ``"Avoid"`` and prepends a clear explanation to
+    the verdict summary and red flags.
+
+    Always returns *assessment* (mutated in-place if overridden).
+    """
+    warning = _detect_sports_kinect_deal(deal)
+    if warning is None:
+        return assessment
+
+    logger.info(
+        "GeminiAssessor: Sports/Kinect override applied for listing %r",
+        deal.get("title", "?"),
+    )
+
+    assessment["ai_deal_rating"] = "Avoid"
+
+    existing_flags = assessment.get("ai_red_flags")
+    if not isinstance(existing_flags, list):
+        existing_flags = []
+    if "Sports/Kinect content: low resale value" not in existing_flags:
+        assessment["ai_red_flags"] = existing_flags + [
+            "Sports/Kinect content: low resale value"
+        ]
+
+    existing_summary = assessment.get("ai_verdict_summary", "")
+    if existing_summary:
+        assessment["ai_verdict_summary"] = (
+            f"{_SPORTS_KINECT_AVOID_PREFIX}\n\n{existing_summary}"
+        )
+    else:
+        assessment["ai_verdict_summary"] = _SPORTS_KINECT_AVOID_PREFIX
+
+    return assessment
 
 def _detect_bundle_individual_sale_scam(deal: Dict) -> Optional[str]:
     """Deterministic check for the 'bundle title + individual-unit sale' scam.
@@ -609,6 +780,7 @@ class GeminiAssessor:
                 ),
             )
             result = self._parse_response(response.text)
+            result = _apply_sports_kinect_override(deal, result)
             return _apply_scam_override(deal, result)
         except Exception as exc:
             if _is_rate_limit_error(exc):
@@ -663,9 +835,12 @@ class GeminiAssessor:
         for batch_start in range(0, len(deals), _BATCH_SIZE):
             batch = deals[batch_start : batch_start + _BATCH_SIZE]
             batch_results = self._assess_batch_with_retry(batch)
-            # Apply the deterministic scam override for each deal in the batch.
+            # Apply deterministic overrides for each deal in the batch.
+            # Sports/Kinect override runs first, then scam override (scam takes
+            # priority and can further modify the already-overridden assessment).
             for i, (deal, assessment) in enumerate(zip(batch, batch_results)):
                 if assessment is not None:
+                    assessment = _apply_sports_kinect_override(deal, assessment)
                     batch_results[i] = _apply_scam_override(deal, assessment)
             results.extend(batch_results)
 
