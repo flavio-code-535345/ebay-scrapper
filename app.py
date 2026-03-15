@@ -509,7 +509,12 @@ def deal_skip():
     url = (data.get('url') or '').strip()
     if not url:
         return jsonify({'error': 'url is required'}), 400
-    database.skip_deal(url)
+    title = str(data.get('title') or '')[:500]
+    try:
+        price = float(data.get('price') or 0)
+    except (TypeError, ValueError):
+        price = 0.0
+    database.skip_deal(url, title, price)
     return jsonify({'skipped': True, 'url': url})
 
 
@@ -528,8 +533,8 @@ def deal_unskip():
 
 @app.route('/api/deals/skipped', methods=['GET'])
 def deal_skipped_list():
-    """Return all skipped deal URLs."""
-    return jsonify(database.get_skipped_deal_urls())
+    """Return all skipped deals with full metadata."""
+    return jsonify(database.get_skipped_deals())
 
 
 if __name__ == '__main__':

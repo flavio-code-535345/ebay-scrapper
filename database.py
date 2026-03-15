@@ -83,9 +83,15 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS user_skipped_deals (
             url TEXT PRIMARY KEY NOT NULL,
+            title TEXT,
+            price REAL,
             skipped_at REAL NOT NULL
         );
     """)
+
+    # Migrate existing user_skipped_deals tables that are missing the new columns.
+    _add_column_if_missing(cursor, "user_skipped_deals", "title", "TEXT")
+    _add_column_if_missing(cursor, "user_skipped_deals", "price", "REAL")
 
     # Key-value settings store.
     cursor.executescript("""
@@ -106,7 +112,7 @@ def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> No
     prevent SQL injection through these DDL-level parameters (SQLite does not
     support parameterised DDL statements).
     """
-    _ALLOWED_TABLES = {"deals", "searches"}
+    _ALLOWED_TABLES = {"deals", "searches", "user_skipped_deals"}
     _ALLOWED_COLUMNS = {
         "ai_deal_rating",
         "ai_confidence_score",
@@ -123,6 +129,8 @@ def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> No
         "description",
         "seller_count",
         "listing_date",
+        "title",
+        "price",
     }
     _ALLOWED_TYPES = {
         "TEXT",
@@ -351,14 +359,15 @@ def is_deal_saved(url: str) -> bool:
 
 # ── User-skipped deals ────────────────────────────────────────────────────────
 
-def skip_deal(url: str) -> None:
+def skip_deal(url: str, title: str = "", price: float = 0.0) -> None:
     """Mark a deal URL as skipped so it is excluded from future searches."""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO user_skipped_deals (url, skipped_at) VALUES (?, ?)"
-        " ON CONFLICT(url) DO UPDATE SET skipped_at = excluded.skipped_at",
-        (url, time.time()),
+        "INSERT INTO user_skipped_deals (url, title, price, skipped_at) VALUES (?, ?, ?, ?)"
+        " ON CONFLICT(url) DO UPDATE SET title = excluded.title,"
+        " price = excluded.price, skipped_at = excluded.skipped_at",
+        (url, title, price, time.time()),
     )
     conn.commit()
     conn.close()
@@ -379,5 +388,17 @@ def get_skipped_deal_urls() -> List[str]:
     cursor = conn.cursor()
     cursor.execute("SELECT url FROM user_skipped_deals")
     rows = [row['url'] for row in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_skipped_deals() -> List[Dict]:
+    """Return all skipped deals ordered by most recently skipped."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT url, title, price, skipped_at FROM user_skipped_deals ORDER BY skipped_at DESC"
+    )
+    rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return rows
