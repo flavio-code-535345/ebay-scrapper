@@ -193,15 +193,19 @@ images (empty list if no images)
 - `"red_flags"`: list of strings — risks from text, photos, or seller profile
 - `"fair_market_estimate"`: string — estimated market value in current \
 condition, e.g. `"~€12–18"`
-- `"itemized_resale_estimates"`: list of objects — for bundles, one entry per \
-identified game in the lot; each entry must have keys `"game"` (string title), \
-`"price_eur"` (number, estimated resale price), and `"price_source"` \
-(`"ebay_sold"`, `"ebay_active"`, or `"ai_estimate"`); use provided \
-`Fetched eBay Prices` data when available, otherwise estimate; use empty \
-list `[]` for single-item listings
+- `"itemized_resale_estimates"`: list of objects — one entry per item to be \
+resold; for bundles, one entry per identified game; for **single-item \
+listings**, include exactly one entry for the item itself with its estimated \
+resale value — **never use an empty list for a single-item listing**; each \
+entry must have keys `"game"` (string title), `"price_eur"` (number, \
+estimated resale price in EUR), and `"price_source"` (`"ebay_sold"`, \
+`"ebay_active"`, or `"ai_estimate"`); use provided `Fetched eBay Market \
+Price` or `Fetched eBay Prices` data when available, otherwise estimate
 - `"estimated_total_cost"`: number — asking price + shipping in EUR (0 if unknown)
-- `"estimated_gross_profit"`: number — sum of itemized_resale_estimates \
-price_eur values minus estimated_total_cost (0 if not applicable)
+- `"estimated_gross_profit"`: number — sum of all itemized_resale_estimates \
+price_eur values minus estimated_total_cost; **always compute this value** — \
+it is the sole basis for deal_rating; a value of 0 is only correct if you \
+genuinely have no resale estimate at all
 - `"verdict_summary"`: markdown string — 3–5 sentences covering price vs. \
 market value, condition, resell-ability, and a clear recommendation with \
 reasoning; invoke the 2 € rule explicitly when applicable; if \
@@ -393,15 +397,19 @@ images (empty list if no images)
 - `"red_flags"`: list of strings — risks from text, photos, or seller profile
 - `"fair_market_estimate"`: string — estimated market value in current \
 condition, e.g. `"~€12–18"`
-- `"itemized_resale_estimates"`: list of objects — for bundles, one entry per \
-identified game in the lot; each entry must have keys `"game"` (string title), \
-`"price_eur"` (number, estimated resale price), and `"price_source"` \
-(`"ebay_sold"`, `"ebay_active"`, or `"ai_estimate"`); use provided \
-`Fetched eBay Prices` data when available, otherwise estimate; use empty \
-list `[]` for single-item listings
+- `"itemized_resale_estimates"`: list of objects — one entry per item to be \
+resold; for bundles, one entry per identified game; for **single-item \
+listings**, include exactly one entry for the item itself with its estimated \
+resale value — **never use an empty list for a single-item listing**; each \
+entry must have keys `"game"` (string title), `"price_eur"` (number, \
+estimated resale price in EUR), and `"price_source"` (`"ebay_sold"`, \
+`"ebay_active"`, or `"ai_estimate"`); use provided `Fetched eBay Market \
+Price` or `Fetched eBay Prices` data when available, otherwise estimate
 - `"estimated_total_cost"`: number — asking price + shipping in EUR (0 if unknown)
-- `"estimated_gross_profit"`: number — sum of itemized_resale_estimates \
-price_eur values minus estimated_total_cost (0 if not applicable)
+- `"estimated_gross_profit"`: number — sum of all itemized_resale_estimates \
+price_eur values minus estimated_total_cost; **always compute this value** — \
+it is the sole basis for deal_rating; a value of 0 is only correct if you \
+genuinely have no resale estimate at all
 - `"verdict_summary"`: markdown string — 3–5 sentences covering price vs. \
 market value, condition, resell-ability, and a clear recommendation; for \
 bundles include the resale breakdown described above; invoke the 2 € rule \
@@ -570,6 +578,56 @@ def _extract_platform_name(title: str) -> str:
         if pattern.search(title):
             return canonical
     return ""
+
+
+# Condition / noise words commonly found in single-game eBay listing titles
+# that should be stripped when building a clean search query.
+_SINGLE_GAME_NOISE_RE = re.compile(
+    r"\b(gebraucht|neuwertig|neu|sehr\s+gut|gut|akzeptabel|like\s+new|used"
+    r"|top\s+zustand|komplett|ovp|cib|sealed|ungetestet|defekt|pal|ntsc"
+    r"|deutsch|german|für|fuer|for|ohne|inkl(?:usive)?|mit|version"
+    r"|spiel\b|game\b)\b",
+    re.IGNORECASE,
+)
+
+
+def _build_single_game_search_query(title: str) -> str:
+    """Build an eBay search query for a single-game listing.
+
+    Strips platform keywords and condition/noise words from *title*, then
+    appends the canonical platform name in the required format::
+
+        "GAME NAME (PLATFORM NAME)"
+
+    If no platform can be detected the cleaned title is returned as-is.
+
+    Examples::
+
+        "Halo 3 Xbox 360 gebraucht"       → "Halo 3  (Microsoft Xbox 360)"
+        "Batman Arkham Knight PS4 OVP neu" → "Batman Arkham Knight  (Sony PlayStation 4)"
+        "Zelda Breath of the Wild Switch"  → "Zelda Breath of the  (Nintendo Switch)"
+    """
+    platform = _extract_platform_name(title)
+
+    cleaned = title.strip()
+
+    # Strip every platform pattern so the canonical name is never doubled.
+    for pattern, _ in _PLATFORM_MAP:
+        cleaned = pattern.sub(" ", cleaned)
+
+    # Strip condition/noise words.
+    cleaned = _SINGLE_GAME_NOISE_RE.sub(" ", cleaned)
+
+    # Collapse extra whitespace.
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t\n:()-")
+
+    if len(cleaned) < 3:
+        # Cleaning was too aggressive – fall back to full original title.
+        cleaned = title.strip()
+
+    if platform:
+        return f"{cleaned} ({platform})"
+    return cleaned
 
 
 # Words that are never game titles on their own; filtered from extracted candidates.
@@ -1168,6 +1226,58 @@ class GeminiAssessor:
         )
         return results
 
+    def _fetch_ebay_price_for_single_listing(self, deal: Dict) -> Optional[float]:
+        """Fetch the current lowest eBay price for a single-game listing.
+
+        Uses the format ``"GAME NAME (PLATFORM NAME)"`` as required for
+        accurate minimum-price lookups.  Returns the price in EUR, or
+        ``None`` when the eBay client is unavailable or the search yields
+        no results.
+
+        Bundle listings are skipped here — they are handled by
+        :meth:`_fetch_ebay_prices_for_bundle`.
+        """
+        if self._ebay_client is None:
+            return None
+
+        title = deal.get("title", "")
+        if not title:
+            return None
+
+        # Bundle listings are handled by _fetch_ebay_prices_for_bundle.
+        if _BUNDLE_TITLE_KEYWORDS_RE.search(title):
+            return None
+
+        query = _build_single_game_search_query(title)
+        try:
+            price, source, errs = self._ebay_client.get_median_sold_price(
+                query, max_results=10
+            )
+            for e in errs:
+                logger.debug(
+                    "GeminiAssessor: Single-game price lookup note for %r: %s",
+                    title,
+                    e,
+                )
+            if price is not None:
+                logger.info(
+                    "GeminiAssessor: Single-game market price for %r "
+                    "(query=%r): €%.2f (%s)",
+                    title,
+                    query,
+                    price,
+                    source,
+                )
+            return price
+        except Exception as exc:
+            logger.warning(
+                "GeminiAssessor: Single-game price lookup failed for %r: %s",
+                title,
+                exc,
+            )
+            return None
+
+
     @staticmethod
     def _format_ebay_prices_section(ebay_prices: List[Dict]) -> str:
         """Return a formatted text block describing fetched eBay prices, or empty string."""
@@ -1216,10 +1326,19 @@ class GeminiAssessor:
             prompt_lines.append(image_issues_line.rstrip())
 
         # Inject real eBay prices when available for bundle listings.
+        # For single-game listings, inject the current market price so the AI
+        # can compute an accurate profit estimate and issue GOOD/MUST HAVE ratings.
         ebay_prices = self._fetch_ebay_prices_for_bundle(deal)
         if ebay_prices:
             prices_section = self._format_ebay_prices_section(ebay_prices)
             prompt_lines.append(f"\n{prices_section}")
+        else:
+            single_price = self._fetch_ebay_price_for_single_listing(deal)
+            if single_price is not None:
+                prompt_lines.append(
+                    f"\nFetched eBay Market Price: €{single_price:.2f} "
+                    f"(use as price_eur in itemized_resale_estimates)"
+                )
 
         prompt_lines.append("\nReturn your analysis in the required JSON format.")
         text_prompt = "\n".join(prompt_lines)
@@ -1278,10 +1397,19 @@ class GeminiAssessor:
                 item_lines.append(image_issues_line.rstrip())
 
             # Inject real eBay prices when available for bundle listings.
+            # For single-game listings, inject the current market price so the
+            # AI can compute an accurate profit estimate and issue GOOD/MUST HAVE.
             ebay_prices = self._fetch_ebay_prices_for_bundle(deal)
             if ebay_prices:
                 prices_section = self._format_ebay_prices_section(ebay_prices)
                 item_lines.append(f"\n{prices_section}")
+            else:
+                single_price = self._fetch_ebay_price_for_single_listing(deal)
+                if single_price is not None:
+                    item_lines.append(
+                        f"\nFetched eBay Market Price: €{single_price:.2f} "
+                        f"(use as price_eur in itemized_resale_estimates)"
+                    )
 
             item_text = "\n".join(item_lines)
             parts.append(self._types.Part.from_text(text=item_text))

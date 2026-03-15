@@ -574,3 +574,296 @@ class TestExtractPlatformName:
     def test_more_specific_before_generic(self):
         """Xbox 360 must be matched before bare Xbox."""
         assert _extract_platform_name("Xbox 360 Sammlung") == "Microsoft Xbox 360"
+
+
+# ---------------------------------------------------------------------------
+# _build_single_game_search_query tests
+# ---------------------------------------------------------------------------
+
+
+from gemini_assessor import _build_single_game_search_query
+
+
+class TestBuildSingleGameSearchQuery:
+    """Tests for the single-game eBay search query builder."""
+
+    def test_appends_platform_in_parentheses(self):
+        """Platform is appended in the required '(PLATFORM)' format."""
+        query = _build_single_game_search_query("Halo 3 Xbox 360 gebraucht")
+        assert query.endswith("(Microsoft Xbox 360)")
+
+    def test_strips_condition_words(self):
+        """Common condition words (gebraucht, neu, OVP, etc.) are stripped."""
+        query = _build_single_game_search_query("Batman Arkham Knight PS4 gebraucht OVP")
+        assert "gebraucht" not in query.lower()
+        assert "ovp" not in query.lower()
+
+    def test_strips_platform_from_body(self):
+        """Platform keywords are removed from the game-name part of the query."""
+        query = _build_single_game_search_query("Halo 3 Xbox 360 gebraucht")
+        # Platform name should appear exactly once, inside the parentheses.
+        assert query.count("Xbox 360") == 1
+        assert query.count("Microsoft Xbox 360") == 1
+
+    def test_ps4_platform(self):
+        """PlayStation 4 is recognised and formatted correctly."""
+        query = _build_single_game_search_query("God of War PS4")
+        assert "(Sony PlayStation 4)" in query
+
+    def test_switch_platform(self):
+        """Nintendo Switch is recognised and formatted correctly."""
+        query = _build_single_game_search_query("Zelda Breath of the Wild Nintendo Switch")
+        assert "(Nintendo Switch)" in query
+
+    def test_no_platform_returns_cleaned_title(self):
+        """Without a detected platform the cleaned title is returned as-is."""
+        query = _build_single_game_search_query("Cyberpunk 2077")
+        assert "(" not in query
+        assert "Cyberpunk" in query
+
+    def test_fallback_on_over_cleaning(self):
+        """If cleaning removes too much the original title is used as fallback."""
+        # A title that is entirely composed of condition/platform words
+        query = _build_single_game_search_query("Xbox 360 gebraucht neu")
+        # Result should still be non-empty
+        assert len(query) >= 3
+
+    def test_empty_title_returns_empty(self):
+        """Empty input returns empty string."""
+        assert _build_single_game_search_query("") == ""
+
+    def test_xbox_one_platform(self):
+        """Xbox One is correctly detected and formatted."""
+        query = _build_single_game_search_query("Forza Horizon 4 Xbox One")
+        assert "(Microsoft Xbox One)" in query
+
+    def test_ps3_platform(self):
+        """PlayStation 3 is correctly detected."""
+        query = _build_single_game_search_query("Dark Souls PS3 sehr gut")
+        assert "(Sony PlayStation 3)" in query
+
+
+# ---------------------------------------------------------------------------
+# Tests: GOOD / MUST HAVE rated bundles are not blocked by overrides
+# ---------------------------------------------------------------------------
+
+
+class TestGoodMustHaveBundlesNotBlocked:
+    """Verify that legitimate non-sports, non-scam bundles can receive
+    GOOD or MUST HAVE ratings — i.e. the deterministic overrides do NOT
+    fire for them and must not convert those ratings to 'Avoid'."""
+
+    # ── Must Have scenarios ───────────────────────────────────────────
+
+    def test_must_have_stays_must_have_for_genuine_bundle(self):
+        """A genuine bundle (qty=1, no sports) keeps a 'Must Have' AI rating."""
+        deal = {
+            "title": "Xbox 360 Bundle: Halo 3, Gears of War, Mass Effect",
+            "seller_count": "1 verfügbar",
+        }
+        assessment = _make_assessment(ai_deal_rating="Must Have")
+        result = _apply_scam_override(deal, assessment)
+        result = _apply_sports_kinect_override(deal, result)
+        assert result["ai_deal_rating"] == "Must Have"
+        assert result["ai_potential_scam"] is False
+
+    def test_must_have_stays_must_have_ps3_rpg_bundle(self):
+        """PS3 RPG bundle at low price: both overrides leave 'Must Have' intact."""
+        deal = {
+            "title": "PS3 Spielesammlung: Final Fantasy XIII, Dark Souls, Skyrim",
+            "seller_count": "1 verfügbar",
+        }
+        assessment = _make_assessment(ai_deal_rating="Must Have")
+        result = _apply_scam_override(deal, assessment)
+        result = _apply_sports_kinect_override(deal, result)
+        assert result["ai_deal_rating"] == "Must Have"
+
+    def test_must_have_stays_for_single_game_no_bundle_keyword(self):
+        """Single-game listing (no bundle keyword) is never scam-flagged."""
+        deal = {
+            "title": "Red Dead Redemption 2 PS4",
+            "seller_count": "5 verfügbar",
+        }
+        assessment = _make_assessment(ai_deal_rating="Must Have")
+        result = _apply_scam_override(deal, assessment)
+        result = _apply_sports_kinect_override(deal, result)
+        assert result["ai_deal_rating"] == "Must Have"
+        assert result["ai_potential_scam"] is False
+
+    # ── Good scenarios ───────────────────────────────────────────────
+
+    def test_good_stays_good_for_genuine_bundle(self):
+        """A genuine adventure-game bundle keeps a 'Good' AI rating."""
+        deal = {
+            "title": "Switch Bundle: Mario Odyssey, Zelda, Kirby",
+            "seller_count": "1 verfügbar",
+        }
+        assessment = _make_assessment(ai_deal_rating="Good")
+        result = _apply_scam_override(deal, assessment)
+        result = _apply_sports_kinect_override(deal, result)
+        assert result["ai_deal_rating"] == "Good"
+        assert result["ai_potential_scam"] is False
+
+    def test_good_stays_good_for_single_rpg_game(self):
+        """Non-sports single-game listing keeps a 'Good' rating."""
+        deal = {
+            "title": "God of War Ragnarok PS5 wie neu",
+            "seller_count": "3 verfügbar",
+        }
+        assessment = _make_assessment(ai_deal_rating="Good")
+        result = _apply_scam_override(deal, assessment)
+        result = _apply_sports_kinect_override(deal, result)
+        assert result["ai_deal_rating"] == "Good"
+
+    # ── Sports/Kinect still blocked ──────────────────────────────────
+
+    def test_sports_bundle_is_avoided_even_if_ai_said_good(self):
+        """Sports/Kinect override correctly demotes a would-be 'Good' rating."""
+        deal = {"title": "Xbox 360 Bundle FIFA 22 + Forza 4 + Kinect Adventures"}
+        assessment = _make_assessment(ai_deal_rating="Good")
+        result = _apply_sports_kinect_override(deal, assessment)
+        assert result["ai_deal_rating"] == "Avoid"
+
+    def test_scam_bundle_is_avoided_even_if_ai_said_must_have(self):
+        """Scam override correctly demotes a would-be 'Must Have' rating."""
+        deal = {
+            "title": "Xbox 360 Spielesammlung 20 Spiele",
+            "seller_count": "10 verfügbar, 5 verkauft",
+        }
+        assessment = _make_assessment(ai_deal_rating="Must Have")
+        result = _apply_scam_override(deal, assessment)
+        assert result["ai_deal_rating"] == "Avoid"
+        assert result["ai_potential_scam"] is True
+
+
+# ---------------------------------------------------------------------------
+# _parse_batch_response correctly preserves GOOD / MUST HAVE ratings
+# ---------------------------------------------------------------------------
+
+
+import json
+from gemini_assessor import GeminiAssessor
+
+
+class TestParseBatchResponseGoodMustHave:
+    """Verify _parse_batch_response faithfully forwards 'Good' and
+    'Must Have' deal_rating values from the AI JSON response."""
+
+    def _parse(self, payload):
+        return GeminiAssessor._parse_batch_response(json.dumps(payload), len(payload))
+
+    def test_must_have_rating_preserved(self):
+        payload = [
+            {
+                "deal_rating": "Must Have",
+                "confidence_score": 95,
+                "potential_scam": False,
+                "scam_warning": "",
+                "visual_findings": [],
+                "red_flags": [],
+                "fair_market_estimate": "~€40",
+                "itemized_resale_estimates": [
+                    {"game": "Halo 3", "price_eur": 12.0, "price_source": "ebay_sold"},
+                    {"game": "Gears of War", "price_eur": 10.0, "price_source": "ebay_sold"},
+                ],
+                "estimated_total_cost": 8.99,
+                "estimated_gross_profit": 13.01,
+                "verdict_summary": "Excellent profit potential.",
+            }
+        ]
+        result = self._parse(payload)
+        assert len(result) == 1
+        assert result[0]["ai_deal_rating"] == "Must Have"
+        assert result[0]["ai_assessed"] is True
+        assert result[0]["ai_estimated_gross_profit"] == pytest.approx(13.01)
+
+    def test_good_rating_preserved(self):
+        payload = [
+            {
+                "deal_rating": "Good",
+                "confidence_score": 80,
+                "potential_scam": False,
+                "scam_warning": "",
+                "visual_findings": [],
+                "red_flags": [],
+                "fair_market_estimate": "~€20",
+                "itemized_resale_estimates": [
+                    {"game": "Batman Arkham Knight", "price_eur": 18.0, "price_source": "ebay_active"},
+                ],
+                "estimated_total_cost": 10.99,
+                "estimated_gross_profit": 7.01,
+                "verdict_summary": "Good profit potential.",
+            }
+        ]
+        result = self._parse(payload)
+        assert len(result) == 1
+        assert result[0]["ai_deal_rating"] == "Good"
+        assert result[0]["ai_assessed"] is True
+        assert result[0]["ai_estimated_gross_profit"] == pytest.approx(7.01)
+
+    def test_mixed_batch_ratings_preserved(self):
+        """Batch with Must Have, Good, Okay, Avoid all preserved correctly."""
+        payload = [
+            {"deal_rating": "Must Have", "confidence_score": 90, "potential_scam": False,
+             "scam_warning": "", "visual_findings": [], "red_flags": [],
+             "fair_market_estimate": "~€50",
+             "itemized_resale_estimates": [
+                 {"game": "Halo 3 Xbox 360", "price_eur": 50.0, "price_source": "ebay_sold"}
+             ],
+             "estimated_total_cost": 10.0, "estimated_gross_profit": 40.0,
+             "verdict_summary": "Amazing."},
+            {"deal_rating": "Good", "confidence_score": 75, "potential_scam": False,
+             "scam_warning": "", "visual_findings": [], "red_flags": [],
+             "fair_market_estimate": "~€25",
+             "itemized_resale_estimates": [
+                 {"game": "Batman Arkham Knight PS4", "price_eur": 25.0, "price_source": "ebay_active"}
+             ],
+             "estimated_total_cost": 15.0, "estimated_gross_profit": 10.0,
+             "verdict_summary": "Good."},
+            {"deal_rating": "Okay", "confidence_score": 60, "potential_scam": False,
+             "scam_warning": "", "visual_findings": [], "red_flags": [],
+             "fair_market_estimate": "~€12",
+             "itemized_resale_estimates": [
+                 {"game": "Minecraft Xbox 360", "price_eur": 12.0, "price_source": "ai_estimate"}
+             ],
+             "estimated_total_cost": 10.0, "estimated_gross_profit": 2.0,
+             "verdict_summary": "Decent."},
+            {"deal_rating": "Avoid", "confidence_score": 85, "potential_scam": False,
+             "scam_warning": "", "visual_findings": [], "red_flags": [],
+             "fair_market_estimate": "~€8",
+             "itemized_resale_estimates": [
+                 {"game": "FIFA 22 PS4", "price_eur": 3.0, "price_source": "ebay_sold"}
+             ],
+             "estimated_total_cost": 10.0, "estimated_gross_profit": -7.0,
+             "verdict_summary": "Loss."},
+        ]
+        results = self._parse(payload)
+        assert len(results) == 4
+        ratings = [r["ai_deal_rating"] for r in results]
+        assert ratings == ["Must Have", "Good", "Okay", "Avoid"]
+        for r in results:
+            assert r["ai_assessed"] is True
+
+    def test_itemized_resale_estimates_for_single_game(self):
+        """Single-game itemized_resale_estimates with one entry is stored correctly."""
+        payload = [
+            {
+                "deal_rating": "Good",
+                "confidence_score": 78,
+                "potential_scam": False,
+                "scam_warning": "",
+                "visual_findings": [],
+                "red_flags": [],
+                "fair_market_estimate": "~€15",
+                "itemized_resale_estimates": [
+                    {"game": "Halo 3 Xbox 360", "price_eur": 15.0, "price_source": "ebay_sold"},
+                ],
+                "estimated_total_cost": 8.99,
+                "estimated_gross_profit": 6.01,
+                "verdict_summary": "Good single-game flip.",
+            }
+        ]
+        result = self._parse(payload)
+        assert result[0]["ai_deal_rating"] == "Good"
+        assert len(result[0]["ai_itemized_resale_estimates"]) == 1
+        assert result[0]["ai_itemized_resale_estimates"][0]["price_eur"] == 15.0
