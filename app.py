@@ -40,6 +40,20 @@ if _saved_ai_enabled is not None:
     gemini.user_enabled = str(_saved_ai_enabled).lower() == "true"
 
 
+def _db_ai_user_enabled() -> bool:
+    """Read the user's AI-enabled toggle from the database.
+
+    Always reads from the shared SQLite database rather than the in-memory
+    ``gemini.user_enabled`` attribute so that multi-worker (Gunicorn)
+    deployments remain consistent: updating the setting in one worker is
+    immediately visible to all other workers on the next request.
+
+    Defaults to ``True`` when no setting has been persisted yet.
+    """
+    val = database.get_setting("ai_enabled")
+    return str(val).lower() == "true" if val is not None else True
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -83,7 +97,11 @@ def search():
     # AI assessment via Gemini: send only the top filtered deals in a single
     # request to minimise quota consumption rather than calling once per deal.
     # Skip entirely when the user has disabled AI evaluation via the toggle.
-    ai_active = gemini.enabled and gemini.user_enabled
+    # Re-read ai_enabled from the database on every request so that the toggle
+    # is respected in multi-worker (Gunicorn) deployments where in-memory state
+    # is not shared across processes.
+    _user_enabled = _db_ai_user_enabled()
+    ai_active = gemini.enabled and _user_enabled
     ai_assessments = gemini.assess_deals_batch(deals_filtered) if (deals_filtered and ai_active) else []
 
     if gemini.enabled and ai_assessments:
@@ -141,7 +159,7 @@ def search():
         'deal_count': len(assessed),
         'deals': assessed,
         'errors': search_errors,
-        'ai_enabled': gemini.enabled and gemini.user_enabled,
+        'ai_enabled': gemini.enabled and _user_enabled,
         'ai_rate_limited': gemini.is_rate_limited,
         'ai_paused_seconds': round(paused_seconds),
     })
@@ -178,7 +196,7 @@ def health():
     paused_seconds = max(0.0, gemini.rate_limited_until - time.monotonic())
     return jsonify({
         'status': 'healthy',
-        'ai_enabled': gemini.enabled and gemini.user_enabled,
+        'ai_enabled': gemini.enabled and _db_ai_user_enabled(),
         'ai_rate_limited': gemini.is_rate_limited,
         'ai_paused_seconds': round(paused_seconds),
         'ai_model': gemini.model_name,
@@ -189,7 +207,7 @@ def health():
 def get_settings():
     return jsonify({
         'gemini_model': gemini.model_name,
-        'ai_enabled': gemini.user_enabled,
+        'ai_enabled': _db_ai_user_enabled(),
     })
 
 
