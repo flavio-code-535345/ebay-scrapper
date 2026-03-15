@@ -12,7 +12,6 @@ from flask import Flask, request, jsonify, render_template, Response
 
 from scraper import EbayScraper
 from ebay_api_client import EbayApiClient
-from deal_assessor import DealAssessor
 from gemini_assessor import GeminiAssessor, _detect_sports_kinect_deal
 import database
 
@@ -26,7 +25,6 @@ app = Flask(__name__)
 
 scraper = EbayScraper()
 ebay_api = EbayApiClient()
-assessor = DealAssessor()
 gemini = GeminiAssessor()
 
 database.init_db()
@@ -229,24 +227,10 @@ def search():
             filtered_sports,
         )
 
-    # Rules-based assessment (always available as baseline/fallback).
-    rules_assessments = [assessor.assess_deal(deal) for deal in deals]
-
-    # Filter to the top 50 decent bundle deals before sending to Gemini:
-    # sort by rules score descending, drop low-quality entries, cap at 50
-    # (matches _BATCH_SIZE in gemini_assessor so all deals go in one request).
-    _DECENT_SCORE_MIN = 50
+    # Cap deals before sending to Gemini — no score-based pre-filtering.
+    # All deals that pass the post-filters above are eligible for AI assessment.
     _MAX_DISPLAY = 50
-    _pairs = sorted(
-        zip(deals, rules_assessments),
-        key=lambda t: -(t[1].get('overall_score') or 0),
-    )
-    _decent = [(d, r) for d, r in _pairs if (r.get('overall_score') or 0) >= _DECENT_SCORE_MIN]
-    if not _decent:
-        _decent = list(_pairs[:_MAX_DISPLAY])
-    _decent = _decent[:_MAX_DISPLAY]
-    deals_filtered = [d for d, _ in _decent]
-    rules_filtered = [r for _, r in _decent]
+    deals_filtered = deals[:_MAX_DISPLAY]
 
     # AI assessment via Gemini: send only the top filtered deals in a single
     # request to minimise quota consumption rather than calling once per deal.
@@ -268,7 +252,7 @@ def search():
         )
         if failed:
             logger.warning(
-                "Gemini batch: %d/%d items failed AI assessment; using rules engine.",
+                "Gemini batch: %d/%d items failed AI assessment.",
                 failed,
                 len(ai_assessments),
             )
@@ -287,22 +271,19 @@ def search():
 
     assessed = []
     for i, deal in enumerate(deals_filtered):
-        rules_assessment = rules_filtered[i]
         ai_assessment = ai_assessments[i] if i < len(ai_assessments) else None
-        assessed.append({**deal, **rules_assessment, **(ai_assessment or {})})
+        assessed.append({**deal, **(ai_assessment or {})})
 
-    # Sort deals: bundles first, then by AI rating and score.
+    # Sort deals: bundles first, then by AI rating and confidence score.
     # Within each group (bundle / single), AI-rated "Must Buy" with high
-    # confidence leads, followed by "Fair", then "Avoid", then rules-only
-    # results ordered by overall_score.
-    _rating_order = {"must buy": 0, "fair": 1, "avoid": 2}
+    # confidence leads, followed by "Okay", then "Avoid", then unrated results.
+    _rating_order = {"must buy": 0, "okay": 1, "avoid": 2}
 
     def _sort_key(d: dict):
         is_single = not _is_bundle(d)  # 0 = bundle, 1 = single game
         ai_order = _rating_order.get((d.get("ai_deal_rating") or "").lower(), 3)
         ai_conf = -(d.get("ai_confidence_score") or 0)
-        score = -(d.get("overall_score") or 0)
-        return (is_single, not d.get("ai_assessed", False), ai_order, ai_conf, score)
+        return (is_single, not d.get("ai_assessed", False), ai_order, ai_conf)
 
     assessed.sort(key=_sort_key)
 

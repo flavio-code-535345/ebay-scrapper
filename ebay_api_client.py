@@ -302,15 +302,17 @@ class EbayApiClient:
     def get_median_sold_price(
         self, query: str, max_results: int = 10
     ) -> "Tuple[Optional[float], str, List[str]]":
-        """Return the median price for *query* from recently sold or active listings.
+        """Return the lowest Buy It Now (BIN/fixed-price) price for *query*.
 
         Tries the eBay Marketplace Insights API (sold/completed listings) first.
         Falls back to the Browse API (active listings) when the Insights API is
-        unavailable or returns no results.
+        unavailable or returns no results.  Only fixed-price (Sofort-kaufen) BIN
+        listings are considered; "For parts or not working" items are excluded so
+        that defective listings do not depress the resale estimate.
 
-        Returns a 3-tuple ``(median_price, source_label, errors)`` where:
+        Returns a 3-tuple ``(lowest_price, source_label, errors)`` where:
 
-        * ``median_price`` – median sale/ask price in the listing currency, or
+        * ``lowest_price`` – lowest BIN sale/ask price in the listing currency, or
           ``None`` when no results are found.
         * ``source_label`` – one of ``"sold_listings"`` or ``"active_listings"``
           indicating which data source was used; ``"none"`` when both fail.
@@ -338,7 +340,12 @@ class EbayApiClient:
             "X-EBAY-C-ENDUSERCTX": f"contextualLocation=country%3D{self.delivery_country}",
             "Content-Type": "application/json",
         }
+        # Restrict to fixed-price (BIN / Sofort-kaufen) listings only and to
+        # the target country.  Cosmetic condition is not filtered — only
+        # "For parts or not working" items are excluded at the price-extraction
+        # step so that aesthetic condition never lowers the resale estimate.
         api_filter = (
+            f"buyingOptions:{{FIXED_PRICE}},"
             f"itemLocationCountry:{self.delivery_country},"
             f"deliveryCountry:{self.delivery_country}"
         )
@@ -358,12 +365,12 @@ class EbayApiClient:
                 body = resp.json()
                 prices = self._extract_prices_from_items(body.get("itemSales", []))
                 if prices:
-                    median = sorted(prices)[len(prices) // 2]
+                    lowest = min(prices)
                     logger.info(
-                        "eBay Insights API: %d sold results for %r, median=€%.2f",
-                        len(prices), query, median,
+                        "eBay Insights API: %d sold BIN results for %r, lowest=€%.2f",
+                        len(prices), query, lowest,
                     )
-                    return median, "sold_listings", errors
+                    return lowest, "sold_listings", errors
                 # No results from Insights API — fall through to Browse.
                 errors.append(
                     f"eBay Insights API returned 0 sold results for {query!r}; "
@@ -397,12 +404,12 @@ class EbayApiClient:
                 raw_items = body.get("itemSummaries", [])
                 prices = self._extract_prices_from_items(raw_items)
                 if prices:
-                    median = sorted(prices)[len(prices) // 2]
+                    lowest = min(prices)
                     logger.info(
-                        "eBay Browse API: %d active results for %r, median=€%.2f",
-                        len(prices), query, median,
+                        "eBay Browse API: %d active BIN results for %r, lowest=€%.2f",
+                        len(prices), query, lowest,
                     )
-                    return median, "active_listings", errors
+                    return lowest, "active_listings", errors
                 errors.append(f"eBay Browse API returned 0 results for {query!r}.")
             else:
                 errors.append(
@@ -450,9 +457,19 @@ class EbayApiClient:
 
     @staticmethod
     def _extract_prices_from_items(items: list) -> List[float]:
-        """Extract numeric prices from a list of Browse/Insights API item dicts."""
+        """Extract numeric prices from a list of Browse/Insights API item dicts.
+
+        Items with conditionId ``"7000"`` ("For parts or not working") are
+        excluded so that non-functional listings do not depress resale estimates
+        for functional copies.  Cosmetic/aesthetic condition is not filtered.
+        """
         prices: List[float] = []
         for item in items:
+            # Exclude explicitly non-functional items from price reference data.
+            condition_id = str(item.get("conditionId", ""))
+            condition_text = (item.get("condition") or "").lower()
+            if condition_id == "7000" or ("not working" in condition_text) or ("for parts" in condition_text):
+                continue
             # Browse API uses 'price'; Marketplace Insights uses 'lastSoldPrice'
             price_obj = item.get("lastSoldPrice") or item.get("price") or {}
             try:
