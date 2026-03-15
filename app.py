@@ -463,6 +463,10 @@ def update_settings():
 
 # ── Save / Skip deal endpoints ────────────────────────────────────────────────
 
+# Maximum character length accepted for deal title strings in API requests.
+_MAX_TITLE_LENGTH = 500
+
+
 @app.route('/api/deals/save', methods=['POST'])
 def deal_save():
     """Save (favourite) a deal by URL."""
@@ -472,7 +476,7 @@ def deal_save():
     url = (data.get('url') or '').strip()
     if not url:
         return jsonify({'error': 'url is required'}), 400
-    title = str(data.get('title') or '')[:500]
+    title = str(data.get('title') or '')[:_MAX_TITLE_LENGTH]
     try:
         price = float(data.get('price') or 0)
     except (TypeError, ValueError):
@@ -509,7 +513,7 @@ def deal_skip():
     url = (data.get('url') or '').strip()
     if not url:
         return jsonify({'error': 'url is required'}), 400
-    title = str(data.get('title') or '')[:500]
+    title = str(data.get('title') or '')[:_MAX_TITLE_LENGTH]
     try:
         price = float(data.get('price') or 0)
     except (TypeError, ValueError):

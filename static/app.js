@@ -741,18 +741,29 @@ function updateBatchActionsBar() {
     }
 }
 
+/**
+ * Extract { title, price } from a deal card DOM element.
+ * @param {Element|null} card
+ * @returns {{ title: string, price: number }}
+ */
+function _dealDataFromCard(card) {
+    if (!card) return { title: '', price: 0 };
+    const title = card.querySelector('.deal-title')?.textContent?.trim() || '';
+    const price = parseFloat(card.querySelector('.deal-price')?.textContent?.replace('€', '') || 0);
+    return { title, price };
+}
+
 async function handleBatchSave() {
     const urls = Array.from(_selectedUrls);
     if (!urls.length) return;
 
     const cards = document.querySelectorAll('#dealsGrid .deal-card');
-    const urlToCard = {};
-    cards.forEach(c => { urlToCard[c.dataset.url] = c; });
+    const cardsByUrl = {};
+    cards.forEach(c => { cardsByUrl[c.dataset.url] = c; });
 
     for (const url of urls) {
-        const card  = urlToCard[url];
-        const title = card ? (card.querySelector('.deal-title')?.textContent?.trim() || '') : '';
-        const price = card ? parseFloat(card.querySelector('.deal-price')?.textContent?.replace('€', '') || 0) : 0;
+        const card  = cardsByUrl[url];
+        const { title, price } = _dealDataFromCard(card);
         try {
             await fetch('/api/deals/save', {
                 method: 'POST',
@@ -779,13 +790,12 @@ async function handleBatchSkip() {
     if (!urls.length) return;
 
     const cards = document.querySelectorAll('#dealsGrid .deal-card');
-    const urlToCard = {};
-    cards.forEach(c => { urlToCard[c.dataset.url] = c; });
+    const cardsByUrl = {};
+    cards.forEach(c => { cardsByUrl[c.dataset.url] = c; });
 
     for (const url of urls) {
-        const card  = urlToCard[url];
-        const title = card ? (card.querySelector('.deal-title')?.textContent?.trim() || '') : '';
-        const price = card ? parseFloat(card.querySelector('.deal-price')?.textContent?.replace('€', '') || 0) : 0;
+        const card  = cardsByUrl[url];
+        const { title, price } = _dealDataFromCard(card);
         try {
             await fetch('/api/deals/skip', {
                 method: 'POST',
@@ -1374,6 +1384,6 @@ async function exportToCSV() {
 
 function escapeHtml(text) {
     const div = document.createElement('div');
-    div.textContent = String(text ?? '');
+    div.textContent = text ?? '';
     return div.innerHTML;
 }
