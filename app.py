@@ -54,9 +54,24 @@ def search():
     # Rules-based assessment (always available as baseline/fallback).
     rules_assessments = [assessor.assess_deal(deal) for deal in deals]
 
-    # AI assessment via Gemini: send all deals in a single (or few) request(s)
-    # to minimise quota consumption rather than calling once per deal.
-    ai_assessments = gemini.assess_deals_batch(deals) if deals else []
+    # Filter to the top 20 decent bundle deals before sending to Gemini:
+    # sort by rules score descending, drop low-quality entries, cap at 20.
+    _DECENT_SCORE_MIN = 50
+    _MAX_DISPLAY = 20
+    _pairs = sorted(
+        zip(deals, rules_assessments),
+        key=lambda t: -(t[1].get('overall_score') or 0),
+    )
+    _decent = [(d, r) for d, r in _pairs if (r.get('overall_score') or 0) >= _DECENT_SCORE_MIN]
+    if not _decent:
+        _decent = list(_pairs[:_MAX_DISPLAY])
+    _decent = _decent[:_MAX_DISPLAY]
+    deals_filtered = [d for d, _ in _decent]
+    rules_filtered = [r for _, r in _decent]
+
+    # AI assessment via Gemini: send only the top filtered deals in a single
+    # request to minimise quota consumption rather than calling once per deal.
+    ai_assessments = gemini.assess_deals_batch(deals_filtered) if deals_filtered else []
 
     if gemini.enabled and ai_assessments:
         failed = sum(1 for a in ai_assessments if a is None)
@@ -86,8 +101,8 @@ def search():
             )
 
     assessed = []
-    for i, deal in enumerate(deals):
-        rules_assessment = rules_assessments[i]
+    for i, deal in enumerate(deals_filtered):
+        rules_assessment = rules_filtered[i]
         ai_assessment = ai_assessments[i] if i < len(ai_assessments) else None
         assessed.append({**deal, **rules_assessment, **(ai_assessment or {})})
 

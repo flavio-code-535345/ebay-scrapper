@@ -196,6 +196,15 @@ function createDealCard(deal) {
     const conditionScore = deal.condition_score || 0;
     const trendScore = deal.trend_score || 0;
 
+    // ── Parse condition text into structured parts ─────────────────────────
+    const conditionParts = parseConditionParts(deal.condition || '');
+    const sellerType   = conditionParts.sellerType;
+    const conditionStr = conditionParts.condition;
+    const deviceStr    = conditionParts.device;
+
+    // ── Clean shipping text ────────────────────────────────────────────────
+    const shippingClean = cleanShippingText(deal.shipping);
+
     // ── Image issue warning section ────────────────────────────────────────
     const imageIssues = Array.isArray(deal.image_issues) ? deal.image_issues : [];
     const imageWarningSection = buildImageIssueSection(imageIssues);
@@ -208,6 +217,22 @@ function createDealCard(deal) {
         aiSection = buildAiErrorSection('⏳ AI paused (quota limit reached)');
     } else if (deal.ai_error_type === 'parse_error') {
         aiSection = buildAiErrorSection('⚠️ AI response could not be parsed');
+    }
+
+    // ── Build meta rows ────────────────────────────────────────────────────
+    const metaRows = [];
+
+    if (sellerType) {
+        metaRows.push(metaRow('Type', escapeHtml(sellerType)));
+    }
+    metaRows.push(metaRow('Condition', escapeHtml(conditionStr || 'Unknown')));
+    if (deviceStr) {
+        metaRows.push(metaRow('Device', escapeHtml(deviceStr)));
+    }
+    metaRows.push(metaRow('Seller', (deal.seller_rating || 0).toFixed(1) + '%'));
+    metaRows.push(metaRow('Shipping', escapeHtml(shippingClean)));
+    if (deal.is_trending) {
+        metaRows.push(metaRow('Trending', '🔥 Yes'));
     }
 
     return `
@@ -225,27 +250,9 @@ function createDealCard(deal) {
                 <div class="deal-price">
                     €${(deal.price || 0).toFixed(2)}
                 </div>
-                
-                <div class="deal-details">
-                    <div class="detail-item">
-                        <span class="detail-label">Condition</span>
-                        <span class="detail-value">${escapeHtml(deal.condition || 'Unknown')}</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">Seller Rating</span>
-                        <span class="detail-value">${(deal.seller_rating || 0).toFixed(1)}%</span>
-                    </div>
-                </div>
 
-                <div class="deal-details">
-                    <div class="detail-item">
-                        <span class="detail-label">Shipping</span>
-                        <span class="detail-value">${escapeHtml(deal.shipping || 'TBD')}</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">Trending</span>
-                        <span class="detail-value">${deal.is_trending ? '🔥 Yes' : 'No'}</span>
-                    </div>
+                <div class="deal-meta">
+                    ${metaRows.join('')}
                 </div>
 
                 ${imageWarningSection}
@@ -296,6 +303,78 @@ function createDealCard(deal) {
 }
 
 /**
+ * Build a single meta-info row (label + value).
+ * @param {string} label
+ * @param {string} value - already HTML-escaped where required
+ * @returns {string} HTML string
+ */
+function metaRow(label, value) {
+    return `<div class="meta-row"><span class="meta-label">${label}</span><span class="meta-value">${value}</span></div>`;
+}
+
+/**
+ * Parse eBay's combined SECONDARY_INFO / condition text into structured parts.
+ * eBay.de typically shows: "Neu | Gewerblich | Microsoft Xbox 360"
+ * @param {string} conditionText
+ * @returns {{ condition: string, sellerType: string, device: string }}
+ */
+function parseConditionParts(conditionText) {
+    const result = { condition: conditionText, sellerType: '', device: '' };
+
+    if (!conditionText || !conditionText.includes('|')) {
+        return result;
+    }
+
+    const parts = conditionText.split('|').map(p => p.trim()).filter(Boolean);
+    const remaining = [];
+
+    for (const part of parts) {
+        const lower = part.toLowerCase();
+        if (lower.includes('gewerblich') || lower.includes('unternehmen')) {
+            result.sellerType = 'Gewerblich';
+        } else if (lower.includes('privat')) {
+            result.sellerType = 'Privat';
+        } else {
+            remaining.push(part);
+        }
+    }
+
+    if (remaining.length > 0) {
+        result.condition = remaining[0];
+    }
+    if (remaining.length > 1) {
+        result.device = remaining.slice(1).join(' | ');
+    }
+
+    return result;
+}
+
+/**
+ * Extract a clean, short shipping summary from raw eBay shipping text.
+ * @param {string} shippingText
+ * @returns {string}
+ */
+function cleanShippingText(shippingText) {
+    if (!shippingText) return 'N/A';
+
+    const lower = shippingText.toLowerCase();
+
+    // Free shipping
+    if (lower.includes('kostenlos') || lower.startsWith('gratis')) {
+        return 'Gratis';
+    }
+
+    // Extract first EUR price (handles "EUR 9,90 bis EUR 11,90…")
+    const priceMatch = shippingText.match(/EUR\s*[\d,.]+(?:\s+bis\s+EUR\s*[\d,.]+)?/);
+    if (priceMatch) {
+        return priceMatch[0].replace(/\s+/g, ' ').trim();
+    }
+
+    // Truncate long text as fallback
+    return shippingText.length > 55 ? shippingText.slice(0, 55).trimEnd() + '…' : shippingText;
+}
+
+/**
  * Build an image issue warning section for a deal card.
  * @param {string[]} issues - Array of image issue identifiers.
  * @returns {string} HTML string, or empty string when there are no issues.
@@ -304,8 +383,7 @@ function buildImageIssueSection(issues) {
     if (!issues || issues.length === 0) return '';
 
     const issueLabels = {
-        'no_images':    '📷 No product images available',
-        'low_res_only': '🔍 Only low-resolution images found',
+        'no_images': '📷 No product images available',
     };
 
     const items = issues.map(issue => {
