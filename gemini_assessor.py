@@ -40,19 +40,52 @@ regardless of market value, popularity, or condition.
    Shady sellers often list a multi-game **bundle or lot** but actually sell \
 only a single game chosen from a dropdown or variant selector, baiting buyers \
 with the bundle image/price.
-   - Read title + description carefully: does it say "you pick", "choose 1", \
-"Auswahl", "nur 1 Spiel", "1 Spiel nach Wahl", "1 aus", or any similar \
-phrase suggesting only one item ships?
-   - Check images: does the photo show a whole stack/pile of games while the \
-description only mentions one?
+
+   **Check the title for red-flag keywords:**
+   - "you pick", "choose 1", "Auswahl", "nur 1 Spiel", "1 Spiel nach Wahl", \
+"1 aus", "1 Stück wählen", "bitte auswählen", "Ihre Wahl", "nach Wahl"
+
+   **Check the description (CRITICAL — read every sentence):**
+   Descriptions are the primary vehicle for bait-and-switch deception. Flag \
+immediately if the description contains ANY of the following patterns:
+   - "Sie wählen" / "Sie wählen ein Spiel" / "Sie wählen sich" — buyer must \
+pick one item
+   - "bitte teilen Sie mir mit" / "bitte mitteilen" / "bitte nennen Sie" / \
+"bitte angeben" — buyer must tell the seller which game they want
+   - "Auswahl" / "aus der Auswahl" / "aus dem Angebot wählen" — choose from \
+a selection
+   - "ein Spiel Ihrer Wahl" / "ein Titel Ihrer Wahl" / "Wunschspiel" — one \
+game of your choice
+   - "nur ein Spiel" / "nur 1 Spiel" / "ein Spiel pro Kauf" — only one game \
+per purchase
+   - "bitte im Nachrichtenfenster" / "bitte per Nachricht" — buyer must send \
+a message to specify
+   - "pro Stück" / "je Stück" / "einzeln" (when the title implies a bundle) \
+— per-piece pricing on a bundle-titled listing
+   - Any phrase asking the buyer to specify, choose, or message which item \
+they want from a displayed collection
+
+   **Check the seller count (quantity available / sold):**
+   - If the listing shows **multiple units available or already sold** (e.g. \
+"4 verfügbar, 1 verkauft" or seller_count > 1), AND the title/image suggests \
+a bundle or lot, this is a strong bait-and-switch signal. A genuine \
+one-of-a-kind bundle has quantity 1 and sold count 0. High availability \
+combined with a bundle title strongly suggests the seller is selling \
+individual games from the bundle one by one, NOT the whole bundle.
+
+   **Check images:**
+   - Does the photo show a whole stack/pile of games while the description \
+only mentions one?
    - Look for dropdown/variant selectors or phrases like "see drop-down", \
 "see options", "Variante wählen", or item specifics that list multiple titles \
 as variants.
+
    - If the listing is genuinely a complete lot (buyer receives every game \
 shown), state this explicitly: "Bundle verified: buyer receives all items."
    - If there is ANY credible sign that the buyer might receive only one game \
 (not the whole lot), set `"potential_scam": true` and explain in \
-`"scam_warning"` exactly what raised suspicion.
+`"scam_warning"` exactly what raised suspicion (quote the specific phrase or \
+data point that triggered the flag).
    - When `potential_scam` is true, also set `deal_rating` to `"Avoid"` \
 regardless of price or resale value.
 
@@ -139,20 +172,53 @@ shipping) and flag any particularly valuable or worthless titles in the lot.
    Shady sellers often list a multi-game **bundle or lot** but actually sell \
 only a single game chosen from a dropdown or variant selector, baiting buyers \
 with the bundle image/price.
-   - Read title + description carefully: does it say "you pick", "choose 1", \
-"Auswahl", "nur 1 Spiel", "1 Spiel nach Wahl", "1 aus", or any similar \
-phrase suggesting only one item ships?
-   - Check images: does the photo show a whole stack/pile of games while the \
-description only mentions one?
+
+   **Check the title for red-flag keywords:**
+   - "you pick", "choose 1", "Auswahl", "nur 1 Spiel", "1 Spiel nach Wahl", \
+"1 aus", "1 Stück wählen", "bitte auswählen", "Ihre Wahl", "nach Wahl"
+
+   **Check the description (CRITICAL — read every sentence):**
+   Descriptions are the primary vehicle for bait-and-switch deception. Flag \
+immediately if the description contains ANY of the following patterns:
+   - "Sie wählen" / "Sie wählen ein Spiel" / "Sie wählen sich" — buyer must \
+pick one item
+   - "bitte teilen Sie mir mit" / "bitte mitteilen" / "bitte nennen Sie" / \
+"bitte angeben" — buyer must tell the seller which game they want
+   - "Auswahl" / "aus der Auswahl" / "aus dem Angebot wählen" — choose from \
+a selection
+   - "ein Spiel Ihrer Wahl" / "ein Titel Ihrer Wahl" / "Wunschspiel" — one \
+game of your choice
+   - "nur ein Spiel" / "nur 1 Spiel" / "ein Spiel pro Kauf" — only one game \
+per purchase
+   - "bitte im Nachrichtenfenster" / "bitte per Nachricht" — buyer must send \
+a message to specify
+   - "pro Stück" / "je Stück" / "einzeln" (when the title implies a bundle) \
+— per-piece pricing on a bundle-titled listing
+   - Any phrase asking the buyer to specify, choose, or message which item \
+they want from a displayed collection
+
+   **Check the seller count (quantity available / sold):**
+   - If the listing shows **multiple units available or already sold** (e.g. \
+"4 verfügbar, 1 verkauft" or seller_count > 1), AND the title/image suggests \
+a bundle or lot, this is a strong bait-and-switch signal. A genuine \
+one-of-a-kind bundle has quantity 1 and sold count 0. High availability \
+combined with a bundle title strongly suggests the seller is selling \
+individual games from the bundle one by one, NOT the whole bundle.
+
+   **Check images:**
+   - Does the photo show a whole stack/pile of games while the description \
+only mentions one?
    - Look for dropdown/variant selectors or phrases like "see drop-down", \
 "see options", "Variante wählen", or item specifics that list multiple titles \
 as variants.
+
    - If the listing is genuinely a complete lot (buyer receives every game \
 shown), state this explicitly in the verdict: "Bundle verified: buyer \
 receives all items."
    - If there is ANY credible sign that the buyer might receive only one game \
 (not the whole lot), set `"potential_scam": true` and explain in \
-`"scam_warning"` exactly what raised suspicion.
+`"scam_warning"` exactly what raised suspicion (quote the specific phrase or \
+data point that triggered the flag).
    - When `potential_scam` is true, also set `deal_rating` to `"Avoid"` \
 regardless of price or resale value.
 
@@ -475,17 +541,26 @@ class GeminiAssessor:
         condition = deal.get("condition", "Unknown")
         shipping = deal.get("shipping", "Unknown")
         seller_rating = deal.get("seller_rating", 0)
+        description = deal.get("description", "")
+        seller_count = deal.get("seller_count", "")
 
-        text_prompt = (
-            f"Analyze this eBay listing:\n\n"
-            f"Title: {title}\n"
-            f"Price: €{price:.2f}\n"
-            f"Condition: {condition}\n"
-            f"Shipping: {shipping}\n"
-            f"Seller Rating: {seller_rating}%\n"
-            f"{self._format_image_issues_line(deal)}"
-            "\nReturn your analysis in the required JSON format."
-        )
+        prompt_lines = [
+            "Analyze this eBay listing:\n",
+            f"Title: {title}",
+            f"Price: €{price:.2f}",
+            f"Condition: {condition}",
+            f"Shipping: {shipping}",
+            f"Seller Rating: {seller_rating}%",
+        ]
+        if seller_count:
+            prompt_lines.append(f"Seller Count (available/sold): {seller_count}")
+        if description:
+            prompt_lines.append(f"Description: {description}")
+        image_issues_line = self._format_image_issues_line(deal)
+        if image_issues_line:
+            prompt_lines.append(image_issues_line.rstrip())
+        prompt_lines.append("\nReturn your analysis in the required JSON format.")
+        text_prompt = "\n".join(prompt_lines)
 
         parts: List = [self._types.Part.from_text(text=text_prompt)]
 
@@ -519,16 +594,25 @@ class GeminiAssessor:
             condition = deal.get("condition", "Unknown")
             shipping = deal.get("shipping", "Unknown")
             seller_rating = deal.get("seller_rating", 0)
+            description = deal.get("description", "")
+            seller_count = deal.get("seller_count", "")
 
-            item_text = (
-                f"\n--- ITEM {idx} ---\n"
-                f"Title: {title}\n"
-                f"Price: €{price:.2f}\n"
-                f"Condition: {condition}\n"
-                f"Shipping: {shipping}\n"
-                f"Seller Rating: {seller_rating}%\n"
-                f"{self._format_image_issues_line(deal)}"
-            )
+            item_lines = [
+                f"\n--- ITEM {idx} ---",
+                f"Title: {title}",
+                f"Price: €{price:.2f}",
+                f"Condition: {condition}",
+                f"Shipping: {shipping}",
+                f"Seller Rating: {seller_rating}%",
+            ]
+            if seller_count:
+                item_lines.append(f"Seller Count (available/sold): {seller_count}")
+            if description:
+                item_lines.append(f"Description: {description}")
+            image_issues_line = self._format_image_issues_line(deal)
+            if image_issues_line:
+                item_lines.append(image_issues_line.rstrip())
+            item_text = "\n".join(item_lines)
             parts.append(self._types.Part.from_text(text=item_text))
 
             for url in deal.get("image_urls", [])[:_MAX_IMAGES]:
