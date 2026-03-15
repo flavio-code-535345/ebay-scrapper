@@ -35,7 +35,28 @@ regardless of market value, popularity, or condition.
 > State this rule explicitly in your verdict when it applies.
 
 ### ANALYSIS PROTOCOL
-1. **IMAGE SCAN**
+1. **SCAM / BAIT-AND-SWITCH DETECTION (CHECK THIS FIRST)**
+   This is a gating check — a scam suspicion overrides all other advice.
+   Shady sellers often list a multi-game **bundle or lot** but actually sell \
+only a single game chosen from a dropdown or variant selector, baiting buyers \
+with the bundle image/price.
+   - Read title + description carefully: does it say "you pick", "choose 1", \
+"Auswahl", "nur 1 Spiel", "1 Spiel nach Wahl", "1 aus", or any similar \
+phrase suggesting only one item ships?
+   - Check images: does the photo show a whole stack/pile of games while the \
+description only mentions one?
+   - Look for dropdown/variant selectors or phrases like "see drop-down", \
+"see options", "Variante wählen", or item specifics that list multiple titles \
+as variants.
+   - If the listing is genuinely a complete lot (buyer receives every game \
+shown), state this explicitly: "Bundle verified: buyer receives all items."
+   - If there is ANY credible sign that the buyer might receive only one game \
+(not the whole lot), set `"potential_scam": true` and explain in \
+`"scam_warning"` exactly what raised suspicion.
+   - When `potential_scam` is true, also set `deal_rating` to `"Avoid"` \
+regardless of price or resale value.
+
+2. **IMAGE SCAN**
    - Condition Check: Look for scratches, cracks, yellowing, missing labels, \
 heavy controller-stick drift wear, disc rot, broken hinges, etc.
    - Completeness: Are all expected items present? (OVP/box, manual, cables, \
@@ -48,7 +69,7 @@ condition is unknown. Flag immediately and reduce confidence.
    - No/Low-Res Images: Treat `no_images` or `low_res_only` in image_issues \
 as a significant risk factor.
 
-2. **TEXTUAL DATA SCAN**
+3. **TEXTUAL DATA SCAN**
    - Flag risky phrases: "Ungetestet" / "Untested", "Defekt" / "For parts", \
 "As-is", "Verkaufe ohne Gewähr".
    - Cross-check title vs. item specifics (e.g., "Neu" in title but "Gebraucht" \
@@ -57,7 +78,7 @@ in specifics).
 higher caution.
    - Location (Germany-based seller expected).
 
-3. **MARKET & RESELL ANALYSIS**
+4. **MARKET & RESELL ANALYSIS**
    - Estimate fair market value for this item **in the condition shown** on \
 German eBay (ebay.de sold listings benchmark).
    - Assess real-world resell-ability: Is this game/console in demand right \
@@ -70,6 +91,12 @@ Return **only** a JSON object (no markdown fences, no commentary) with \
 exactly these keys:
 - `"deal_rating"`: `"Must Buy"` / `"Fair"` / `"Avoid"`
 - `"confidence_score"`: integer 1–100
+- `"potential_scam"`: boolean — `true` if this listing shows signs of \
+bundle-bait or bait-and-switch (buyer likely receives only one game despite \
+bundle appearance), `false` otherwise
+- `"scam_warning"`: string — if `potential_scam` is true, a concise \
+human-readable explanation of why (e.g. "Title says 'bundle' but description \
+contains 'you pick 1 game from the list'"); empty string otherwise
 - `"visual_findings"`: list of strings — physical condition observations from \
 images (empty list if no images)
 - `"red_flags"`: list of strings — risks from text, photos, or seller profile
@@ -77,7 +104,8 @@ images (empty list if no images)
 condition, e.g. `"~€12–18"`
 - `"verdict_summary"`: markdown string — 3–5 sentences covering price vs. \
 market value, condition, resell-ability, and a clear recommendation with \
-reasoning; invoke the 2 € rule explicitly when applicable
+reasoning; invoke the 2 € rule explicitly when applicable; if \
+`potential_scam` is true, lead with the scam warning
 """
 
 _BATCH_SYSTEM_PROMPT = """\
@@ -106,7 +134,29 @@ shipping) and flag any particularly valuable or worthless titles in the lot.
 > - Advise whether to flip the lot whole or split it.
 
 ### ANALYSIS PROTOCOL (apply to EACH listing)
-1. **IMAGE SCAN**
+1. **SCAM / BAIT-AND-SWITCH DETECTION (CHECK THIS FIRST)**
+   This is a gating check — a scam suspicion overrides all other advice.
+   Shady sellers often list a multi-game **bundle or lot** but actually sell \
+only a single game chosen from a dropdown or variant selector, baiting buyers \
+with the bundle image/price.
+   - Read title + description carefully: does it say "you pick", "choose 1", \
+"Auswahl", "nur 1 Spiel", "1 Spiel nach Wahl", "1 aus", or any similar \
+phrase suggesting only one item ships?
+   - Check images: does the photo show a whole stack/pile of games while the \
+description only mentions one?
+   - Look for dropdown/variant selectors or phrases like "see drop-down", \
+"see options", "Variante wählen", or item specifics that list multiple titles \
+as variants.
+   - If the listing is genuinely a complete lot (buyer receives every game \
+shown), state this explicitly in the verdict: "Bundle verified: buyer \
+receives all items."
+   - If there is ANY credible sign that the buyer might receive only one game \
+(not the whole lot), set `"potential_scam": true` and explain in \
+`"scam_warning"` exactly what raised suspicion.
+   - When `potential_scam` is true, also set `deal_rating` to `"Avoid"` \
+regardless of price or resale value.
+
+2. **IMAGE SCAN**
    - Condition Check: Look for scratches, cracks, yellowing, missing labels, \
 heavy controller-stick drift wear, disc rot, broken hinges, etc.
    - Completeness: Are all expected items present? (OVP/box, manual, cables, \
@@ -119,7 +169,7 @@ condition is unknown. Flag immediately and reduce confidence.
    - No/Low-Res Images: Treat `no_images` or `low_res_only` in image_issues \
 as a significant risk factor.
 
-2. **TEXTUAL DATA SCAN**
+3. **TEXTUAL DATA SCAN**
    - Flag risky phrases: "Ungetestet" / "Untested", "Defekt" / "For parts", \
 "As-is", "Verkaufe ohne Gewähr".
    - Cross-check title vs. item specifics (e.g., "Neu" in title but "Gebraucht" \
@@ -128,7 +178,7 @@ in specifics).
 higher caution.
    - Location (Germany-based seller expected).
 
-3. **MARKET & RESELL ANALYSIS**
+4. **MARKET & RESELL ANALYSIS**
    - Estimate fair market value for the item **in the condition shown** on \
 German eBay (ebay.de sold listings benchmark).
    - Assess real-world resell-ability: Is this game/console in demand right \
@@ -144,6 +194,11 @@ listing in the order they were presented. Each element must have exactly \
 these keys:
 - `"deal_rating"`: `"Must Buy"` / `"Fair"` / `"Avoid"`
 - `"confidence_score"`: integer 1–100
+- `"potential_scam"`: boolean — `true` if this listing shows signs of \
+bundle-bait or bait-and-switch (buyer likely receives only one game despite \
+bundle appearance), `false` otherwise
+- `"scam_warning"`: string — if `potential_scam` is true, a concise \
+human-readable explanation of why; empty string otherwise
 - `"visual_findings"`: list of strings — physical condition observations from \
 images (empty list if no images)
 - `"red_flags"`: list of strings — risks from text, photos, or seller profile
@@ -152,7 +207,8 @@ condition, e.g. `"~€12–18"`
 - `"verdict_summary"`: markdown string — 3–5 sentences covering price vs. \
 market value, condition, resell-ability, and a clear recommendation; for \
 bundles include the resale breakdown described above; invoke the 2 € rule \
-explicitly when applicable
+explicitly when applicable; if `potential_scam` is true, lead with the scam \
+warning
 
 CRITICAL: Output ONLY the JSON array — no markdown fences, no explanation \
 text, no concatenated separate objects. The entire response must be parseable \
@@ -604,6 +660,8 @@ class GeminiAssessor:
             return {
                 "ai_deal_rating": "Unknown",
                 "ai_confidence_score": 0,
+                "ai_potential_scam": False,
+                "ai_scam_warning": "",
                 "ai_visual_findings": [],
                 "ai_red_flags": [],
                 "ai_fair_market_estimate": "",
@@ -612,9 +670,12 @@ class GeminiAssessor:
                 "ai_error_type": "parse_error",
             }
 
+        potential_scam = bool(data.get("potential_scam", False))
         return {
             "ai_deal_rating": str(data.get("deal_rating", "Unknown")),
             "ai_confidence_score": int(data.get("confidence_score", 0)),
+            "ai_potential_scam": potential_scam,
+            "ai_scam_warning": str(data.get("scam_warning", "")),
             "ai_visual_findings": data.get("visual_findings", []),
             "ai_red_flags": data.get("red_flags", []),
             "ai_fair_market_estimate": str(data.get("fair_market_estimate", "")),
@@ -633,6 +694,8 @@ class GeminiAssessor:
         _parse_error: Dict = {
             "ai_deal_rating": "Unknown",
             "ai_confidence_score": 0,
+            "ai_potential_scam": False,
+            "ai_scam_warning": "",
             "ai_visual_findings": [],
             "ai_red_flags": [],
             "ai_fair_market_estimate": "",
@@ -708,10 +771,13 @@ class GeminiAssessor:
                     confidence = int(float(item_data.get("confidence_score", 0)))
                 except (TypeError, ValueError):
                     confidence = 0
+                potential_scam = bool(item_data.get("potential_scam", False))
                 results.append(
                     {
                         "ai_deal_rating": str(item_data.get("deal_rating", "Unknown")),
                         "ai_confidence_score": confidence,
+                        "ai_potential_scam": potential_scam,
+                        "ai_scam_warning": str(item_data.get("scam_warning", "")),
                         "ai_visual_findings": item_data.get("visual_findings", []),
                         "ai_red_flags": item_data.get("red_flags", []),
                         "ai_fair_market_estimate": str(

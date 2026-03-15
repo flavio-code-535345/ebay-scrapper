@@ -723,6 +723,8 @@ function buildAiSection(deal) {
     const estimate = deal.ai_fair_market_estimate || '';
     const visualFindings = Array.isArray(deal.ai_visual_findings) ? deal.ai_visual_findings : [];
     const redFlags = Array.isArray(deal.ai_red_flags) ? deal.ai_red_flags : [];
+    const potentialScam = !!deal.ai_potential_scam;
+    const scamWarning = deal.ai_scam_warning || '';
 
     const badgeClass = getAiBadgeClass(rating);
 
@@ -738,8 +740,17 @@ function buildAiSection(deal) {
         ? `<div class="ai-estimate">💰 Fair market estimate: <strong>${escapeHtml(estimate)}</strong></div>`
         : '';
 
+    const scamBannerHtml = potentialScam
+        ? `<div class="scam-warning">
+               <span class="scam-warning-icon">🚨</span>
+               <span class="scam-warning-label">POTENTIAL SCAM</span>
+               ${scamWarning ? `<p class="scam-warning-detail">${escapeHtml(scamWarning)}</p>` : ''}
+           </div>`
+        : '';
+
     return `
-        <div class="ai-verdict">
+        <div class="ai-verdict${potentialScam ? ' ai-verdict-scam' : ''}">
+            ${scamBannerHtml}
             <div class="ai-verdict-header">
                 <span class="ai-badge ${badgeClass}">${escapeHtml(rating)}</span>
                 <span class="ai-confidence">AI Confidence: ${confidence}%</span>

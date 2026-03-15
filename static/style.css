@@ -501,6 +501,46 @@ body {
     border-color: #ddd;
 }
 
+/* Scam-flagged verdict container */
+.ai-verdict-scam {
+    background: #fff5f5;
+    border-color: #e53e3e;
+    border-width: 2px;
+}
+
+/* Scam warning banner */
+.scam-warning {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.4rem;
+    background: #e53e3e;
+    color: #fff;
+    border-radius: 6px;
+    padding: 0.55rem 0.75rem;
+    margin-bottom: 0.6rem;
+}
+
+.scam-warning-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+
+.scam-warning-label {
+    font-weight: 800;
+    font-size: 0.82rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+}
+
+.scam-warning-detail {
+    width: 100%;
+    margin: 0.25rem 0 0;
+    font-size: 0.79rem;
+    line-height: 1.45;
+    opacity: 0.95;
+}
+
 /* Progress bar */
 .progress-section {
     max-width: 520px;

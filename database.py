@@ -63,6 +63,8 @@ def init_db():
     _add_column_if_missing(cursor, "deals", "ai_fair_market_estimate", "TEXT")
     _add_column_if_missing(cursor, "deals", "ai_verdict_summary", "TEXT")
     _add_column_if_missing(cursor, "deals", "ai_assessed", "INTEGER DEFAULT 0")
+    _add_column_if_missing(cursor, "deals", "ai_potential_scam", "INTEGER DEFAULT 0")
+    _add_column_if_missing(cursor, "deals", "ai_scam_warning", "TEXT")
     _add_column_if_missing(cursor, "deals", "image_issues", "TEXT")
     _add_column_if_missing(cursor, "deals", "image_urls", "TEXT")
     _add_column_if_missing(cursor, "deals", "item_location", "TEXT")
@@ -95,6 +97,8 @@ def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> No
         "ai_fair_market_estimate",
         "ai_verdict_summary",
         "ai_assessed",
+        "ai_potential_scam",
+        "ai_scam_warning",
         "image_issues",
         "image_urls",
         "item_location",
@@ -145,8 +149,9 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 condition_score, trend_score, recommendation,
                 ai_deal_rating, ai_confidence_score, ai_visual_findings,
                 ai_red_flags, ai_fair_market_estimate, ai_verdict_summary,
-                ai_assessed, image_issues, image_urls, item_location, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ai_assessed, ai_potential_scam, ai_scam_warning,
+                image_issues, image_urls, item_location, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 search_id,
                 deal.get('title'),
@@ -169,6 +174,8 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 deal.get('ai_fair_market_estimate'),
                 deal.get('ai_verdict_summary'),
                 int(bool(deal.get('ai_assessed'))),
+                int(bool(deal.get('ai_potential_scam'))),
+                deal.get('ai_scam_warning'),
                 json.dumps(image_issues) if isinstance(image_issues, list) else image_issues,
                 json.dumps(image_urls) if isinstance(image_urls, list) else image_urls,
                 deal.get('item_location'),
