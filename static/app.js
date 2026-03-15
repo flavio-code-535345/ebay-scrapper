@@ -548,7 +548,7 @@ function createDealCard(deal, mode) {
     if (sellerType) metaRows.push(metaRow('Type', escapeHtml(sellerType)));
     metaRows.push(metaRow('Condition', escapeHtml(conditionStr || 'Unknown')));
     if (deviceStr) metaRows.push(metaRow('Device', escapeHtml(deviceStr)));
-    metaRows.push(metaRow('Seller', (deal.seller_rating || 0).toFixed(1) + '%'));
+    if (deal.seller_rating) metaRows.push(metaRow('Seller', deal.seller_rating.toFixed(1) + '%'));
     metaRows.push(metaRow('Shipping', escapeHtml(shippingClean)));
     if (deal.item_location) {
         const loc = deal.item_location.trim().toUpperCase();
