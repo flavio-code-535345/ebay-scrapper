@@ -58,6 +58,21 @@ def _db_data_source() -> str:
     return env_val if env_val in _VALID_DATA_SOURCES else "auto"
 
 
+def _db_germany_only() -> bool:
+    """Read the Germany-only location filter toggle from the database.
+
+    When enabled, only deals with an item location in Germany are returned.
+    Falls back to the ``EBAY_GERMANY_ONLY`` environment variable (set to
+    ``"true"`` to enable), then defaults to ``True`` so that the expected
+    behaviour (Germany-only deals) is active out of the box.
+    """
+    val = database.get_setting("germany_only")
+    if val is not None:
+        return str(val).lower() == "true"
+    env_val = os.environ.get("EBAY_GERMANY_ONLY", "true").strip().lower()
+    return env_val != "false"
+
+
 def _resolve_engine(source: str):
     """Return the search callable and a label for the given *source* setting.
 
@@ -97,6 +112,36 @@ def _db_ai_user_enabled() -> bool:
     return str(val).lower() == "true" if val is not None else True
 
 
+def _is_german_location(location: str) -> bool:
+    """Return True when *location* is in Germany or is empty/unknown.
+
+    Items with no location data are considered potentially German (to avoid
+    silently dropping valid results when the ``item_location`` field is
+    unavailable, e.g. from the legacy scraper on listings that don't expose
+    location).  Items with an explicit non-German location are filtered out.
+
+    Matching rules (case-insensitive):
+    - Empty string / None → keep (unknown origin, benefit of the doubt)
+    - Ends with ``, DE`` (e.g. ``"Berlin, DE"``) → Germany
+    - Equals ``DE`` exactly → Germany
+    - Contains the word ``Deutschland`` → Germany
+    - Contains the word ``Germany`` → Germany
+    """
+    if not location:
+        return True
+    upper = location.strip().upper()
+    # Exact country code
+    if upper == "DE":
+        return True
+    # "City, DE" format from the eBay Browse API
+    if upper.endswith(", DE"):
+        return True
+    # German or English country names as whole words
+    if "DEUTSCHLAND" in upper or "GERMANY" in upper:
+        return True
+    return False
+
+
 
 
 @app.route('/')
@@ -127,6 +172,21 @@ def search():
         "Search for %r via %s returned %d deals, %d error(s)",
         query, active_source, len(deals), len(search_errors),
     )
+
+    # Post-filter: drop any deal whose item_location is not Germany (DE).
+    # This is a safety net in addition to the API/scraper-level filters
+    # (itemLocationCountry and LH_ItemLocation) and is controlled by the
+    # germany_only setting.  Items with no location data are kept to avoid
+    # silently dropping valid results when the location field is unavailable.
+    germany_only = _db_germany_only()
+    if germany_only:
+        before = len(deals)
+        deals = [d for d in deals if _is_german_location(d.get("item_location", ""))]
+        filtered_out = before - len(deals)
+        if filtered_out:
+            logger.info(
+                "Germany-only filter removed %d non-German deal(s)", filtered_out
+            )
 
     # Rules-based assessment (always available as baseline/fallback).
     rules_assessments = [assessor.assess_deal(deal) for deal in deals]
@@ -215,6 +275,7 @@ def search():
         'ai_rate_limited': gemini.is_rate_limited,
         'ai_paused_seconds': round(paused_seconds),
         'data_source': active_source,
+        'germany_only': germany_only,
     })
 
 
@@ -262,6 +323,7 @@ def health():
         'ebay_language': ebay_api.accept_language,
         'ebay_locale': ebay_api.locale,
         'ebay_delivery_country': ebay_api.delivery_country,
+        'germany_only': _db_germany_only(),
     })
 
 
@@ -279,6 +341,7 @@ def get_settings():
         'ebay_language': ebay_api.accept_language,
         'ebay_locale': ebay_api.locale,
         'ebay_delivery_country': ebay_api.delivery_country,
+        'germany_only': _db_germany_only(),
     })
 
 
@@ -333,6 +396,15 @@ def update_settings():
             updated['data_source'] = ds
             logger.info("Settings: data_source updated to %r", ds)
 
+    if 'germany_only' in data:
+        germany_only_val = data['germany_only']
+        if not isinstance(germany_only_val, bool):
+            errors['germany_only'] = 'germany_only must be a boolean (true or false)'
+        else:
+            database.set_setting('germany_only', str(germany_only_val).lower())
+            updated['germany_only'] = germany_only_val
+            logger.info("Settings: germany_only updated to %r", germany_only_val)
+
     if errors:
         return jsonify({'errors': errors}), 400
 
@@ -349,6 +421,7 @@ def update_settings():
         'ebay_language': ebay_api.accept_language,
         'ebay_locale': ebay_api.locale,
         'ebay_delivery_country': ebay_api.delivery_country,
+        'germany_only': _db_germany_only(),
     })
 
 

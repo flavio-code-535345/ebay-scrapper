@@ -109,6 +109,11 @@ class EbayScraper:
                 '_nkw': query,
                 '_sop': '12',  # Sort by newly listed
                 'LH_ItemCondition': '3000|3000|1000',  # All conditions
+                # LH_ItemLocation=1 restricts search results to items physically
+                # located in Germany (the same country as the ebay.de domain).
+                # This ensures that deals originate from German sellers/warehouses
+                # and not from international sellers who ship to Germany.
+                'LH_ItemLocation': '1',
                 'rt': 'nc'
             }
 
@@ -340,6 +345,9 @@ class EbayScraper:
             # Detect any image quality issues (no extra HTTP requests needed).
             image_issues = self._detect_image_issues(image_urls)
 
+            # Extract item location (Standort) — used to confirm the item is in DE.
+            item_location = self._extract_item_location(item_element)
+
             return {
                 'title': title,
                 'price': price,
@@ -348,6 +356,9 @@ class EbayScraper:
                 'url': item_url,
                 'shipping': shipping,
                 'is_trending': is_trending,
+                # Physical location of the item (e.g. "DE" or city name).
+                # With LH_ItemLocation=1 all results should be Germany-based.
+                'item_location': item_location,
                 'image_urls': image_urls,
                 'image_issues': image_issues,
                 'timestamp': time.time()
@@ -553,6 +564,40 @@ class EbayScraper:
             return ["no_images"]
 
         return []
+
+    def _extract_item_location(self, item_element) -> str:
+        """Extract the physical item location (Standort) from an eBay listing card.
+
+        eBay.de search results include a small "Standort:" label followed by the
+        seller's location (city or country).  With the ``LH_ItemLocation=1``
+        search parameter active, all returned items should already be located in
+        Germany — this field is extracted for display purposes on deal cards.
+
+        Returns a best-effort location string (e.g. ``"Berlin, Deutschland"``) or
+        an empty string when no location data is found on the card.
+        """
+        # 1. Known class names used by eBay for item location on search cards.
+        for cls in ('s-item__location', 's-item__itemLocation'):
+            elem = item_element.find(class_=cls)
+            if elem:
+                text = elem.get_text(strip=True)
+                if text:
+                    logger.debug("item_location via class %r: %r", cls, text)
+                    return text
+
+        # 2. Text search: look for "Standort:" label in short elements.
+        for node in item_element.find_all(['span', 'div']):
+            text = node.get_text(strip=True)
+            if len(text) > 80:
+                continue
+            lower = text.lower()
+            if lower.startswith('standort:') or lower.startswith('item location:'):
+                location = text.split(':', 1)[-1].strip()
+                if location:
+                    logger.debug("item_location via text: %r", location)
+                    return location
+
+        return ""
 
     # ── Value parsers ──────────────────────────────────────────────────────────
 
