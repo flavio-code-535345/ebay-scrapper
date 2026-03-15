@@ -65,17 +65,33 @@ a message to specify
    - Any phrase asking the buyer to specify, choose, or message which item \
 they want from a displayed collection
 
-   **Check the seller count (quantity available / sold):**
-   - If the listing shows **multiple units available or already sold** (e.g. \
-"4 verfügbar, 1 verkauft" or seller_count > 1), AND the title/image suggests \
-a bundle or lot, this is a strong bait-and-switch signal. A genuine \
-one-of-a-kind bundle has quantity 1 and sold count 0. High availability \
-combined with a bundle title strongly suggests the seller is selling \
-individual games from the bundle one by one, NOT the whole bundle.
+   **Check the seller count (quantity available / sold) — CANONICAL SCAM \
+PATTERN:**
+   - **DEFINITIVE BAIT-AND-SWITCH RULE**: If the title contains bundle/lot \
+keywords (Spielesammlung, Sammlung, Konvolut, Paket, Lot, Bundle, Spieleset, \
+Spielepaket, Set, or multiple titles listed) AND `Seller Count` shows any \
+number **greater than 1** (e.g. "4 verfügbar", "4 verfügbar, 1 verkauft", \
+"2 verkauft"), you MUST set `potential_scam: true` and `deal_rating: "Avoid"`. \
+This is non-negotiable — no other evidence is required.
+   - A genuine one-of-a-kind bundle has quantity **exactly 1** and sold \
+count **0**. Multiple available/sold units + a bundle title is a \
+near-certain bait-and-switch: the seller is listing individual games from \
+the collection one by one, NOT selling the whole lot.
+   - The absence of a dropdown/variant selector (only a plain "Stückzahl" / \
+quantity field visible in the listing) further confirms the seller has no \
+mechanism to let the buyer choose from the collection — they just send one \
+random or cheapest game. This "lazy Stückzahl trick" is a classic scam on \
+German eBay.
+   - Example canonical scam: title contains "Spielesammlung", images show a \
+stack of games, but `Seller Count` is "4 verfügbar, 1 verkauft" — this MUST \
+be rated `"Avoid"` with `potential_scam: true` regardless of price or profit.
 
    **Check images:**
    - Does the photo show a whole stack/pile of games while the description \
 only mentions one?
+   - Look for a plain **"Stückzahl"** quantity box (not a variant/game-selector \
+dropdown) — this confirms the buyer chooses quantity but NOT which game, \
+making it impossible to guarantee the full bundle.
    - Look for dropdown/variant selectors or phrases like "see drop-down", \
 "see options", "Variante wählen", or item specifics that list multiple titles \
 as variants.
@@ -87,7 +103,8 @@ shown), state this explicitly: "Bundle verified: buyer receives all items."
 `"scam_warning"` exactly what raised suspicion (quote the specific phrase or \
 data point that triggered the flag).
    - When `potential_scam` is true, also set `deal_rating` to `"Avoid"` \
-regardless of price or resale value.
+regardless of price or resale value. The scam warning OVERRIDES all other \
+advice — even a profitable resale estimate does not rescue this verdict.
 
 2. **IMAGE SCAN**
    - Condition Check: Look for scratches, cracks, yellowing, missing labels, \
@@ -128,8 +145,10 @@ exactly these keys:
 bundle-bait or bait-and-switch (buyer likely receives only one game despite \
 bundle appearance), `false` otherwise
 - `"scam_warning"`: string — if `potential_scam` is true, a concise \
-human-readable explanation of why (e.g. "Title says 'bundle' but description \
-contains 'you pick 1 game from the list'"); empty string otherwise
+human-readable explanation of why (e.g. "Title says 'Spielesammlung' but \
+seller_count shows '4 verfügbar, 1 verkauft' — multiple units available \
+means seller is selling games individually, NOT the whole bundle"); empty \
+string otherwise
 - `"visual_findings"`: list of strings — physical condition observations from \
 images (empty list if no images)
 - `"red_flags"`: list of strings — risks from text, photos, or seller profile
@@ -138,7 +157,8 @@ condition, e.g. `"~€12–18"`
 - `"verdict_summary"`: markdown string — 3–5 sentences covering price vs. \
 market value, condition, resell-ability, and a clear recommendation with \
 reasoning; invoke the 2 € rule explicitly when applicable; if \
-`potential_scam` is true, lead with the scam warning
+`potential_scam` is true, lead with the scam warning and make clear this \
+overrides all other advice
 """
 
 _BATCH_SYSTEM_PROMPT = """\
@@ -197,17 +217,33 @@ a message to specify
    - Any phrase asking the buyer to specify, choose, or message which item \
 they want from a displayed collection
 
-   **Check the seller count (quantity available / sold):**
-   - If the listing shows **multiple units available or already sold** (e.g. \
-"4 verfügbar, 1 verkauft" or seller_count > 1), AND the title/image suggests \
-a bundle or lot, this is a strong bait-and-switch signal. A genuine \
-one-of-a-kind bundle has quantity 1 and sold count 0. High availability \
-combined with a bundle title strongly suggests the seller is selling \
-individual games from the bundle one by one, NOT the whole bundle.
+   **Check the seller count (quantity available / sold) — CANONICAL SCAM \
+PATTERN:**
+   - **DEFINITIVE BAIT-AND-SWITCH RULE**: If the title contains bundle/lot \
+keywords (Spielesammlung, Sammlung, Konvolut, Paket, Lot, Bundle, Spieleset, \
+Spielepaket, Set, or multiple titles listed) AND `Seller Count` shows any \
+number **greater than 1** (e.g. "4 verfügbar", "4 verfügbar, 1 verkauft", \
+"2 verkauft"), you MUST set `potential_scam: true` and `deal_rating: "Avoid"`. \
+This is non-negotiable — no other evidence is required.
+   - A genuine one-of-a-kind bundle has quantity **exactly 1** and sold \
+count **0**. Multiple available/sold units + a bundle title is a \
+near-certain bait-and-switch: the seller is listing individual games from \
+the collection one by one, NOT selling the whole lot.
+   - The absence of a dropdown/variant selector (only a plain "Stückzahl" / \
+quantity field visible in the listing) further confirms the seller has no \
+mechanism to let the buyer choose from the collection — they just send one \
+random or cheapest game. This "lazy Stückzahl trick" is a classic scam on \
+German eBay.
+   - Example canonical scam: title contains "Spielesammlung", images show a \
+stack of games, but `Seller Count` is "4 verfügbar, 1 verkauft" — this MUST \
+be rated `"Avoid"` with `potential_scam: true` regardless of price or profit.
 
    **Check images:**
    - Does the photo show a whole stack/pile of games while the description \
 only mentions one?
+   - Look for a plain **"Stückzahl"** quantity box (not a variant/game-selector \
+dropdown) — this confirms the buyer chooses quantity but NOT which game, \
+making it impossible to guarantee the full bundle.
    - Look for dropdown/variant selectors or phrases like "see drop-down", \
 "see options", "Variante wählen", or item specifics that list multiple titles \
 as variants.
@@ -220,7 +256,8 @@ receives all items."
 `"scam_warning"` exactly what raised suspicion (quote the specific phrase or \
 data point that triggered the flag).
    - When `potential_scam` is true, also set `deal_rating` to `"Avoid"` \
-regardless of price or resale value.
+regardless of price or resale value. The scam warning OVERRIDES all other \
+advice — even a profitable resale estimate does not rescue this verdict.
 
 2. **IMAGE SCAN**
    - Condition Check: Look for scratches, cracks, yellowing, missing labels, \
@@ -264,7 +301,10 @@ these keys:
 bundle-bait or bait-and-switch (buyer likely receives only one game despite \
 bundle appearance), `false` otherwise
 - `"scam_warning"`: string — if `potential_scam` is true, a concise \
-human-readable explanation of why; empty string otherwise
+human-readable explanation of why (e.g. "Title says 'Spielesammlung' but \
+seller_count shows '4 verfügbar, 1 verkauft' — multiple units available \
+means seller is selling games individually, NOT the whole bundle"); empty \
+string otherwise
 - `"visual_findings"`: list of strings — physical condition observations from \
 images (empty list if no images)
 - `"red_flags"`: list of strings — risks from text, photos, or seller profile
@@ -274,7 +314,7 @@ condition, e.g. `"~€12–18"`
 market value, condition, resell-ability, and a clear recommendation; for \
 bundles include the resale breakdown described above; invoke the 2 € rule \
 explicitly when applicable; if `potential_scam` is true, lead with the scam \
-warning
+warning and make clear this overrides all other advice
 
 CRITICAL: Output ONLY the JSON array — no markdown fences, no explanation \
 text, no concatenated separate objects. The entire response must be parseable \
@@ -364,6 +404,108 @@ def _parse_retry_delay(exc: Exception) -> Optional[float]:
     except Exception:
         pass
     return None
+
+
+# ---------------------------------------------------------------------------
+# Deterministic bundle bait-and-switch scam detector
+# ---------------------------------------------------------------------------
+
+# Bundle/collection keywords in German and English that indicate a multi-item lot.
+_BUNDLE_TITLE_KEYWORDS_RE = re.compile(
+    r"\b(spielesammlung|spielepaket|spieleset|spiele[- ]set|spiele[- ]paket"
+    r"|sammlung|konvolut|paket|lot|bundle|collection|spielekonvolut"
+    r"|spiele[- ]sammlung|spiele[- ]konvolut)\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_bundle_individual_sale_scam(deal: Dict) -> Optional[str]:
+    """Deterministic check for the 'bundle title + individual-unit sale' scam.
+
+    Pattern (canonical case reported by user):
+    - Title contains bundle/collection keywords (e.g. 'Spielesammlung').
+    - ``seller_count`` shows multiple units available or sold (any number > 1),
+      e.g. "4 verfügbar, 1 verkauft" or "3 verfügbar".
+
+    When this pattern matches the seller is almost certainly offering individual
+    games from the collection, NOT the whole lot.  The plain "Stückzahl" quantity
+    selector (instead of a game-picker dropdown) is the tell-tale UI sign that
+    confirms the individual-sale intent — this is the "lazy Stückzahl trick".
+
+    Returns a warning string if the scam pattern is detected, ``None`` otherwise.
+    """
+    title = deal.get("title", "")
+    seller_count = deal.get("seller_count", "")
+
+    if not title or not seller_count:
+        return None
+
+    # Step 1 — title must contain at least one bundle/collection keyword.
+    if not _BUNDLE_TITLE_KEYWORDS_RE.search(title):
+        return None
+
+    # Step 2 — seller_count must contain a number greater than 1.
+    numbers = [int(n) for n in re.findall(r"\d+", seller_count)]
+    if not numbers or max(numbers) <= 1:
+        return None
+
+    # Both conditions met: canonical bait-and-switch pattern detected.
+    return (
+        f"BAIT-AND-SWITCH DETECTED: Title advertises a bundle/collection "
+        f"('{title[:80]}{'...' if len(title) > 80 else ''}') but seller_count "
+        f"is '{seller_count}', meaning multiple units are available or have "
+        f"already been sold. A genuine one-of-a-kind bundle would have exactly "
+        f"1 unit available and 0 sold. This listing almost certainly sells "
+        f"individual items from the collection one by one — the seller uses a "
+        f"plain 'Stückzahl' quantity selector instead of a variant/game-picker "
+        f"dropdown (classic 'lazy Stückzahl trick' on German eBay). Buyer "
+        f"likely receives only ONE game despite bundle appearance. AVOID."
+    )
+
+
+def _apply_scam_override(deal: Dict, assessment: Dict) -> Dict:
+    """Apply the deterministic scam override to *assessment* if warranted.
+
+    If ``_detect_bundle_individual_sale_scam`` fires, this function forces:
+    - ``ai_potential_scam = True``
+    - ``ai_deal_rating = "Avoid"``
+    - ``ai_scam_warning`` is set (or prepended) with the deterministic warning.
+    - ``ai_verdict_summary`` is prepended with a prominent scam notice.
+
+    Always returns *assessment* (mutated in-place if overridden, then returned).
+    """
+    warning = _detect_bundle_individual_sale_scam(deal)
+    if warning is None:
+        return assessment
+
+    logger.info(
+        "GeminiAssessor: Deterministic scam override applied for listing %r",
+        deal.get("title", "?"),
+    )
+
+    assessment["ai_potential_scam"] = True
+    assessment["ai_deal_rating"] = "Avoid"
+
+    existing_warning = assessment.get("ai_scam_warning", "")
+    if existing_warning:
+        assessment["ai_scam_warning"] = f"{warning} | {existing_warning}"
+    else:
+        assessment["ai_scam_warning"] = warning
+
+    existing_summary = assessment.get("ai_verdict_summary", "")
+    scam_prefix = (
+        "⚠️ **SCAM RISK — AVOID**: This listing shows the classic 'bundle "
+        "title + multiple units available' bait-and-switch pattern. The seller "
+        "almost certainly sends only one game despite the bundle appearance. "
+        "Do NOT purchase unless the seller explicitly confirms you receive the "
+        "full collection."
+    )
+    if existing_summary:
+        assessment["ai_verdict_summary"] = f"{scam_prefix}\n\n{existing_summary}"
+    else:
+        assessment["ai_verdict_summary"] = scam_prefix
+
+    return assessment
 
 
 class GeminiAssessor:
@@ -466,7 +608,8 @@ class GeminiAssessor:
                     system_instruction=_SYSTEM_PROMPT,
                 ),
             )
-            return self._parse_response(response.text)
+            result = self._parse_response(response.text)
+            return _apply_scam_override(deal, result)
         except Exception as exc:
             if _is_rate_limit_error(exc):
                 delay = _parse_retry_delay(exc) or _DEFAULT_BACKOFF_SECONDS
@@ -520,6 +663,10 @@ class GeminiAssessor:
         for batch_start in range(0, len(deals), _BATCH_SIZE):
             batch = deals[batch_start : batch_start + _BATCH_SIZE]
             batch_results = self._assess_batch_with_retry(batch)
+            # Apply the deterministic scam override for each deal in the batch.
+            for i, (deal, assessment) in enumerate(zip(batch, batch_results)):
+                if assessment is not None:
+                    batch_results[i] = _apply_scam_override(deal, assessment)
             results.extend(batch_results)
 
         return results
