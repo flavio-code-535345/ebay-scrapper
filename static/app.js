@@ -616,14 +616,25 @@ function createDealCard(deal, mode) {
         </div>`;
     }
 
+    // Deal header: only show the rules-based score and recommendation when they
+    // carry real data (overall_score is set by the legacy rules engine).  After
+    // the rules engine was removed, these fields are no longer populated and
+    // would otherwise display a confusing "0.0 / N/A" placeholder.
+    const headerScoreHtml = (deal.overall_score != null)
+        ? `<div class="deal-score" style="color:${scoreColor}">${score.toFixed(1)}</div>`
+        : '';
+    const headerRecommendationHtml = (deal.overall_score != null)
+        ? `<div class="deal-recommendation">${escapeHtml(recommendation)}</div>`
+        : '';
+
     return `<div class="deal-card${isSelected ? ' selected' : ''}" data-url="${encodedUrl}">
         <div class="deal-card-select">
             <input type="checkbox" class="deal-checkbox" data-url="${encodedUrl}" ${isChecked} aria-label="Select deal">
         </div>
         <div class="deal-header">
-            <div class="deal-score" style="color:${scoreColor}">${score.toFixed(1)}</div>
+            ${headerScoreHtml}
             <div class="deal-header-right">
-                <div class="deal-recommendation">${escapeHtml(recommendation)}</div>
+                ${headerRecommendationHtml}
                 ${ageHtml}
             </div>
         </div>
