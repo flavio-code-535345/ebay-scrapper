@@ -5,6 +5,7 @@ Analyzes eBay listings using Google Gemini multimodal API (text + images).
 Falls back gracefully when the API key is absent or a request fails.
 """
 
+import concurrent.futures
 import json
 import logging
 import os
@@ -431,6 +432,12 @@ _BATCH_SIZE = 50
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 2.0  # seconds; doubled on each retry (exponential back-off)
 
+# Hard timeout (seconds) applied around each Gemini generateContent call,
+# including all internal SDK retries.  Set below the Gunicorn worker timeout
+# (120 s) so that the worker can return a graceful error instead of being
+# killed by the supervisor.
+_GEMINI_REQUEST_TIMEOUT = 90
+
 # ---------------------------------------------------------------------------
 # Rate-limit / back-off state (shared across all GeminiAssessor instances).
 # ---------------------------------------------------------------------------
@@ -512,6 +519,46 @@ _BUNDLE_TITLE_KEYWORDS_RE = re.compile(
 # ---------------------------------------------------------------------------
 # eBay per-game price enrichment helpers
 # ---------------------------------------------------------------------------
+
+# Mapping from compiled platform patterns (case-insensitive) to canonical names.
+# Ordered from most specific to least specific so that "Xbox 360" matches
+# before a bare "Xbox" pattern.
+_PLATFORM_MAP: List[Tuple[re.Pattern, str]] = [
+    (re.compile(r"\bxbox\s*360\b",                    re.IGNORECASE), "Microsoft Xbox 360"),
+    (re.compile(r"\bxbox\s*one\b",                    re.IGNORECASE), "Microsoft Xbox One"),
+    (re.compile(r"\bxbox\s*series\s*[xs]\b",          re.IGNORECASE), "Microsoft Xbox Series X"),
+    (re.compile(r"\bxbox\b",                           re.IGNORECASE), "Microsoft Xbox"),
+    (re.compile(r"\bps\s*5\b|\bplaystation\s*5\b",    re.IGNORECASE), "Sony PlayStation 5"),
+    (re.compile(r"\bps\s*4\b|\bplaystation\s*4\b",    re.IGNORECASE), "Sony PlayStation 4"),
+    (re.compile(r"\bps\s*3\b|\bplaystation\s*3\b",    re.IGNORECASE), "Sony PlayStation 3"),
+    (re.compile(r"\bps\s*2\b|\bplaystation\s*2\b",    re.IGNORECASE), "Sony PlayStation 2"),
+    (re.compile(r"\bpsx\b|\bps\s*1\b|\bplaystation\s*1\b", re.IGNORECASE), "Sony PlayStation"),
+    (re.compile(r"\bplaystation\b",                    re.IGNORECASE), "Sony PlayStation"),
+    (re.compile(r"\bnintendo\s*switch\b",              re.IGNORECASE), "Nintendo Switch"),
+    (re.compile(r"\bwii\s*u\b",                        re.IGNORECASE), "Nintendo Wii U"),
+    (re.compile(r"\bwii\b",                            re.IGNORECASE), "Nintendo Wii"),
+    (re.compile(r"\bgamecube\b|\bgame\s*cube\b",       re.IGNORECASE), "Nintendo GameCube"),
+    (re.compile(r"\bn64\b|\bnintendo\s*64\b",          re.IGNORECASE), "Nintendo 64"),
+    (re.compile(r"\bsnes\b|\bsuper\s*nintendo\b",      re.IGNORECASE), "Super Nintendo"),
+    (re.compile(r"\bnes\b|\bnintendo\s*entertainment\b", re.IGNORECASE), "Nintendo Entertainment System"),
+    (re.compile(r"\bgba\b|\bgame\s*boy\s*advance\b",   re.IGNORECASE), "Game Boy Advance"),
+    (re.compile(r"\b3ds\b",                            re.IGNORECASE), "Nintendo 3DS"),
+    (re.compile(r"\bnds\b|\bnintendo\s*ds\b",          re.IGNORECASE), "Nintendo DS"),
+    (re.compile(r"\bpsp\b",                            re.IGNORECASE), "PlayStation Portable"),
+    (re.compile(r"\bvita\b|\bps\s*vita\b",             re.IGNORECASE), "PlayStation Vita"),
+    (re.compile(r"\bdreamcast\b",                      re.IGNORECASE), "Sega Dreamcast"),
+    (re.compile(r"\bsaturn\b",                         re.IGNORECASE), "Sega Saturn"),
+    (re.compile(r"\bmega\s*drive\b|\bgenesis\b",       re.IGNORECASE), "Sega Mega Drive"),
+]
+
+
+def _extract_platform_name(title: str) -> str:
+    """Return the canonical platform name detected in *title*, or empty string."""
+    for pattern, canonical in _PLATFORM_MAP:
+        if pattern.search(title):
+            return canonical
+    return ""
+
 
 # Words that are never game titles on their own; filtered from extracted candidates.
 _NON_TITLE_WORDS_RE = re.compile(
@@ -1002,10 +1049,21 @@ class GeminiAssessor:
             )
             return []
 
+        # Derive the platform name from the deal title so that the eBay search
+        # query always uses the format "GAME NAME (PLATFORM NAME)" for accurate
+        # minimum-price lookups.
+        platform = _extract_platform_name(title)
+
         results: List[Dict] = []
         for game in game_titles:
             try:
-                search_query = f"{game} (Microsoft Xbox 360)"
+                if platform:
+                    search_query = f"{game} ({platform})"
+                else:
+                    search_query = game
+                logger.debug(
+                    "GeminiAssessor: eBay price query for game %r: %r", game, search_query
+                )
                 price, source, errs = self._ebay_client.get_median_sold_price(search_query, max_results=10)
             except Exception as exc:
                 logger.warning(
@@ -1164,19 +1222,55 @@ class GeminiAssessor:
         return parts
 
     def _assess_batch_with_retry(self, deals: List[Dict]) -> List[Optional[Dict]]:
-        """Send *deals* as a single batch request, retrying on transient errors."""
+        """Send *deals* as a single batch request, retrying on transient errors.
+
+        Each ``generate_content`` call is wrapped in a :class:`ThreadPoolExecutor`
+        with a hard timeout of :data:`_GEMINI_REQUEST_TIMEOUT` seconds so that
+        the Gunicorn worker is never blocked indefinitely by the Gemini SDK's
+        own internal retry/back-off logic.  If the timeout fires, all deals in
+        the batch are returned as ``{"ai_error_type": "timeout", "ai_assessed": False}``.
+        """
         global _rate_limited_until
 
         last_exc: Optional[Exception] = None
         for attempt in range(_MAX_RETRIES):
             try:
                 contents = self._build_batch_contents(deals)
-                response = self._client.models.generate_content(
-                    model=self._model_name,
-                    contents=contents,
-                    config=self._types.GenerateContentConfig(
-                        system_instruction=_BATCH_SYSTEM_PROMPT,
-                    ),
+
+                # ── Hard timeout wrapper ──────────────────────────────────────
+                # Run generate_content in a background thread so we can impose a
+                # wall-clock timeout that covers the SDK's own tenacity retries.
+                t0 = time.monotonic()
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                try:
+                    future = executor.submit(
+                        self._client.models.generate_content,
+                        model=self._model_name,
+                        contents=contents,
+                        config=self._types.GenerateContentConfig(
+                            system_instruction=_BATCH_SYSTEM_PROMPT,
+                        ),
+                    )
+                    try:
+                        response = future.result(timeout=_GEMINI_REQUEST_TIMEOUT)
+                    except concurrent.futures.TimeoutError:
+                        elapsed = time.monotonic() - t0
+                        logger.error(
+                            "GeminiAssessor: Batch of %d timed out after %.1f s "
+                            "(attempt %d/%d, timeout=%d s). Returning timeout errors.",
+                            len(deals), elapsed, attempt + 1, _MAX_RETRIES,
+                            _GEMINI_REQUEST_TIMEOUT,
+                        )
+                        future.cancel()  # no-op for running futures; documents intent
+                        return [{"ai_error_type": "timeout", "ai_assessed": False}] * len(deals)
+                finally:
+                    executor.shutdown(wait=False)
+                # ── End timeout wrapper ───────────────────────────────────────
+
+                elapsed = time.monotonic() - t0
+                logger.info(
+                    "GeminiAssessor: Batch of %d assessed in %.1f s (attempt %d/%d)",
+                    len(deals), elapsed, attempt + 1, _MAX_RETRIES,
                 )
                 return self._parse_batch_response(response.text, len(deals))
             except Exception as exc:

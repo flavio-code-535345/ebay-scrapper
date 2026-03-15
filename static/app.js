@@ -541,6 +541,8 @@ function createDealCard(deal, mode) {
         aiSection = buildAiErrorSection('⏳ AI paused (quota limit reached)');
     } else if (deal.ai_error_type === 'parse_error') {
         aiSection = buildAiErrorSection('⚠️ AI response could not be parsed');
+    } else if (deal.ai_error_type === 'timeout') {
+        aiSection = buildAiErrorSection('⏱️ AI assessment timed out');
     }
 
     // Meta rows
