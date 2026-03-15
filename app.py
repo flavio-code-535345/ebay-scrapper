@@ -34,6 +34,11 @@ _saved_model = database.get_setting("gemini_model")
 if _saved_model:
     gemini.model_name = _saved_model
 
+# Load persisted AI-enabled toggle (default: True; stored as "true"/"false" string).
+_saved_ai_enabled = database.get_setting("ai_enabled")
+if _saved_ai_enabled is not None:
+    gemini.user_enabled = str(_saved_ai_enabled).lower() == "true"
+
 
 @app.route('/')
 def index():
@@ -77,7 +82,9 @@ def search():
 
     # AI assessment via Gemini: send only the top filtered deals in a single
     # request to minimise quota consumption rather than calling once per deal.
-    ai_assessments = gemini.assess_deals_batch(deals_filtered) if deals_filtered else []
+    # Skip entirely when the user has disabled AI evaluation via the toggle.
+    ai_active = gemini.enabled and gemini.user_enabled
+    ai_assessments = gemini.assess_deals_batch(deals_filtered) if (deals_filtered and ai_active) else []
 
     if gemini.enabled and ai_assessments:
         failed = sum(1 for a in ai_assessments if a is None)
@@ -134,7 +141,7 @@ def search():
         'deal_count': len(assessed),
         'deals': assessed,
         'errors': search_errors,
-        'ai_enabled': gemini.enabled,
+        'ai_enabled': gemini.enabled and gemini.user_enabled,
         'ai_rate_limited': gemini.is_rate_limited,
         'ai_paused_seconds': round(paused_seconds),
     })
@@ -171,7 +178,7 @@ def health():
     paused_seconds = max(0.0, gemini.rate_limited_until - time.monotonic())
     return jsonify({
         'status': 'healthy',
-        'ai_enabled': gemini.enabled,
+        'ai_enabled': gemini.enabled and gemini.user_enabled,
         'ai_rate_limited': gemini.is_rate_limited,
         'ai_paused_seconds': round(paused_seconds),
         'ai_model': gemini.model_name,
@@ -182,6 +189,7 @@ def health():
 def get_settings():
     return jsonify({
         'gemini_model': gemini.model_name,
+        'ai_enabled': gemini.user_enabled,
     })
 
 
@@ -215,10 +223,20 @@ def update_settings():
             except ValueError as exc:
                 errors['gemini_model'] = str(exc)
 
+    if 'ai_enabled' in data:
+        ai_enabled = data['ai_enabled']
+        if not isinstance(ai_enabled, bool):
+            errors['ai_enabled'] = 'ai_enabled must be a boolean (true or false)'
+        else:
+            gemini.user_enabled = ai_enabled
+            database.set_setting('ai_enabled', str(ai_enabled).lower())
+            updated['ai_enabled'] = ai_enabled
+            logger.info("Settings: ai_enabled updated to %r", ai_enabled)
+
     if errors:
         return jsonify({'errors': errors}), 400
 
-    return jsonify({'updated': updated, 'gemini_model': gemini.model_name})
+    return jsonify({'updated': updated, 'gemini_model': gemini.model_name, 'ai_enabled': gemini.user_enabled})
 
 
 if __name__ == '__main__':

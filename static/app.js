@@ -68,12 +68,17 @@ document.addEventListener('DOMContentLoaded', () => {
         searchForm.addEventListener('submit', handleSearch);
     }
 
-    // Load and display the active Gemini model from settings.
+    // Load and display the active Gemini model and AI-enabled state from settings.
     loadModelSettings();
 
     const saveModelBtn = document.getElementById('saveModelBtn');
     if (saveModelBtn) {
         saveModelBtn.addEventListener('click', saveModelSettings);
+    }
+
+    const aiToggleBtn = document.getElementById('aiToggleBtn');
+    if (aiToggleBtn) {
+        aiToggleBtn.addEventListener('click', toggleAiEnabled);
     }
 
     // Check URL parameters for auto-search
@@ -99,8 +104,67 @@ async function loadModelSettings() {
             status.textContent = `Active model: ${data.gemini_model}`;
             status.className = 'model-status model-status--active';
         }
+        // Sync the AI toggle button to the persisted state.
+        if (typeof data.ai_enabled === 'boolean') {
+            _setAiToggleState(data.ai_enabled);
+        }
     } catch (err) {
         console.warn('Failed to load model settings:', err);
+    }
+}
+
+/**
+ * Update the AI toggle button visual state without making an API call.
+ * @param {boolean} enabled
+ */
+function _setAiToggleState(enabled) {
+    const btn = document.getElementById('aiToggleBtn');
+    if (!btn) return;
+    btn.setAttribute('aria-pressed', String(enabled));
+    const label = btn.querySelector('.ai-toggle-label');
+    const icon = btn.querySelector('.ai-toggle-icon');
+    if (label) label.textContent = enabled ? 'AI: ON' : 'AI: OFF';
+    if (icon) icon.textContent = enabled ? '✨' : '⭕';
+}
+
+async function toggleAiEnabled() {
+    const btn = document.getElementById('aiToggleBtn');
+    if (!btn) return;
+    const currentlyEnabled = btn.getAttribute('aria-pressed') === 'true';
+    const newState = !currentlyEnabled;
+
+    // Optimistically update UI immediately.
+    _setAiToggleState(newState);
+    btn.disabled = true;
+
+    try {
+        const response = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ai_enabled: newState }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            // Revert on failure.
+            _setAiToggleState(currentlyEnabled);
+            const status = document.getElementById('modelStatus');
+            if (status) {
+                status.textContent = `⚠️ ${data.error || 'Failed to save AI toggle.'}`;
+                status.className = 'model-status model-status--error';
+            }
+        } else {
+            _setAiToggleState(data.ai_enabled);
+        }
+    } catch (err) {
+        // Revert on error.
+        _setAiToggleState(currentlyEnabled);
+        const status = document.getElementById('modelStatus');
+        if (status) {
+            status.textContent = `⚠️ Error: ${err.message}`;
+            status.className = 'model-status model-status--error';
+        }
+    } finally {
+        btn.disabled = false;
     }
 }
 

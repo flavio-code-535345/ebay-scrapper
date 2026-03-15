@@ -599,3 +599,50 @@ body {
 .model-status--error {
     color: #fca5a5;
 }
+
+/* ── AI Toggle button ───────────────────────────────────────────────────── */
+.btn-ai-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.4rem 1rem;
+    border-radius: 8px;
+    border: 2px solid rgba(255, 255, 255, 0.5);
+    background: rgba(46, 213, 115, 0.25);
+    color: #fff;
+    font-size: 0.88rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, opacity 0.2s;
+    white-space: nowrap;
+}
+
+.btn-ai-toggle:hover {
+    background: rgba(46, 213, 115, 0.4);
+    border-color: rgba(255, 255, 255, 0.75);
+}
+
+.btn-ai-toggle[aria-pressed="false"] {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.3);
+    opacity: 0.75;
+}
+
+.btn-ai-toggle[aria-pressed="false"]:hover {
+    background: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.55);
+    opacity: 1;
+}
+
+.ai-toggle-icon {
+    font-size: 1rem;
+}
+
+@media (prefers-color-scheme: dark) {
+    .btn-ai-toggle {
+        background: rgba(46, 213, 115, 0.3);
+    }
+    .btn-ai-toggle[aria-pressed="false"] {
+        background: rgba(255, 255, 255, 0.08);
+    }
+}

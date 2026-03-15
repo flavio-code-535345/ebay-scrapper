@@ -212,6 +212,7 @@ class GeminiAssessor:
     def __init__(self) -> None:
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
         self.enabled = bool(api_key)
+        self.user_enabled: bool = True  # Can be toggled via the UI; persisted in settings.
         self._client = None
         self._types = None
         self._model_name: str = _MODEL_NAME
