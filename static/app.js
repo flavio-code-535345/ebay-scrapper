@@ -206,6 +206,8 @@ async function handleSearch(e) {
     document.getElementById('activePipelineBar').classList.remove('d-none');
     document.getElementById('errorContainer').classList.add('d-none');
     document.getElementById('aiWarningContainer').classList.add('d-none');
+    const _aiTimeoutEl = document.getElementById('aiTimeoutContainer');
+    if (_aiTimeoutEl) _aiTimeoutEl.classList.add('d-none');
     document.getElementById('emptyState').classList.add('d-none');
     document.getElementById('dealsGrid').innerHTML = '';
 
@@ -301,6 +303,21 @@ function _applySearchResults(data) {
             aiWarning.classList.remove('d-none');
         } else {
             aiWarning.classList.add('d-none');
+        }
+    }
+
+    // AI timeout notice banner
+    const aiTimeout = document.getElementById('aiTimeoutContainer');
+    if (aiTimeout) {
+        const timedOut = data.ai_timeout_count || 0;
+        if (timedOut > 0) {
+            aiTimeout.innerHTML =
+                `<button type="button" class="btn-dismiss-banner" aria-label="Dismiss" onclick="this.parentElement.classList.add('d-none')">✕</button>` +
+                `⏱️ <strong>${timedOut} deal${timedOut !== 1 ? 's' : ''}</strong> could not be AI-assessed within the time budget and are shown without a rating. ` +
+                `Try narrowing your search to fewer results, or re-run the search to retry.`;
+            aiTimeout.classList.remove('d-none');
+        } else {
+            aiTimeout.classList.add('d-none');
         }
     }
 
@@ -1324,6 +1341,7 @@ function buildAiSection(deal) {
         : '';
 
     // Build itemized resale breakdown table when available.
+    let topValueHtml = '';
     let itemizedHtml = '';
     if (itemized.length > 0) {
         const ratingLower = rating.toLowerCase();
@@ -1334,6 +1352,32 @@ function buildAiSection(deal) {
             if (src === 'no_result') return '<span class="price-source price-source-none" title="No eBay data found">❓ no data</span>';
             return '<span class="price-source price-source-ai" title="AI estimate (no eBay data)">🤖 AI est.</span>';
         };
+
+        // ── Top 3 value games highlight (GOOD / MUST HAVE bundles only) ──────
+        // Show only when there are ≥ 2 priced games so the block is meaningful.
+        if (isGoodOrBetter) {
+            const withPrices = itemized
+                .filter(i => i.price_eur != null && i.price_eur > 0)
+                .sort((a, b) => b.price_eur - a.price_eur)
+                .slice(0, 3);
+            if (withPrices.length >= 2) {
+                const topRows = withPrices.map((item, idx) => {
+                    const medals = ['🥇', '🥈', '🥉'];
+                    const medal  = medals[idx] || '🎮';
+                    return `<div class="top-value-row">
+                        <span class="top-value-medal">${medal}</span>
+                        <span class="top-value-name">${escapeHtml(item.game || '?')}</span>
+                        <span class="top-value-price">€${Number(item.price_eur).toFixed(2)}</span>
+                        <span class="top-value-source">${sourceLabel(item.price_source)}</span>
+                    </div>`;
+                }).join('');
+                topValueHtml = `<div class="ai-top-value-games">
+                    <div class="ai-top-value-header">🏆 Top ${withPrices.length} Value Game${withPrices.length !== 1 ? 's' : ''} (highest min. BIN price)</div>
+                    ${topRows}
+                </div>`;
+            }
+        }
+
         const rows = itemized.map(item => {
             const priceStr = (item.price_eur != null) ? `€${Number(item.price_eur).toFixed(2)}` : '—';
             const exceptional = isGoodOrBetter && !!item.is_exceptional;
@@ -1371,6 +1415,7 @@ function buildAiSection(deal) {
         </div>
         ${summary  ? `<p class="ai-summary">${escapeHtml(summary)}</p>` : ''}
         ${estimateHtml}
+        ${topValueHtml}
         ${itemizedHtml}
         ${findingsHtml}
         ${redFlagsHtml}

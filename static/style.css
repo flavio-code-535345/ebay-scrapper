@@ -407,6 +407,30 @@ a:hover { text-decoration: underline; }
     border-color: #5a3e00;
 }
 
+.alert-info {
+    background: #0d1f2d;
+    color: #79c0ff;
+    border-color: #1f4060;
+    position: relative;
+    padding-right: 2.5rem;
+}
+
+.btn-dismiss-banner {
+    position: absolute;
+    top: 0.45rem;
+    right: 0.7rem;
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 0.85rem;
+    opacity: 0.65;
+    padding: 0;
+    line-height: 1;
+}
+
+.btn-dismiss-banner:hover { opacity: 1; }
+
 .error-details-list {
     margin-top: 0.4rem;
     padding-left: 1.1rem;
@@ -859,6 +883,62 @@ a:hover { text-decoration: underline; }
 }
 
 .ai-red-flags li { color: #ffa198; }
+
+/* Top-3 value games highlight block (GOOD / MUST HAVE bundles) */
+.ai-top-value-games {
+    margin: 0.4rem 0;
+    background: linear-gradient(135deg, rgba(63,185,80,0.10) 0%, rgba(63,185,80,0.04) 100%);
+    border: 1px solid rgba(63,185,80,0.35);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.ai-top-value-header {
+    font-size: 0.73rem;
+    font-weight: 700;
+    color: #3fb950;
+    padding: 0.28rem 0.6rem;
+    background: rgba(63,185,80,0.08);
+    border-bottom: 1px solid rgba(63,185,80,0.25);
+    letter-spacing: 0.02em;
+}
+
+.top-value-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.22rem 0.6rem;
+    font-size: 0.74rem;
+    border-bottom: 1px solid rgba(63,185,80,0.10);
+}
+
+.top-value-row:last-child { border-bottom: none; }
+
+.top-value-medal {
+    flex: 0 0 1.4rem;
+    text-align: center;
+    font-size: 0.85rem;
+}
+
+.top-value-name {
+    flex: 1 1 auto;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.top-value-price {
+    flex: 0 0 auto;
+    font-weight: 700;
+    color: #3fb950;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.top-value-source {
+    flex: 0 0 auto;
+}
 
 /* Itemized per-game resale breakdown */
 .ai-itemized {

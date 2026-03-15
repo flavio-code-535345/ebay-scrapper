@@ -242,6 +242,7 @@ def search():
     ai_active = gemini.enabled and _user_enabled
     ai_assessments = gemini.assess_deals_batch(deals_filtered) if (deals_filtered and ai_active) else []
 
+    timed_out = 0
     if gemini.enabled and ai_assessments:
         failed = sum(1 for a in ai_assessments if a is None)
         rate_limited = sum(
@@ -313,6 +314,7 @@ def search():
         'ai_enabled': gemini.enabled and _user_enabled,
         'ai_rate_limited': gemini.is_rate_limited,
         'ai_paused_seconds': round(paused_seconds),
+        'ai_timeout_count': timed_out,
         'data_source': active_source,
         'germany_only': germany_only,
     })

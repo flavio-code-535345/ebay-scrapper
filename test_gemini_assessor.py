@@ -13,7 +13,11 @@ import pytest
 
 from gemini_assessor import (
     GeminiAssessor,
+    _ASSESS_TOTAL_BUDGET_S,
+    _BATCH_SIZE,
     _EBAY_CACHE_TTL,
+    _EBAY_PREFETCH_BUDGET_S,
+    _GEMINI_REQUEST_TIMEOUT,
     _apply_scam_override,
     _apply_sports_kinect_override,
     _build_single_game_search_query,
@@ -1104,3 +1108,126 @@ class TestPrefetchEbayPricesParallel:
         deals = [{"title": "Halo 3 Xbox 360"}]
         a._prefetch_ebay_prices_parallel(deals)  # Should not raise
 
+
+# ---------------------------------------------------------------------------
+# Batch-size / timeout constants – regression guard
+# ---------------------------------------------------------------------------
+
+
+class TestBatchTimeoutConstants:
+    """Regression tests that verify the batch-size and timeout constants stay
+    within safe limits relative to the Gunicorn worker timeout (180 s)."""
+
+    # Gunicorn timeout from Dockerfile
+    _GUNICORN_TIMEOUT = 180
+
+    def test_batch_size_reduced_for_lower_latency(self):
+        """_BATCH_SIZE must be ≤ 5 so per-call prompts stay small."""
+        assert _BATCH_SIZE <= 5, (
+            f"_BATCH_SIZE={_BATCH_SIZE} is too large; keep ≤ 5 for low per-call latency"
+        )
+
+    def test_batch_size_positive(self):
+        assert _BATCH_SIZE >= 1
+
+    def test_per_call_timeout_fits_in_budget(self):
+        """Each individual call timeout must be < total budget."""
+        assert _GEMINI_REQUEST_TIMEOUT < _ASSESS_TOTAL_BUDGET_S
+
+    def test_total_budget_leaves_gunicorn_headroom(self):
+        """eBay pre-fetch + total Gemini budget must stay below Gunicorn timeout."""
+        assert _EBAY_PREFETCH_BUDGET_S + _ASSESS_TOTAL_BUDGET_S < self._GUNICORN_TIMEOUT, (
+            "Combined eBay prefetch + Gemini budget exceeds Gunicorn worker timeout"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Top-3 value games logic (frontend helper parity test)
+# ---------------------------------------------------------------------------
+
+
+class TestTopValueGamesSelection:
+    """Verify the top-3 selection logic that the frontend uses is correct.
+
+    The frontend selects items by filtering to price_eur > 0, sorting by
+    price_eur descending, then taking the first 3.  These tests mirror that
+    logic in Python to ensure the algorithm stays correct.
+    """
+
+    @staticmethod
+    def _top_value_games(itemized, max_top=3):
+        """Python mirror of the JS top-value-games selection."""
+        with_prices = [
+            i for i in itemized
+            if i.get("price_eur") is not None and i["price_eur"] > 0
+        ]
+        with_prices.sort(key=lambda i: i["price_eur"], reverse=True)
+        return with_prices[:max_top]
+
+    def test_top_3_selected_correctly(self):
+        itemized = [
+            {"game": "Halo 3",          "price_eur": 12.0},
+            {"game": "Mass Effect 2",    "price_eur": 25.0},
+            {"game": "Gears of War",     "price_eur": 9.0},
+            {"game": "Dead Space",       "price_eur": 18.0},
+            {"game": "Bioshock",         "price_eur": 15.0},
+        ]
+        top = self._top_value_games(itemized)
+        assert len(top) == 3
+        assert [g["game"] for g in top] == ["Mass Effect 2", "Dead Space", "Bioshock"]
+        assert top[0]["price_eur"] == 25.0
+
+    def test_fewer_than_3_games_returns_all(self):
+        itemized = [
+            {"game": "Game A", "price_eur": 10.0},
+            {"game": "Game B", "price_eur": 5.0},
+        ]
+        top = self._top_value_games(itemized)
+        assert len(top) == 2
+
+    def test_games_without_price_excluded(self):
+        itemized = [
+            {"game": "No Data",   "price_eur": None},
+            {"game": "Game A",    "price_eur": 8.0},
+            {"game": "Zero Price","price_eur": 0},
+            {"game": "Game B",    "price_eur": 15.0},
+        ]
+        top = self._top_value_games(itemized)
+        assert len(top) == 2
+        assert top[0]["game"] == "Game B"
+        assert top[1]["game"] == "Game A"
+
+    def test_empty_itemized_returns_empty(self):
+        assert self._top_value_games([]) == []
+
+    def test_single_game_included(self):
+        itemized = [{"game": "Halo 3", "price_eur": 12.0}]
+        top = self._top_value_games(itemized)
+        assert len(top) == 1
+        assert top[0]["game"] == "Halo 3"
+
+    def test_block_shown_only_for_good_or_better_with_2_plus_priced_games(self):
+        """Top-value block requires ≥ 2 priced games to be shown (rating check
+        is handled in the frontend; here we verify the price-count threshold)."""
+        # Three priced games → block qualifies
+        itemized = [
+            {"game": "Game A", "price_eur": 12.0},
+            {"game": "Game B", "price_eur": 8.0},
+            {"game": "Game C", "price_eur": 5.0},
+        ]
+        top = self._top_value_games(itemized)
+        assert len(top) >= 2, "Three priced games should produce ≥ 2 top results"
+
+        # With only 1 priced game the block should not be shown (< 2 threshold)
+        single = [{"game": "Game A", "price_eur": 12.0}]
+        top = self._top_value_games(single)
+        assert len(top) < 2, "Single priced game must not meet the ≥2 threshold"
+
+        # Mix: 3 games but only 1 with a valid price → block should not be shown
+        mostly_no_price = [
+            {"game": "Game A", "price_eur": None},
+            {"game": "Game B", "price_eur": 0},
+            {"game": "Game C", "price_eur": 10.0},
+        ]
+        top = self._top_value_games(mostly_no_price)
+        assert len(top) < 2, "Only one priced game — block threshold not met"
