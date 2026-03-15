@@ -1282,6 +1282,9 @@ function buildAiSection(deal) {
     const redFlags       = Array.isArray(deal.ai_red_flags) ? deal.ai_red_flags : [];
     const potentialScam  = !!deal.ai_potential_scam;
     const scamWarning    = deal.ai_scam_warning || '';
+    const itemized       = Array.isArray(deal.ai_itemized_resale_estimates) ? deal.ai_itemized_resale_estimates : [];
+    const totalCost      = deal.ai_estimated_total_cost || 0;
+    const grossProfit    = deal.ai_estimated_gross_profit || 0;
 
     const badgeClass = getAiBadgeClass(rating);
 
@@ -1305,6 +1308,41 @@ function buildAiSection(deal) {
            </div>`
         : '';
 
+    // Build itemized resale breakdown table when available.
+    let itemizedHtml = '';
+    if (itemized.length > 0) {
+        const sourceLabel = src => {
+            if (src === 'ebay_sold') return '<span class="price-source price-source-sold" title="Based on eBay sold/completed listings">📊 eBay sold</span>';
+            if (src === 'ebay_active') return '<span class="price-source price-source-active" title="Based on eBay active listings (proxy)">🔍 eBay active</span>';
+            if (src === 'no_result') return '<span class="price-source price-source-none" title="No eBay data found">❓ no data</span>';
+            return '<span class="price-source price-source-ai" title="AI estimate (no eBay data)">🤖 AI est.</span>';
+        };
+        const rows = itemized.map(item => {
+            const priceStr = (item.price_eur != null) ? `€${Number(item.price_eur).toFixed(2)}` : '—';
+            return `<tr><td>${escapeHtml(item.game || '?')}</td><td class="price-cell">${escapeHtml(priceStr)}</td><td>${sourceLabel(item.price_source)}</td></tr>`;
+        }).join('');
+        const totalResale = itemized.reduce((s, i) => s + (i.price_eur || 0), 0);
+        const profitSign = grossProfit >= 0 ? '+' : '';
+        const profitClass = grossProfit >= 0 ? 'profit-positive' : 'profit-negative';
+        itemizedHtml = `
+        <div class="ai-itemized">
+            <div class="ai-itemized-header">🎮 Per-game resale breakdown</div>
+            <table class="ai-itemized-table">
+                <thead><tr><th>Game</th><th>Est. price</th><th>Source</th></tr></thead>
+                <tbody>${rows}</tbody>
+                <tfoot>
+                    <tr class="itemized-total">
+                        <td><strong>Total resale</strong></td>
+                        <td class="price-cell"><strong>€${totalResale.toFixed(2)}</strong></td>
+                        <td></td>
+                    </tr>
+                    ${totalCost > 0 ? `<tr class="itemized-cost"><td>Total cost (buy + ship)</td><td class="price-cell">€${Number(totalCost).toFixed(2)}</td><td></td></tr>` : ''}
+                    ${totalCost > 0 ? `<tr class="itemized-profit ${profitClass}"><td><strong>Est. gross profit</strong></td><td class="price-cell"><strong>${profitSign}€${Number(grossProfit).toFixed(2)}</strong></td><td></td></tr>` : ''}
+                </tfoot>
+            </table>
+        </div>`;
+    }
+
     return `<div class="ai-verdict${potentialScam ? ' ai-verdict-scam' : ''}">
         ${scamBannerHtml}
         <div class="ai-verdict-header">
@@ -1313,6 +1351,7 @@ function buildAiSection(deal) {
         </div>
         ${summary  ? `<p class="ai-summary">${escapeHtml(summary)}</p>` : ''}
         ${estimateHtml}
+        ${itemizedHtml}
         ${findingsHtml}
         ${redFlagsHtml}
     </div>`;

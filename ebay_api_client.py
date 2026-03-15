@@ -96,6 +96,7 @@ class EbayApiClient:
 
     _OAUTH_PATH = "/identity/v1/oauth2/token"
     _SEARCH_PATH = "/buy/browse/v1/item_summary/search"
+    _MARKETPLACE_INSIGHTS_PATH = "/buy/marketplace_insights/v1_beta/item_summary/search"
     _SCOPE = "https://api.ebay.com/oauth/api_scope"
 
     # Token refresh 60 s before expiry to avoid using a stale token.
@@ -298,6 +299,120 @@ class EbayApiClient:
         logger.info("Returning %d normalised deals (%d errors)", len(deals), len(errors))
         return deals, errors
 
+    def get_median_sold_price(
+        self, query: str, max_results: int = 10
+    ) -> "Tuple[Optional[float], str, List[str]]":
+        """Return the median price for *query* from recently sold or active listings.
+
+        Tries the eBay Marketplace Insights API (sold/completed listings) first.
+        Falls back to the Browse API (active listings) when the Insights API is
+        unavailable or returns no results.
+
+        Returns a 3-tuple ``(median_price, source_label, errors)`` where:
+
+        * ``median_price`` – median sale/ask price in the listing currency, or
+          ``None`` when no results are found.
+        * ``source_label`` – one of ``"sold_listings"`` or ``"active_listings"``
+          indicating which data source was used; ``"none"`` when both fail.
+        * ``errors`` – list of warning/error strings (may be non-empty even when
+          a price is returned, e.g. because the primary source failed but the
+          fallback succeeded).
+        """
+        errors: List[str] = []
+
+        if not self.is_configured:
+            errors.append("eBay API credentials not configured — cannot fetch item prices.")
+            return None, "none", errors
+
+        try:
+            token = self._get_access_token()
+        except Exception as exc:
+            errors.append(f"eBay API auth failed while fetching price for {query!r}: {exc}")
+            return None, "none", errors
+
+        common_headers = {
+            "Authorization": f"Bearer {token}",
+            "X-EBAY-C-MARKETPLACE-ID": self.marketplace_id,
+            "Accept-Language": self.accept_language,
+            "X-EBAY-C-LOCALE": self.locale,
+            "X-EBAY-C-ENDUSERCTX": f"contextualLocation=country%3D{self.delivery_country}",
+            "Content-Type": "application/json",
+        }
+        api_filter = (
+            f"itemLocationCountry:{self.delivery_country},"
+            f"deliveryCountry:{self.delivery_country}"
+        )
+        params = {
+            "q": query,
+            "limit": min(max(1, max_results), 50),
+            "filter": api_filter,
+        }
+
+        # ── Attempt 1: Marketplace Insights API (sold/completed listings) ──
+        try:
+            insights_url = self._base_url + self._MARKETPLACE_INSIGHTS_PATH
+            resp = self.session.get(
+                insights_url, headers=common_headers, params=params, timeout=10
+            )
+            if resp.ok:
+                body = resp.json()
+                prices = self._extract_prices_from_items(body.get("itemSales", []))
+                if prices:
+                    median = sorted(prices)[len(prices) // 2]
+                    logger.info(
+                        "eBay Insights API: %d sold results for %r, median=€%.2f",
+                        len(prices), query, median,
+                    )
+                    return median, "sold_listings", errors
+                # No results from Insights API — fall through to Browse.
+                errors.append(
+                    f"eBay Insights API returned 0 sold results for {query!r}; "
+                    "falling back to active listings."
+                )
+            elif resp.status_code in (403, 404):
+                # Marketplace Insights scope not granted or endpoint unavailable.
+                errors.append(
+                    f"eBay Insights API unavailable (HTTP {resp.status_code}); "
+                    "falling back to active listings."
+                )
+            else:
+                errors.append(
+                    f"eBay Insights API error {resp.status_code} for {query!r}; "
+                    "falling back to active listings."
+                )
+        except Exception as exc:
+            errors.append(
+                f"eBay Insights API request failed for {query!r}: {exc}; "
+                "falling back to active listings."
+            )
+
+        # ── Attempt 2: Browse API (active listings, used as price proxy) ──
+        try:
+            browse_url = self._base_url + self._SEARCH_PATH
+            resp = self.session.get(
+                browse_url, headers=common_headers, params=params, timeout=10
+            )
+            if resp.ok:
+                body = resp.json()
+                raw_items = body.get("itemSummaries", [])
+                prices = self._extract_prices_from_items(raw_items)
+                if prices:
+                    median = sorted(prices)[len(prices) // 2]
+                    logger.info(
+                        "eBay Browse API: %d active results for %r, median=€%.2f",
+                        len(prices), query, median,
+                    )
+                    return median, "active_listings", errors
+                errors.append(f"eBay Browse API returned 0 results for {query!r}.")
+            else:
+                errors.append(
+                    f"eBay Browse API error {resp.status_code} for {query!r}."
+                )
+        except Exception as exc:
+            errors.append(f"eBay Browse API request failed for {query!r}: {exc}")
+
+        return None, "none", errors
+
     # ── Private helpers ────────────────────────────────────────────────────
 
     def _get_access_token(self) -> str:
@@ -332,6 +447,21 @@ class EbayApiClient:
         self._token_expires_at = now + expires_in - self._TOKEN_REFRESH_BUFFER
         logger.info("eBay OAuth token obtained (expires in %ds)", expires_in)
         return self._token
+
+    @staticmethod
+    def _extract_prices_from_items(items: list) -> List[float]:
+        """Extract numeric prices from a list of Browse/Insights API item dicts."""
+        prices: List[float] = []
+        for item in items:
+            # Browse API uses 'price'; Marketplace Insights uses 'lastSoldPrice'
+            price_obj = item.get("lastSoldPrice") or item.get("price") or {}
+            try:
+                val = float(price_obj.get("value", 0))
+                if val > 0:
+                    prices.append(val)
+            except (TypeError, ValueError):
+                pass
+        return prices
 
     def _normalize_item(self, item: dict) -> Optional[Dict]:
         """Map a Browse API ``itemSummary`` object to our internal deal dict.

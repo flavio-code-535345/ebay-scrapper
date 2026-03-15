@@ -857,6 +857,81 @@ a:hover { text-decoration: underline; }
 
 .ai-red-flags li { color: #ffa198; }
 
+/* Itemized per-game resale breakdown */
+.ai-itemized {
+    margin: 0.4rem 0;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.ai-itemized-header {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--accent);
+    padding: 0.3rem 0.6rem;
+    background: rgba(255,255,255,0.04);
+    border-bottom: 1px solid var(--border);
+}
+
+.ai-itemized-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.74rem;
+}
+
+.ai-itemized-table thead th {
+    text-align: left;
+    padding: 0.25rem 0.5rem;
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.70rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--border);
+}
+
+.ai-itemized-table tbody tr:not(:last-child) td {
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.ai-itemized-table td {
+    padding: 0.22rem 0.5rem;
+    color: var(--text);
+}
+
+.ai-itemized-table tfoot td {
+    padding: 0.22rem 0.5rem;
+    border-top: 1px solid var(--border);
+}
+
+.ai-itemized-table .price-cell {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.ai-itemized-table .itemized-total td { font-weight: 600; color: var(--accent); }
+.ai-itemized-table .itemized-cost td  { color: var(--text-muted); font-size: 0.72rem; }
+.ai-itemized-table .profit-positive td { color: #3fb950; font-weight: 700; }
+.ai-itemized-table .profit-negative td { color: #f85149; font-weight: 700; }
+
+/* Price source badges inside itemized table */
+.price-source {
+    display: inline-block;
+    font-size: 0.68rem;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    white-space: nowrap;
+    font-weight: 500;
+}
+
+.price-source-sold   { background: rgba(63,185,80,0.18);  color: #3fb950; border: 1px solid rgba(63,185,80,0.4); }
+.price-source-active { background: rgba(99,160,255,0.18); color: #63a0ff; border: 1px solid rgba(99,160,255,0.4); }
+.price-source-ai     { background: rgba(255,200,80,0.15); color: #e3b341; border: 1px solid rgba(255,200,80,0.4); }
+.price-source-none   { background: rgba(139,148,158,0.15); color: #8b949e; border: 1px solid rgba(139,148,158,0.4); }
+
 /* Scam warning banner */
 .scam-warning {
     background: var(--red-dim);

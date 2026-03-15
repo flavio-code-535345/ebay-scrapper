@@ -71,6 +71,9 @@ def init_db():
     _add_column_if_missing(cursor, "deals", "description", "TEXT")
     _add_column_if_missing(cursor, "deals", "seller_count", "TEXT")
     _add_column_if_missing(cursor, "deals", "listing_date", "TEXT")
+    _add_column_if_missing(cursor, "deals", "ai_itemized_resale_estimates", "TEXT")
+    _add_column_if_missing(cursor, "deals", "ai_estimated_total_cost", "REAL")
+    _add_column_if_missing(cursor, "deals", "ai_estimated_gross_profit", "REAL")
 
     # User-managed deal preferences.
     cursor.executescript("""
@@ -131,6 +134,9 @@ def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> No
         "listing_date",
         "title",
         "price",
+        "ai_itemized_resale_estimates",
+        "ai_estimated_total_cost",
+        "ai_estimated_gross_profit",
     }
     _ALLOWED_TYPES = {
         "TEXT",
@@ -170,6 +176,7 @@ def save_search(query: str, deals: List[Dict]) -> int:
         red_flags = deal.get('ai_red_flags')
         image_issues = deal.get('image_issues')
         image_urls = deal.get('image_urls')
+        itemized = deal.get('ai_itemized_resale_estimates')
 
         cursor.execute(
             """INSERT INTO deals
@@ -181,8 +188,9 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 ai_assessed, ai_potential_scam, ai_scam_warning,
                 image_issues, image_urls, item_location, description, seller_count,
                 listing_date,
+                ai_itemized_resale_estimates, ai_estimated_total_cost, ai_estimated_gross_profit,
                 created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 search_id,
                 deal.get('title'),
@@ -213,6 +221,9 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 deal.get('description'),
                 deal.get('seller_count'),
                 deal.get('listing_date'),
+                json.dumps(itemized) if isinstance(itemized, list) else itemized,
+                deal.get('ai_estimated_total_cost'),
+                deal.get('ai_estimated_gross_profit'),
                 now,
             ),
         )
@@ -242,7 +253,7 @@ def get_deals_by_search(search_id: int) -> List[Dict]:
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
     # Deserialise JSON-encoded list fields.
-    _JSON_LIST_FIELDS = ('ai_visual_findings', 'ai_red_flags', 'image_issues', 'image_urls')
+    _JSON_LIST_FIELDS = ('ai_visual_findings', 'ai_red_flags', 'image_issues', 'image_urls', 'ai_itemized_resale_estimates')
     for row in rows:
         for field in _JSON_LIST_FIELDS:
             raw = row.get(field)

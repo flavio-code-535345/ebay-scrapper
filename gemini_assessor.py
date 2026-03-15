@@ -11,9 +11,12 @@ import os
 import re
 import threading
 import time
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import requests
+
+if TYPE_CHECKING:
+    from ebay_api_client import EbayApiClient
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +190,15 @@ images (empty list if no images)
 - `"red_flags"`: list of strings — risks from text, photos, or seller profile
 - `"fair_market_estimate"`: string — estimated market value in current \
 condition, e.g. `"~€12–18"`
+- `"itemized_resale_estimates"`: list of objects — for bundles, one entry per \
+identified game in the lot; each entry must have keys `"game"` (string title), \
+`"price_eur"` (number, estimated resale price), and `"price_source"` \
+(`"ebay_sold"`, `"ebay_active"`, or `"ai_estimate"`); use provided \
+`Fetched eBay Prices` data when available, otherwise estimate; use empty \
+list `[]` for single-item listings
+- `"estimated_total_cost"`: number — asking price + shipping in EUR (0 if unknown)
+- `"estimated_gross_profit"`: number — sum of itemized_resale_estimates \
+price_eur values minus estimated_total_cost (0 if not applicable)
 - `"verdict_summary"`: markdown string — 3–5 sentences covering price vs. \
 market value, condition, resell-ability, and a clear recommendation with \
 reasoning; invoke the 2 € rule explicitly when applicable; if \
@@ -375,6 +387,15 @@ images (empty list if no images)
 - `"red_flags"`: list of strings — risks from text, photos, or seller profile
 - `"fair_market_estimate"`: string — estimated market value in current \
 condition, e.g. `"~€12–18"`
+- `"itemized_resale_estimates"`: list of objects — for bundles, one entry per \
+identified game in the lot; each entry must have keys `"game"` (string title), \
+`"price_eur"` (number, estimated resale price), and `"price_source"` \
+(`"ebay_sold"`, `"ebay_active"`, or `"ai_estimate"`); use provided \
+`Fetched eBay Prices` data when available, otherwise estimate; use empty \
+list `[]` for single-item listings
+- `"estimated_total_cost"`: number — asking price + shipping in EUR (0 if unknown)
+- `"estimated_gross_profit"`: number — sum of itemized_resale_estimates \
+price_eur values minus estimated_total_cost (0 if not applicable)
 - `"verdict_summary"`: markdown string — 3–5 sentences covering price vs. \
 market value, condition, resell-ability, and a clear recommendation; for \
 bundles include the resale breakdown described above; invoke the 2 € rule \
@@ -482,6 +503,82 @@ _BUNDLE_TITLE_KEYWORDS_RE = re.compile(
     r"|spiele[- ]sammlung|spiele[- ]konvolut)\b",
     re.IGNORECASE,
 )
+
+# ---------------------------------------------------------------------------
+# eBay per-game price enrichment helpers
+# ---------------------------------------------------------------------------
+
+# Words that are never game titles on their own; filtered from extracted candidates.
+_NON_TITLE_WORDS_RE = re.compile(
+    r"^\s*(\d+|spiele?|games?|stück|pieces?|neu|used|gebraucht|like\s+new"
+    r"|nintendo|playstation|ps[1-5]|xbox|sega|atari|pc|psp|ds|3ds|wii"
+    r"|switch|gamecube|gameboy|game\s+boy|mega\s+drive"
+    r"|sehr\s+gut|gut|akzeptabel|neuwertig|top|set|bundle"
+    r"|sammlung|konvolut|paket|lot|collection|inklusive?|inkl|mit|und|and"
+    r"|plus|\+|für|fuer|for|the|der|die|das|ein|eine)\s*$",
+    re.IGNORECASE,
+)
+
+# Separators used to split individual titles within a bundle listing title.
+_TITLE_SEPARATOR_RE = re.compile(r"\s*[,;+/&]\s*|\s+[-–—]\s+")
+
+# Maximum number of individual game titles to search per bundle.
+_MAX_GAMES_PER_BUNDLE = 8
+
+
+def _extract_potential_game_titles(title: str) -> List[str]:
+    """Attempt to extract individual game titles from a bundle listing title.
+
+    Returns a list of candidate game-title strings (possibly empty).  Titles
+    are extracted by splitting on common separators (commas, semicolons, '+'
+    etc.) and filtering out generic words that are clearly not game titles.
+
+    Examples::
+
+        "PS4 Bundle: God of War, Spider-Man, Horizon" → ["God of War", "Spider-Man", "Horizon"]
+        "10 PS4 Spiele Sammlung Lot"                  → []   # no identifiable titles
+        "Zelda + Mario Odyssey + Kirby"               → ["Zelda", "Mario Odyssey", "Kirby"]
+    """
+    if not title:
+        return []
+
+    # Strip quantity patterns ("10 Spiele", "5 Games") from the start.
+    cleaned = re.sub(r"^\d+\s+(spiele?|games?)\s*", "", title.strip(), flags=re.IGNORECASE)
+
+    # Remove console/platform prefixes and bundle collection keywords so they
+    # don't appear in extracted game titles.
+    cleaned = re.sub(
+        r"\b(nintendo|playstation|ps[1-5]|xbox|sega|atari|gamecube|gameboy"
+        r"|game\s+boy|mega\s+drive|snes|nes|n64|wii|switch|3ds|ds|psp|vita|pc"
+        r"|bundle|lot|paket|sammlung|konvolut|spielesammlung|spielepaket"
+        r"|spieleset|spiele[- ]set|spiele[- ]paket|collection)\b",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    parts = _TITLE_SEPARATOR_RE.split(cleaned)
+
+    candidates: List[str] = []
+    for part in parts:
+        part = part.strip(" \t\n:()-")
+        # Skip empty, purely numeric, or generic non-title words.
+        if not part:
+            continue
+        if re.match(r"^\d+$", part):
+            continue
+        # Skip "N Spiele", "N Games" patterns (number + generic word).
+        if re.match(r"^\d+\s+(spiele?|games?)\s*$", part, re.IGNORECASE):
+            continue
+        if _NON_TITLE_WORDS_RE.match(part):
+            continue
+        # Must have at least 3 characters and at least one letter.
+        if len(part) < 3 or not re.search(r"[a-zA-ZäöüÄÖÜß]", part):
+            continue
+        candidates.append(part)
+
+    return candidates[:_MAX_GAMES_PER_BUNDLE]
 
 # ---------------------------------------------------------------------------
 # Deterministic sports / Kinect deal detector
@@ -689,6 +786,8 @@ class GeminiAssessor:
         self._client = None
         self._types = None
         self._model_name: str = _MODEL_NAME
+        # Optional eBay API client used to fetch real per-game prices for bundles.
+        self._ebay_client: Optional[Any] = None
 
         if self.enabled:
             try:
@@ -710,6 +809,16 @@ class GeminiAssessor:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def set_ebay_client(self, client: Any) -> None:
+        """Register an :class:`EbayApiClient` instance for per-game price lookups.
+
+        When set, bundle listings will have individual game prices fetched from
+        the eBay API before the Gemini prompt is constructed so that the AI can
+        use real market data instead of guesswork.
+        """
+        self._ebay_client = client
+        logger.info("GeminiAssessor: eBay client registered for per-game price enrichment.")
 
     @property
     def rate_limited_until(self) -> float:
@@ -856,6 +965,86 @@ class GeminiAssessor:
         issues: List[str] = deal.get("image_issues", [])
         return f"Image Issues: {', '.join(issues)}\n" if issues else ""
 
+    def _fetch_ebay_prices_for_bundle(self, deal: Dict) -> List[Dict]:
+        """Fetch real eBay prices for individual games in a bundle listing.
+
+        Returns a list of dicts, each with ``game``, ``price_eur``, and
+        ``price_source`` keys.  Returns an empty list when:
+
+        * No eBay client is registered.
+        * The listing is not a bundle.
+        * No individual game titles can be extracted from the title.
+        * All eBay searches return no results.
+
+        The ``price_source`` value is ``"ebay_sold"`` when the Marketplace
+        Insights API returned sold-listing data, ``"ebay_active"`` when the
+        Browse API active-listings fallback was used, and ``"no_result"`` when
+        the search returned no data.
+        """
+        if self._ebay_client is None:
+            return []
+
+        title = deal.get("title", "")
+        # Only enrich bundle listings; skip single-game listings.
+        if not _BUNDLE_TITLE_KEYWORDS_RE.search(title):
+            return []
+
+        game_titles = _extract_potential_game_titles(title)
+        if not game_titles:
+            logger.debug(
+                "GeminiAssessor: Bundle detected but no individual titles extracted from %r",
+                title,
+            )
+            return []
+
+        results: List[Dict] = []
+        for game in game_titles:
+            try:
+                price, source, errs = self._ebay_client.get_median_sold_price(game, max_results=10)
+            except Exception as exc:
+                logger.warning(
+                    "GeminiAssessor: eBay price lookup failed for %r: %s", game, exc
+                )
+                price, source, errs = None, "no_result", []
+
+            if errs:
+                for e in errs:
+                    logger.debug("GeminiAssessor: eBay price lookup note for %r: %s", game, e)
+
+            if price is not None:
+                price_source = "ebay_sold" if source == "sold_listings" else "ebay_active"
+                results.append({"game": game, "price_eur": round(price, 2), "price_source": price_source})
+            else:
+                results.append({"game": game, "price_eur": None, "price_source": "no_result"})
+
+        found = sum(1 for r in results if r["price_eur"] is not None)
+        logger.info(
+            "GeminiAssessor: eBay price enrichment for %r: %d/%d games found prices",
+            title, found, len(results),
+        )
+        return results
+
+    @staticmethod
+    def _format_ebay_prices_section(ebay_prices: List[Dict]) -> str:
+        """Return a formatted text block describing fetched eBay prices, or empty string."""
+        if not ebay_prices:
+            return ""
+        lines = ["Fetched eBay Prices (use these in itemized_resale_estimates):"]
+        for entry in ebay_prices:
+            game = entry.get("game", "?")
+            price = entry.get("price_eur")
+            source = entry.get("price_source", "unknown")
+            if price is not None:
+                source_label = (
+                    "sold listings" if source == "ebay_sold"
+                    else "active listings" if source == "ebay_active"
+                    else source
+                )
+                lines.append(f"  - {game}: €{price:.2f} (source: {source_label})")
+            else:
+                lines.append(f"  - {game}: no eBay data found — please estimate")
+        return "\n".join(lines)
+
     def _build_contents(self, deal: Dict) -> List:
         """Construct the Gemini contents list (text + image parts)."""
         title = deal.get("title", "Unknown")
@@ -881,6 +1070,13 @@ class GeminiAssessor:
         image_issues_line = self._format_image_issues_line(deal)
         if image_issues_line:
             prompt_lines.append(image_issues_line.rstrip())
+
+        # Inject real eBay prices when available for bundle listings.
+        ebay_prices = self._fetch_ebay_prices_for_bundle(deal)
+        if ebay_prices:
+            prices_section = self._format_ebay_prices_section(ebay_prices)
+            prompt_lines.append(f"\n{prices_section}")
+
         prompt_lines.append("\nReturn your analysis in the required JSON format.")
         text_prompt = "\n".join(prompt_lines)
 
@@ -906,7 +1102,9 @@ class GeminiAssessor:
             f"Below are {len(deals)} eBay listings to analyze. "
             f"Return a JSON array of exactly {len(deals)} objects in the same "
             "order. Each object must contain: deal_rating, confidence_score, "
-            "visual_findings, red_flags, fair_market_estimate, verdict_summary."
+            "potential_scam, scam_warning, visual_findings, red_flags, "
+            "fair_market_estimate, itemized_resale_estimates, "
+            "estimated_total_cost, estimated_gross_profit, verdict_summary."
         )
         parts.append(self._types.Part.from_text(text=intro))
 
@@ -934,6 +1132,13 @@ class GeminiAssessor:
             image_issues_line = self._format_image_issues_line(deal)
             if image_issues_line:
                 item_lines.append(image_issues_line.rstrip())
+
+            # Inject real eBay prices when available for bundle listings.
+            ebay_prices = self._fetch_ebay_prices_for_bundle(deal)
+            if ebay_prices:
+                prices_section = self._format_ebay_prices_section(ebay_prices)
+                item_lines.append(f"\n{prices_section}")
+
             item_text = "\n".join(item_lines)
             parts.append(self._types.Part.from_text(text=item_text))
 
@@ -1071,12 +1276,26 @@ class GeminiAssessor:
                 "ai_visual_findings": [],
                 "ai_red_flags": [],
                 "ai_fair_market_estimate": "",
+                "ai_itemized_resale_estimates": [],
+                "ai_estimated_total_cost": 0.0,
+                "ai_estimated_gross_profit": 0.0,
                 "ai_verdict_summary": "AI response could not be parsed.",
                 "ai_assessed": False,
                 "ai_error_type": "parse_error",
             }
 
         potential_scam = bool(data.get("potential_scam", False))
+        try:
+            total_cost = float(data.get("estimated_total_cost", 0) or 0)
+        except (TypeError, ValueError):
+            total_cost = 0.0
+        try:
+            gross_profit = float(data.get("estimated_gross_profit", 0) or 0)
+        except (TypeError, ValueError):
+            gross_profit = 0.0
+        itemized = data.get("itemized_resale_estimates", [])
+        if not isinstance(itemized, list):
+            itemized = []
         return {
             "ai_deal_rating": str(data.get("deal_rating", "Unknown")),
             "ai_confidence_score": int(data.get("confidence_score", 0)),
@@ -1085,6 +1304,9 @@ class GeminiAssessor:
             "ai_visual_findings": data.get("visual_findings", []),
             "ai_red_flags": data.get("red_flags", []),
             "ai_fair_market_estimate": str(data.get("fair_market_estimate", "")),
+            "ai_itemized_resale_estimates": itemized,
+            "ai_estimated_total_cost": total_cost,
+            "ai_estimated_gross_profit": gross_profit,
             "ai_verdict_summary": str(data.get("verdict_summary", "")),
             "ai_assessed": True,
         }
@@ -1105,6 +1327,9 @@ class GeminiAssessor:
             "ai_visual_findings": [],
             "ai_red_flags": [],
             "ai_fair_market_estimate": "",
+            "ai_itemized_resale_estimates": [],
+            "ai_estimated_total_cost": 0.0,
+            "ai_estimated_gross_profit": 0.0,
             "ai_verdict_summary": "AI response could not be parsed.",
             "ai_assessed": False,
             "ai_error_type": "parse_error",
@@ -1178,6 +1403,17 @@ class GeminiAssessor:
                 except (TypeError, ValueError):
                     confidence = 0
                 potential_scam = bool(item_data.get("potential_scam", False))
+                try:
+                    total_cost = float(item_data.get("estimated_total_cost", 0) or 0)
+                except (TypeError, ValueError):
+                    total_cost = 0.0
+                try:
+                    gross_profit = float(item_data.get("estimated_gross_profit", 0) or 0)
+                except (TypeError, ValueError):
+                    gross_profit = 0.0
+                itemized = item_data.get("itemized_resale_estimates", [])
+                if not isinstance(itemized, list):
+                    itemized = []
                 results.append(
                     {
                         "ai_deal_rating": str(item_data.get("deal_rating", "Unknown")),
@@ -1189,6 +1425,9 @@ class GeminiAssessor:
                         "ai_fair_market_estimate": str(
                             item_data.get("fair_market_estimate", "")
                         ),
+                        "ai_itemized_resale_estimates": itemized,
+                        "ai_estimated_total_cost": total_cost,
+                        "ai_estimated_gross_profit": gross_profit,
                         "ai_verdict_summary": str(item_data.get("verdict_summary", "")),
                         "ai_assessed": True,
                     }
