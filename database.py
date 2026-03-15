@@ -65,6 +65,14 @@ def init_db():
     _add_column_if_missing(cursor, "deals", "ai_assessed", "INTEGER DEFAULT 0")
     _add_column_if_missing(cursor, "deals", "image_issues", "TEXT")
 
+    # Key-value settings store.
+    cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY NOT NULL,
+            value TEXT NOT NULL
+        );
+    """)
+
     conn.commit()
     conn.close()
 
@@ -219,3 +227,26 @@ def get_stats() -> Dict:
     deals = cursor.fetchone()['total']
     conn.close()
     return {'total_searches': searches, 'total_deals': deals}
+
+
+def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
+    """Return the stored value for *key*, or *default* if not found."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    row = cursor.fetchone()
+    conn.close()
+    return row['value'] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    """Persist *value* for *key* (upsert)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+    conn.commit()
+    conn.close()

@@ -68,6 +68,14 @@ document.addEventListener('DOMContentLoaded', () => {
         searchForm.addEventListener('submit', handleSearch);
     }
 
+    // Load and display the active Gemini model from settings.
+    loadModelSettings();
+
+    const saveModelBtn = document.getElementById('saveModelBtn');
+    if (saveModelBtn) {
+        saveModelBtn.addEventListener('click', saveModelSettings);
+    }
+
     // Check URL parameters for auto-search
     const params = new URLSearchParams(window.location.search);
     const searchParam = params.get('search');
@@ -76,6 +84,67 @@ document.addEventListener('DOMContentLoaded', () => {
         handleSearch(new Event('submit'));
     }
 });
+
+async function loadModelSettings() {
+    try {
+        const response = await fetch('/api/settings');
+        if (!response.ok) return;
+        const data = await response.json();
+        const input = document.getElementById('geminiModelInput');
+        const status = document.getElementById('modelStatus');
+        if (input && data.gemini_model) {
+            input.value = data.gemini_model;
+        }
+        if (status && data.gemini_model) {
+            status.textContent = `Active model: ${data.gemini_model}`;
+            status.className = 'model-status model-status--active';
+        }
+    } catch (err) {
+        console.warn('Failed to load model settings:', err);
+    }
+}
+
+async function saveModelSettings() {
+    const input = document.getElementById('geminiModelInput');
+    const status = document.getElementById('modelStatus');
+    const btn = document.getElementById('saveModelBtn');
+    if (!input || !status || !btn) return;
+
+    const model = input.value.trim();
+    if (!model) {
+        status.textContent = '⚠️ Please enter a model name.';
+        status.className = 'model-status model-status--error';
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    status.textContent = '';
+    status.className = 'model-status';
+
+    try {
+        const response = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ gemini_model: model }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            const msg = (data.errors && data.errors.gemini_model) || data.error || 'Failed to save.';
+            status.textContent = `⚠️ ${msg}`;
+            status.className = 'model-status model-status--error';
+        } else {
+            status.textContent = `✅ Active model: ${data.gemini_model}`;
+            status.className = 'model-status model-status--active';
+        }
+    } catch (err) {
+        status.textContent = `⚠️ Error: ${err.message}`;
+        status.className = 'model-status model-status--error';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save';
+    }
+}
 
 async function handleSearch(e) {
     e.preventDefault();

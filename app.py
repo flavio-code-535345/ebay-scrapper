@@ -6,6 +6,7 @@ Provides endpoints for searching, history, export, stats and health checks
 
 import logging
 import os
+import re
 import time
 from flask import Flask, request, jsonify, render_template, Response
 
@@ -27,6 +28,11 @@ assessor = DealAssessor()
 gemini = GeminiAssessor()
 
 database.init_db()
+
+# Load persisted Gemini model (if any) so it takes effect without a restart.
+_saved_model = database.get_setting("gemini_model")
+if _saved_model:
+    gemini.model_name = _saved_model
 
 
 @app.route('/')
@@ -168,7 +174,51 @@ def health():
         'ai_enabled': gemini.enabled,
         'ai_rate_limited': gemini.is_rate_limited,
         'ai_paused_seconds': round(paused_seconds),
+        'ai_model': gemini.model_name,
     })
+
+
+@app.route('/api/settings', methods=['GET'])
+def get_settings():
+    return jsonify({
+        'gemini_model': gemini.model_name,
+    })
+
+
+@app.route('/api/settings', methods=['POST'])
+def update_settings():
+    data = request.get_json(silent=True)
+    if data is None:
+        return jsonify({'error': 'Request body must be valid JSON with Content-Type: application/json'}), 400
+
+    # Gemini model names: alphanumeric, hyphens, underscores, and dots only.
+    _MODEL_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_\-.]{0,99}$')
+
+    errors = {}
+    updated = {}
+
+    if 'gemini_model' in data:
+        model = str(data['gemini_model']).strip()
+        if not model:
+            errors['gemini_model'] = 'gemini_model must not be empty (e.g., gemini-2.0-flash-lite)'
+        elif not _MODEL_NAME_RE.match(model):
+            errors['gemini_model'] = (
+                'gemini_model contains invalid characters; use only letters, '
+                'digits, hyphens, underscores, and dots (e.g., gemini-2.0-flash-lite)'
+            )
+        else:
+            try:
+                gemini.model_name = model
+                database.set_setting('gemini_model', model)
+                updated['gemini_model'] = model
+                logger.info("Settings: gemini_model updated to %r", model)
+            except ValueError as exc:
+                errors['gemini_model'] = str(exc)
+
+    if errors:
+        return jsonify({'errors': errors}), 400
+
+    return jsonify({'updated': updated, 'gemini_model': gemini.model_name})
 
 
 if __name__ == '__main__':
