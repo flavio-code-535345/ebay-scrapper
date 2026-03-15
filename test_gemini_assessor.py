@@ -6,13 +6,21 @@ bundle bait-and-switch scam detector introduced to catch the canonical
 the sports/Kinect deal detector that filters out low-resale-value listings.
 """
 
+import json
+import unittest.mock as mock
+
 import pytest
 
 from gemini_assessor import (
+    GeminiAssessor,
+    _EBAY_CACHE_TTL,
     _apply_scam_override,
     _apply_sports_kinect_override,
+    _build_single_game_search_query,
     _detect_bundle_individual_sale_scam,
     _detect_sports_kinect_deal,
+    _extract_platform_name,
+    _extract_potential_game_titles,
 )
 
 # ---------------------------------------------------------------------------
@@ -475,9 +483,6 @@ class TestApplySportsKinectOverride:
 # ---------------------------------------------------------------------------
 
 
-from gemini_assessor import _extract_potential_game_titles
-
-
 class TestExtractPotentialGameTitles:
     """Tests for the bundle game-title extractor."""
 
@@ -537,9 +542,6 @@ class TestExtractPotentialGameTitles:
 # ---------------------------------------------------------------------------
 
 
-from gemini_assessor import _extract_platform_name
-
-
 class TestExtractPlatformName:
     def test_xbox_360(self):
         assert _extract_platform_name("10 Xbox 360 Spiele Bundle") == "Microsoft Xbox 360"
@@ -579,9 +581,6 @@ class TestExtractPlatformName:
 # ---------------------------------------------------------------------------
 # _build_single_game_search_query tests
 # ---------------------------------------------------------------------------
-
-
-from gemini_assessor import _build_single_game_search_query
 
 
 class TestBuildSingleGameSearchQuery:
@@ -741,10 +740,6 @@ class TestGoodMustHaveBundlesNotBlocked:
 # ---------------------------------------------------------------------------
 
 
-import json
-from gemini_assessor import GeminiAssessor
-
-
 class TestParseBatchResponseGoodMustHave:
     """Verify _parse_batch_response faithfully forwards 'Good' and
     'Must Have' deal_rating values from the AI JSON response."""
@@ -867,3 +862,245 @@ class TestParseBatchResponseGoodMustHave:
         assert result[0]["ai_deal_rating"] == "Good"
         assert len(result[0]["ai_itemized_resale_estimates"]) == 1
         assert result[0]["ai_itemized_resale_estimates"][0]["price_eur"] == 15.0
+
+
+# ---------------------------------------------------------------------------
+# eBay price cache helpers
+# ---------------------------------------------------------------------------
+
+
+class TestEbayPriceCache:
+    """Tests for the in-memory eBay price cache helpers."""
+
+    def _make_assessor(self):
+        """Return a GeminiAssessor instance (no API key needed for cache tests)."""
+        return GeminiAssessor()
+
+    def test_cache_miss_returns_none(self):
+        """A fresh assessor returns None for any query."""
+        a = self._make_assessor()
+        assert a._cached_ebay_price("Halo 3 (Microsoft Xbox 360)") is None
+
+    def test_store_and_retrieve(self):
+        """Stored price is returned on the next lookup."""
+        a = self._make_assessor()
+        a._store_ebay_price_in_cache("Halo 3 (Microsoft Xbox 360)", 12.50, "sold_listings")
+        result = a._cached_ebay_price("Halo 3 (Microsoft Xbox 360)")
+        assert result is not None
+        price, source = result
+        assert price == pytest.approx(12.50)
+        assert source == "sold_listings"
+
+    def test_store_none_price_is_cached(self):
+        """A None price (no eBay result) is also cached to avoid retrying."""
+        a = self._make_assessor()
+        a._store_ebay_price_in_cache("Unknown Game (Nintendo Switch)", None, "no_result")
+        result = a._cached_ebay_price("Unknown Game (Nintendo Switch)")
+        assert result is not None
+        price, source = result
+        assert price is None
+        assert source == "no_result"
+
+    def test_cache_entry_expires_after_ttl(self):
+        """Cache entries are evicted when their TTL has elapsed."""
+        import time as _time
+        a = self._make_assessor()
+        a._store_ebay_price_in_cache("God of War (Sony PlayStation 4)", 20.0, "active_listings")
+        # Manually expire the entry by backdating its timestamp.
+        query = "God of War (Sony PlayStation 4)"
+        price, source, expire_at = a._ebay_price_cache[query]
+        a._ebay_price_cache[query] = (price, source, _time.monotonic() - 1.0)
+        assert a._cached_ebay_price(query) is None
+        # Evicted entry should be removed from the dict.
+        assert query not in a._ebay_price_cache
+
+    def test_separate_queries_do_not_collide(self):
+        """Different queries are stored and retrieved independently."""
+        a = self._make_assessor()
+        a._store_ebay_price_in_cache("Halo 3 (Microsoft Xbox 360)", 12.0, "sold_listings")
+        a._store_ebay_price_in_cache("Zelda (Nintendo Switch)", 35.0, "active_listings")
+        r1 = a._cached_ebay_price("Halo 3 (Microsoft Xbox 360)")
+        r2 = a._cached_ebay_price("Zelda (Nintendo Switch)")
+        assert r1 is not None and r1[0] == pytest.approx(12.0)
+        assert r2 is not None and r2[0] == pytest.approx(35.0)
+
+
+# ---------------------------------------------------------------------------
+# _collect_ebay_queries_for_deal
+# ---------------------------------------------------------------------------
+
+
+class TestCollectEbayQueriesForDeal:
+    """Tests for the per-deal query-collection helper."""
+
+    def _make_assessor_with_client(self):
+        a = GeminiAssessor()
+        # Provide a mock eBay client so the method knows to collect queries.
+        a._ebay_client = object()
+        return a
+
+    def test_single_game_xbox360(self):
+        """Single-game Xbox 360 listing produces a 'GAME (Microsoft Xbox 360)' query."""
+        a = self._make_assessor_with_client()
+        deal = {"title": "Halo 3 Xbox 360 gebraucht"}
+        queries = a._collect_ebay_queries_for_deal(deal)
+        assert len(queries) == 1
+        assert queries[0].endswith("(Microsoft Xbox 360)")
+        assert "Halo" in queries[0]
+
+    def test_single_game_ps4(self):
+        """Single-game PS4 listing produces a 'GAME (Sony PlayStation 4)' query."""
+        a = self._make_assessor_with_client()
+        deal = {"title": "God of War PS4"}
+        queries = a._collect_ebay_queries_for_deal(deal)
+        assert len(queries) == 1
+        assert "(Sony PlayStation 4)" in queries[0]
+
+    def test_bundle_produces_multiple_queries(self):
+        """Bundle listing produces one query per extracted game title."""
+        a = self._make_assessor_with_client()
+        deal = {"title": "Xbox 360 Bundle: Halo 3, Gears of War, Mass Effect"}
+        queries = a._collect_ebay_queries_for_deal(deal)
+        # Should have at least 2 game queries
+        assert len(queries) >= 2
+        # Every query should include the platform
+        for q in queries:
+            assert "(Microsoft Xbox 360)" in q
+
+    def test_bundle_no_titles_returns_empty(self):
+        """Bundle keyword present but no extractable titles → empty list."""
+        a = self._make_assessor_with_client()
+        deal = {"title": "10 Xbox 360 Spiele Sammlung Lot"}
+        queries = a._collect_ebay_queries_for_deal(deal)
+        # Either empty or only platform-free generic words
+        for q in queries:
+            # Should not be a bare platform keyword alone
+            assert len(q.strip()) >= 3
+
+    def test_no_ebay_client_returns_empty(self):
+        """Returns empty list when no eBay client is registered."""
+        a = GeminiAssessor()
+        a._ebay_client = None
+        deal = {"title": "Halo 3 Xbox 360"}
+        assert a._collect_ebay_queries_for_deal(deal) == []
+
+    def test_empty_title_returns_empty(self):
+        """Empty title returns empty list."""
+        a = self._make_assessor_with_client()
+        assert a._collect_ebay_queries_for_deal({"title": ""}) == []
+
+    def test_missing_title_returns_empty(self):
+        """Missing title key returns empty list."""
+        a = self._make_assessor_with_client()
+        assert a._collect_ebay_queries_for_deal({}) == []
+
+
+# ---------------------------------------------------------------------------
+# _prefetch_ebay_prices_parallel
+# ---------------------------------------------------------------------------
+
+
+class TestPrefetchEbayPricesParallel:
+    """Tests for the parallel eBay price pre-fetcher."""
+
+    def _make_assessor_with_mock_client(self, price_map=None):
+        """Return a GeminiAssessor with a mock eBay client.
+
+        *price_map* maps query substrings to (price, source) tuples so tests
+        can simulate different eBay API outcomes.
+        """
+        a = GeminiAssessor()
+        price_map = price_map or {}
+
+        def _mock_get_median(query, max_results=10):
+            for key, (price, source) in price_map.items():
+                if key in query:
+                    return price, source, []
+            return None, "no_result", []
+
+        mock_client = mock.MagicMock()
+        mock_client.get_median_sold_price.side_effect = _mock_get_median
+        a._ebay_client = mock_client
+        return a
+
+    def test_populates_cache_for_single_game_deal(self):
+        """Pre-fetch populates the cache for a single-game deal."""
+        a = self._make_assessor_with_mock_client({"Halo": (12.0, "sold_listings")})
+        deals = [{"title": "Halo 3 Xbox 360"}]
+        a._prefetch_ebay_prices_parallel(deals)
+        # Cache should now have a Halo 3 entry.
+        found = any(
+            a._cached_ebay_price(q) is not None
+            for q in a._collect_ebay_queries_for_deal(deals[0])
+        )
+        assert found, "Expected Halo 3 price to be in cache after prefetch"
+
+    def test_populates_cache_for_bundle_deal(self):
+        """Pre-fetch populates cache entries for games in a bundle listing."""
+        a = self._make_assessor_with_mock_client({
+            "Halo": (12.0, "sold_listings"),
+            "Gears": (9.0, "sold_listings"),
+        })
+        deals = [{"title": "Xbox 360 Bundle: Halo 3, Gears of War"}]
+        a._prefetch_ebay_prices_parallel(deals)
+        queries = a._collect_ebay_queries_for_deal(deals[0])
+        assert len(queries) >= 1
+        # At least one game should be cached.
+        assert any(a._cached_ebay_price(q) is not None for q in queries)
+
+    def test_deduplicates_queries_across_deals(self):
+        """Same game appearing in multiple deals triggers only one eBay call."""
+        call_count = {"n": 0}
+
+        def _mock_get_median(query, max_results=10):
+            call_count["n"] += 1
+            return 10.0, "sold_listings", []
+
+        a = GeminiAssessor()
+        mock_client = mock.MagicMock()
+        mock_client.get_median_sold_price.side_effect = _mock_get_median
+        a._ebay_client = mock_client
+
+        # Two deals with the same title → same query → should deduplicate.
+        deals = [
+            {"title": "Halo 3 Xbox 360"},
+            {"title": "Halo 3 Xbox 360"},
+        ]
+        a._prefetch_ebay_prices_parallel(deals)
+        assert call_count["n"] == 1, "Duplicate queries should only be fetched once"
+
+    def test_uses_cache_on_second_call(self):
+        """A second prefetch for the same deals does not make any eBay API calls."""
+        call_count = {"n": 0}
+
+        def _mock_get_median(query, max_results=10):
+            call_count["n"] += 1
+            return 10.0, "sold_listings", []
+
+        a = GeminiAssessor()
+        mock_client = mock.MagicMock()
+        mock_client.get_median_sold_price.side_effect = _mock_get_median
+        a._ebay_client = mock_client
+
+        deals = [{"title": "Halo 3 Xbox 360"}]
+        a._prefetch_ebay_prices_parallel(deals)
+        first_count = call_count["n"]
+        a._prefetch_ebay_prices_parallel(deals)
+        assert call_count["n"] == first_count, "Second prefetch should hit cache, not call eBay again"
+
+    def test_no_ebay_client_is_noop(self):
+        """When no eBay client is registered the method returns without error."""
+        a = GeminiAssessor()
+        a._ebay_client = None
+        deals = [{"title": "Halo 3 Xbox 360"}]
+        a._prefetch_ebay_prices_parallel(deals)  # Should not raise
+
+    def test_failed_ebay_call_does_not_raise(self):
+        """A failing eBay API call is silently absorbed; the cache is not poisoned."""
+        a = GeminiAssessor()
+        mock_client = mock.MagicMock()
+        mock_client.get_median_sold_price.side_effect = RuntimeError("connection refused")
+        a._ebay_client = mock_client
+        deals = [{"title": "Halo 3 Xbox 360"}]
+        a._prefetch_ebay_prices_parallel(deals)  # Should not raise
+
