@@ -120,12 +120,6 @@ async function loadModelSettings() {
         }
         // Sync the data source selector.
         _setDataSourceState(data.data_source, data.active_data_source, data.ebay_api_configured);
-        // Show active eBay marketplace/region.
-        _setMarketplaceStatus(data.ebay_marketplace_id, data.ebay_language, data.ebay_locale, data.ebay_delivery_country);
-        // Sync the Germany-only toggle.
-        if (typeof data.germany_only === 'boolean') {
-            _setGermanyOnlyState(data.germany_only);
-        }
     } catch (err) {
         console.warn('Failed to load model settings:', err);
     }
@@ -187,55 +181,6 @@ async function toggleAiEnabled() {
 }
 
 /**
- * Update the Germany-only toggle button visual state without making an API call.
- * @param {boolean} enabled
- */
-function _setGermanyOnlyState(enabled) {
-    const btn = document.getElementById('germanyOnlyToggleBtn');
-    if (!btn) return;
-    btn.setAttribute('aria-pressed', String(enabled));
-    const label = btn.querySelector('.germany-toggle-label');
-    const icon = btn.querySelector('.germany-toggle-icon');
-    if (label) label.textContent = enabled ? 'DE Only: ON' : 'DE Only: OFF';
-    if (icon) icon.textContent = enabled ? '🇩🇪' : '🌍';
-}
-
-/**
- * Toggle the Germany-only location filter and persist it via the settings API.
- * When ON, only deals with items physically located in Germany are returned.
- */
-async function toggleGermanyOnly() {
-    const btn = document.getElementById('germanyOnlyToggleBtn');
-    if (!btn) return;
-    const currentlyEnabled = btn.getAttribute('aria-pressed') === 'true';
-    const newState = !currentlyEnabled;
-
-    // Optimistically update UI immediately.
-    _setGermanyOnlyState(newState);
-    btn.disabled = true;
-
-    try {
-        const response = await fetch('/api/settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ germany_only: newState }),
-        });
-        const data = await response.json();
-        if (!response.ok) {
-            // Revert on failure.
-            _setGermanyOnlyState(currentlyEnabled);
-        } else {
-            _setGermanyOnlyState(data.germany_only);
-        }
-    } catch (err) {
-        // Revert on error.
-        _setGermanyOnlyState(currentlyEnabled);
-    } finally {
-        btn.disabled = false;
-    }
-}
-
-/**
  * Update the data source selector and status badge.
  * @param {string} setting  - Persisted setting: "auto", "api", or "scraper".
  * @param {string} active   - The engine actually in use: "api" or "scraper".
@@ -261,27 +206,6 @@ function _setDataSourceState(setting, active, apiConfigured) {
             statusEl.textContent = '';
             statusEl.className = 'data-source-status';
         }
-    }
-}
-
-/**
- * Show the active eBay marketplace/region in the settings panel.
- * @param {string} marketplaceId   - e.g. "EBAY_DE"
- * @param {string} language        - e.g. "de-DE,de;q=0.9"
- * @param {string} locale          - e.g. "de_DE"
- * @param {string} deliveryCountry - e.g. "DE"
- */
-function _setMarketplaceStatus(marketplaceId, language, locale, deliveryCountry) {
-    const el = document.getElementById('ebayMarketplaceStatus');
-    if (!el) return;
-    if (marketplaceId) {
-        const lang = language ? ` · ${language.split(',')[0]}` : '';
-        el.textContent = `${marketplaceId}${lang}`;
-        el.title = `Marketplace: ${marketplaceId} | Locale: ${locale || 'n/a'} | Language: ${language || 'n/a'} | Delivery country: ${deliveryCountry || 'n/a'}`;
-        el.className = 'marketplace-status marketplace-status--active';
-    } else {
-        el.textContent = '';
-        el.className = 'marketplace-status';
     }
 }
 
