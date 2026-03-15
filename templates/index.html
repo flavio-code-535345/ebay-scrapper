@@ -46,6 +46,15 @@
                     <span class="ai-toggle-label">AI: ON</span>
                 </button>
             </div>
+            <div class="settings-row">
+                <label for="dataSourceSelect" class="settings-label">🔌 Data Source</label>
+                <select id="dataSourceSelect" class="settings-select" title="Choose between the official eBay API and legacy HTML scraping">
+                    <option value="auto">Auto (API if configured, else Scraper)</option>
+                    <option value="api">eBay Official API</option>
+                    <option value="scraper">Legacy Scraper</option>
+                </select>
+                <span id="dataSourceStatus" class="data-source-status"></span>
+            </div>
             <div id="modelStatus" class="model-status"></div>
         </div>
     </header>
@@ -75,6 +84,7 @@
         <div id="resultsContainer" class="d-none">
             <div class="results-header">
                 <h2><span id="dealCount">0</span> deals found</h2>
+                <span id="dataSourceBadge" class="data-source-badge d-none"></span>
                 <button id="exportBtn" class="btn-export">📥 Export CSV</button>
             </div>
             <div id="aiWarningContainer" class="alert alert-warning d-none"></div>

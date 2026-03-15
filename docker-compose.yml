@@ -14,6 +14,15 @@ services:
       # Set your Gemini API key here (or use a .env file / Docker secret).
       # Never commit the actual key value — leave blank to disable AI assessment.
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # eBay Official API credentials (optional).
+      # Obtain from https://developer.ebay.com/
+      # Leave blank to use legacy HTML scraping instead.
+      - EBAY_CLIENT_ID=${EBAY_CLIENT_ID:-}
+      - EBAY_CLIENT_SECRET=${EBAY_CLIENT_SECRET:-}
+      - EBAY_MARKETPLACE_ID=${EBAY_MARKETPLACE_ID:-EBAY_DE}
+      - EBAY_ENVIRONMENT=${EBAY_ENVIRONMENT:-production}
+      # DATA_SOURCE: "auto" (default), "api", or "scraper"
+      - DATA_SOURCE=${DATA_SOURCE:-auto}
     volumes:
       - ebay_db:/data
     healthcheck:

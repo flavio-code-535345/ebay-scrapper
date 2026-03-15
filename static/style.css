@@ -646,3 +646,71 @@ body {
         background: rgba(255, 255, 255, 0.08);
     }
 }
+
+/* ── Data-source selector & status ──────────────────────────────────────── */
+
+.settings-select {
+    padding: 0.4rem 0.75rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+    font-size: 0.88rem;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.2s;
+    /* Ensure the option text is readable in all browsers */
+    appearance: auto;
+}
+
+.settings-select:focus {
+    border-color: rgba(255, 255, 255, 0.7);
+    background: rgba(255, 255, 255, 0.22);
+}
+
+.settings-select option {
+    background: #1a1a2e;
+    color: #fff;
+}
+
+.data-source-status {
+    font-size: 0.82rem;
+    white-space: nowrap;
+    min-height: 1.2em;
+    color: rgba(255, 255, 255, 0.75);
+}
+
+.data-source-status--api {
+    color: #a8f0c6;
+}
+
+.data-source-status--scraper {
+    color: #93c5fd;
+}
+
+.data-source-status--error {
+    color: #fca5a5;
+}
+
+/* ── Data-source badge in results header ────────────────────────────────── */
+
+.data-source-badge {
+    display: inline-block;
+    padding: 0.25rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border: 1px solid transparent;
+}
+
+.data-source-badge--api {
+    background: #d1fae5;
+    color: #065f46;
+    border-color: #6ee7b7;
+}
+
+.data-source-badge--scraper {
+    background: #dbeafe;
+    color: #1e40af;
+    border-color: #93c5fd;
+}

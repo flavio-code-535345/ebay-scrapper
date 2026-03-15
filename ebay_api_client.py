@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""
+eBay Official Browse API Client
+Uses the eBay Browse API (OAuth client-credentials flow) to search listings
+and returns data in the same schema as the legacy EbayScraper.
+"""
+
+import base64
+import logging
+import os
+import time
+from typing import Dict, List, Optional, Tuple
+
+import requests
+
+logger = logging.getLogger(__name__)
+
+# Mapping eBay API conditionId → human-readable English label understood by
+# the existing DealAssessor (which scores on 'new', 'refurbished', 'used', etc.)
+_CONDITION_ID_MAP: Dict[str, str] = {
+    "1000": "New",
+    "1500": "New – Other",
+    "1750": "New with defects",
+    "2000": "Manufacturer Refurbished",
+    "2500": "Seller Refurbished",
+    "3000": "Used",
+    "4000": "Very Good",
+    "5000": "Good",
+    "6000": "Acceptable",
+    "7000": "For parts or not working",
+}
+
+
+class EbayApiClient:
+    """eBay Browse API search client.
+
+    Authenticates via OAuth2 application-level client credentials and calls
+    the ``/buy/browse/v1/item_summary/search`` endpoint.  Results are
+    normalised to the same dict schema produced by :class:`EbayScraper` so
+    that the rest of the application (assessors, database, frontend) requires
+    no changes.
+
+    Environment variables
+    ----------------------
+    EBAY_CLIENT_ID       — eBay developer application Client ID (required)
+    EBAY_CLIENT_SECRET   — eBay developer application Client Secret (required)
+    EBAY_MARKETPLACE_ID  — eBay marketplace (default: ``EBAY_DE``)
+    EBAY_ENVIRONMENT     — ``production`` (default) or ``sandbox``
+    """
+
+    _OAUTH_PATH = "/identity/v1/oauth2/token"
+    _SEARCH_PATH = "/buy/browse/v1/item_summary/search"
+    _SCOPE = "https://api.ebay.com/oauth/api_scope"
+
+    # Token refresh 60 s before expiry to avoid using a stale token.
+    _TOKEN_REFRESH_BUFFER = 60
+
+    def __init__(self) -> None:
+        self.client_id: str = os.environ.get("EBAY_CLIENT_ID", "").strip()
+        self.client_secret: str = os.environ.get("EBAY_CLIENT_SECRET", "").strip()
+        self.marketplace_id: str = os.environ.get("EBAY_MARKETPLACE_ID", "EBAY_DE").strip()
+
+        env = os.environ.get("EBAY_ENVIRONMENT", "production").strip().lower()
+        if env == "sandbox":
+            self._base_url = "https://api.sandbox.ebay.com"
+        else:
+            self._base_url = "https://api.ebay.com"
+
+        self._token: Optional[str] = None
+        self._token_expires_at: float = 0.0
+        self.session = requests.Session()
+
+    # ── Public interface ───────────────────────────────────────────────────
+
+    @property
+    def is_configured(self) -> bool:
+        """Return ``True`` when both required credentials are present."""
+        return bool(self.client_id and self.client_secret)
+
+    def search(self, query: str, max_results: int = 50) -> Tuple[List[Dict], List[str]]:
+        """Search eBay via the Browse API.
+
+        Returns a ``(deals, errors)`` tuple that matches the contract of
+        :meth:`EbayScraper.search` so the two engines are interchangeable.
+        """
+        errors: List[str] = []
+
+        if not self.is_configured:
+            errors.append(
+                "eBay API credentials are not configured. "
+                "Set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in your environment."
+            )
+            return [], errors
+
+        # Obtain a valid access token.
+        try:
+            token = self._get_access_token()
+        except requests.exceptions.HTTPError as exc:
+            msg = f"eBay API authentication failed: {exc}"
+            logger.error(msg)
+            errors.append(msg)
+            return [], errors
+        except requests.exceptions.Timeout:
+            msg = "eBay OAuth token request timed out"
+            logger.error(msg)
+            errors.append(msg)
+            return [], errors
+        except requests.exceptions.ConnectionError as exc:
+            msg = f"eBay OAuth connection error: {exc}"
+            logger.error(msg)
+            errors.append(msg)
+            return [], errors
+
+        # Call the search endpoint.
+        url = self._base_url + self._SEARCH_PATH
+        params = {
+            "q": query,
+            "limit": min(max(1, max_results), 200),
+            "sort": "newlyListed",
+        }
+        # Restrict to domestic delivery for the selected marketplace.
+        if self.marketplace_id == "EBAY_DE":
+            params["filter"] = "deliveryCountry:DE"
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-EBAY-C-MARKETPLACE-ID": self.marketplace_id,
+            "Content-Type": "application/json",
+        }
+
+        logger.info(
+            "eBay Browse API search: q=%r limit=%d marketplace=%s",
+            query, params["limit"], self.marketplace_id,
+        )
+
+        try:
+            response = self.session.get(url, headers=headers, params=params, timeout=15)
+        except requests.exceptions.Timeout:
+            msg = "eBay Browse API request timed out after 15 seconds"
+            logger.error(msg)
+            errors.append(msg)
+            return [], errors
+        except requests.exceptions.ConnectionError as exc:
+            msg = f"eBay Browse API connection error: {exc}"
+            logger.error(msg)
+            errors.append(msg)
+            return [], errors
+
+        logger.info("eBay Browse API HTTP %d %s", response.status_code, response.reason)
+
+        if not response.ok:
+            try:
+                err_body = response.json()
+                api_msg = "; ".join(
+                    e.get("message", "") for e in err_body.get("errors", [])
+                ) or response.reason
+            except Exception:
+                api_msg = response.reason
+            msg = f"eBay Browse API error {response.status_code}: {api_msg}"
+            logger.error(msg)
+            errors.append(msg)
+            if response.status_code == 401:
+                # Invalidate cached token so it will be refreshed on the next call.
+                self._token = None
+                self._token_expires_at = 0.0
+                errors.append(
+                    "Authentication token was rejected. Check EBAY_CLIENT_ID and "
+                    "EBAY_CLIENT_SECRET and ensure your application has the "
+                    "required Browse API scopes."
+                )
+            elif response.status_code == 429:
+                errors.append(
+                    "eBay API rate limit exceeded. Wait before making another request."
+                )
+            return [], errors
+
+        try:
+            body = response.json()
+        except Exception as exc:
+            msg = f"Failed to parse eBay API response as JSON: {exc}"
+            logger.error(msg)
+            errors.append(msg)
+            return [], errors
+
+        raw_items = body.get("itemSummaries", [])
+        total = body.get("total", len(raw_items))
+        logger.info("eBay Browse API returned %d/%d items", len(raw_items), total)
+
+        if not raw_items:
+            # Provide a helpful diagnostic when zero items come back.
+            warnings = body.get("warnings", [])
+            if warnings:
+                for w in warnings:
+                    errors.append(f"eBay API warning: {w.get('message', w)}")
+            else:
+                errors.append(
+                    f"eBay Browse API returned 0 results for query {query!r}. "
+                    "Try a different search term."
+                )
+            return [], errors
+
+        deals: List[Dict] = []
+        parse_errors = 0
+        for item in raw_items:
+            try:
+                deal = self._normalize_item(item)
+                if deal:
+                    deals.append(deal)
+            except Exception as exc:
+                parse_errors += 1
+                logger.warning("Failed to parse API item %r: %s", item.get("itemId"), exc)
+
+        if parse_errors:
+            errors.append(f"{parse_errors} item(s) from the eBay API could not be parsed and were skipped.")
+
+        logger.info("Returning %d normalised deals (%d errors)", len(deals), len(errors))
+        return deals, errors
+
+    # ── Private helpers ────────────────────────────────────────────────────
+
+    def _get_access_token(self) -> str:
+        """Return a valid OAuth application access token, refreshing if needed."""
+        now = time.monotonic()
+        if self._token and now < self._token_expires_at:
+            return self._token
+
+        logger.info("Requesting new eBay OAuth application token")
+
+        credentials = base64.b64encode(
+            f"{self.client_id}:{self.client_secret}".encode("utf-8")
+        ).decode("ascii")
+
+        response = self.session.post(
+            self._base_url + self._OAUTH_PATH,
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data={
+                "grant_type": "client_credentials",
+                "scope": self._SCOPE,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+
+        token_data = response.json()
+        self._token = token_data["access_token"]
+        expires_in = int(token_data.get("expires_in", 7200))
+        self._token_expires_at = now + expires_in - self._TOKEN_REFRESH_BUFFER
+        logger.info("eBay OAuth token obtained (expires in %ds)", expires_in)
+        return self._token
+
+    def _normalize_item(self, item: dict) -> Optional[Dict]:
+        """Map a Browse API ``itemSummary`` object to our internal deal dict.
+
+        Returns ``None`` when the item lacks both a title and a URL (i.e. is
+        not usable data).
+        """
+        title = (item.get("title") or "").strip()
+        url = item.get("itemWebUrl", "").strip()
+
+        if not title and not url:
+            return None
+
+        # ── Price ──────────────────────────────────────────────────────────
+        price_obj = item.get("price") or {}
+        try:
+            price = float(price_obj.get("value", 0))
+        except (TypeError, ValueError):
+            price = 0.0
+
+        # ── Condition ──────────────────────────────────────────────────────
+        condition_id = str(item.get("conditionId", ""))
+        condition_text = item.get("condition", "")
+        condition = _CONDITION_ID_MAP.get(condition_id, condition_text or "Unknown")
+
+        # ── Seller ─────────────────────────────────────────────────────────
+        seller = item.get("seller") or {}
+        try:
+            seller_rating = float(seller.get("feedbackPercentage", 0))
+        except (TypeError, ValueError):
+            seller_rating = 0.0
+
+        # ── Shipping ───────────────────────────────────────────────────────
+        shipping = self._parse_shipping(item.get("shippingOptions") or [])
+
+        # ── Trending ───────────────────────────────────────────────────────
+        # The Browse API exposes a "topRatedBuyingExperience" flag and
+        # a "priorityListing" flag; treat either as "trending".
+        is_trending = bool(
+            item.get("topRatedBuyingExperience")
+            or item.get("priorityListing")
+            or item.get("watchCount", 0) > 10
+        )
+
+        # ── Images ─────────────────────────────────────────────────────────
+        image_urls: List[str] = []
+        primary_image = item.get("image") or item.get("thumbnailImages", [{}])[0]
+        if isinstance(primary_image, dict) and primary_image.get("imageUrl"):
+            image_urls.append(primary_image["imageUrl"])
+        for img in item.get("additionalImages") or []:
+            if isinstance(img, dict) and img.get("imageUrl"):
+                image_urls.append(img["imageUrl"])
+
+        return {
+            "title": title or "Unknown",
+            "price": price,
+            "condition": condition,
+            "seller_rating": seller_rating,
+            "url": url,
+            "shipping": shipping,
+            "is_trending": is_trending,
+            "image_urls": image_urls,
+        }
+
+    @staticmethod
+    def _parse_shipping(shipping_options: list) -> str:
+        """Convert Browse API shippingOptions list to a human-readable string."""
+        if not shipping_options:
+            return "N/A"
+
+        option = shipping_options[0]
+        cost_type = (option.get("shippingCostType") or "").upper()
+
+        if cost_type in ("FREE", "FREE_SHIPPING"):
+            return "Free"
+
+        cost_obj = option.get("shippingCost") or {}
+        try:
+            amount = float(cost_obj.get("value", 0))
+        except (TypeError, ValueError):
+            amount = 0.0
+
+        if amount == 0.0:
+            return "Free"
+
+        currency = (cost_obj.get("currency") or "EUR").upper()
+        symbol = "€" if currency == "EUR" else currency
+        return f"{symbol}{amount:.2f}"
