@@ -229,10 +229,11 @@ def search():
     # Rules-based assessment (always available as baseline/fallback).
     rules_assessments = [assessor.assess_deal(deal) for deal in deals]
 
-    # Filter to the top 20 decent bundle deals before sending to Gemini:
-    # sort by rules score descending, drop low-quality entries, cap at 20.
+    # Filter to the top 50 decent bundle deals before sending to Gemini:
+    # sort by rules score descending, drop low-quality entries, cap at 50
+    # (matches _BATCH_SIZE in gemini_assessor so all deals go in one request).
     _DECENT_SCORE_MIN = 50
-    _MAX_DISPLAY = 20
+    _MAX_DISPLAY = 50
     _pairs = sorted(
         zip(deals, rules_assessments),
         key=lambda t: -(t[1].get('overall_score') or 0),
