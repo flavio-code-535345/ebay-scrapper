@@ -100,7 +100,7 @@
                 <select id="ratingFilter" class="filter-select" title="Filter by AI rating">
                     <option value="">All ratings</option>
                     <option value="must buy">Must Buy</option>
-                    <option value="fair">Fair</option>
+                    <option value="okay">Okay</option>
                     <option value="avoid">Avoid</option>
                 </select>
             </div>
@@ -117,6 +117,26 @@
                 <button id="exportBtn" class="btn-export">📥 Export CSV</button>
             </div>
         </div>
+
+        <!-- Rating legend -->
+        <details class="rating-legend" id="ratingLegend">
+            <summary class="rating-legend-summary">📊 Rating Legend</summary>
+            <div class="rating-legend-body">
+                <div class="rating-legend-item">
+                    <span class="ai-badge badge-must-buy">Must Buy</span>
+                    <span class="rating-legend-desc">Gross profit ≥ 100% of total cost (profit ≥ asking price + shipping). Exceptional flip — act immediately.</span>
+                </div>
+                <div class="rating-legend-item">
+                    <span class="ai-badge badge-okay">Okay</span>
+                    <span class="rating-legend-desc">Gross profit ≥ 33% of total cost but &lt; 100%. Moderate margin — worth considering.</span>
+                </div>
+                <div class="rating-legend-item">
+                    <span class="ai-badge badge-avoid">Avoid</span>
+                    <span class="rating-legend-desc">Gross profit &lt; 33% of total cost (break-even or loss), scam detected, or dominated by low-demand items.</span>
+                </div>
+                <p class="rating-legend-note">Profit = estimated resale value − (asking price + shipping). Ratings are calculated by AI based on current eBay market data.</p>
+            </div>
+        </details>
 
         <!-- Empty state -->
         <div id="emptyState" class="empty-state d-none">
