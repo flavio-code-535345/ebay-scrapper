@@ -446,29 +446,32 @@ _IMAGE_FETCH_TIMEOUT = 5
 _DEFAULT_BACKOFF_SECONDS = 60
 
 # Maximum number of deals bundled into a single Gemini generateContent call.
-# Capped at 10 to match the Gemini AFC (Adaptive Flow Control) limit of 10
-# max remote calls per request.  Smaller batches also reduce per-request
-# latency and memory usage.
-_BATCH_SIZE = 10
+# Reduced from 10 to 5 so that each prompt is smaller, reducing per-batch
+# latency and allowing more batches to complete within the total budget before
+# the Gunicorn worker timeout fires.
+_BATCH_SIZE = 5
 
 # Retry configuration for transient (non-rate-limit) API errors.
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 2.0  # seconds; doubled on each retry (exponential back-off)
 
 # Hard timeout (seconds) applied around a single Gemini generateContent call,
-# including all internal SDK retries.  With _BATCH_SIZE=10 each call is small
+# including all internal SDK retries.  With _BATCH_SIZE=5 each call is small
 # enough to complete well within this window under normal network conditions.
 # If the call stalls, the ThreadPoolExecutor future times out here and returns
 # graceful timeout errors rather than blocking the Gunicorn worker.
-_GEMINI_REQUEST_TIMEOUT = 25
+_GEMINI_REQUEST_TIMEOUT = 20
 
 # Total wall-clock budget (seconds) for the entire assess_deals_batch() call
 # (all sub-batches combined).  This is the last line of defence against a
 # Gunicorn worker timeout: if the cumulative Gemini time exceeds this limit,
 # remaining batches are skipped and their deals are returned as timeout errors.
 # Set well below the Gunicorn worker timeout (180 s) to leave room for eBay
-# API calls and other per-request work.
-_ASSESS_TOTAL_BUDGET_S = 90
+# API calls and other per-request work.  Increased from 90 s to 120 s so that
+# larger result sets (50 deals → 10 batches of 5) have a better chance of
+# completing fully; the eBay pre-fetch (≤20 s) + 120 s Gemini budget still
+# leaves a 40 s safety margin before the 180 s Gunicorn limit.
+_ASSESS_TOTAL_BUDGET_S = 120
 
 # ---------------------------------------------------------------------------
 # eBay price pre-fetch / caching settings
