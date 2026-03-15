@@ -116,7 +116,7 @@ async function loadModelSettings() {
         // Sync the data source selector.
         _setDataSourceState(data.data_source, data.active_data_source, data.ebay_api_configured);
         // Show active eBay marketplace/region.
-        _setMarketplaceStatus(data.ebay_marketplace_id, data.ebay_language, data.ebay_delivery_country);
+        _setMarketplaceStatus(data.ebay_marketplace_id, data.ebay_language, data.ebay_locale, data.ebay_delivery_country);
     } catch (err) {
         console.warn('Failed to load model settings:', err);
     }
@@ -210,15 +210,16 @@ function _setDataSourceState(setting, active, apiConfigured) {
  * Show the active eBay marketplace/region in the settings panel.
  * @param {string} marketplaceId   - e.g. "EBAY_DE"
  * @param {string} language        - e.g. "de-DE,de;q=0.9"
+ * @param {string} locale          - e.g. "de_DE"
  * @param {string} deliveryCountry - e.g. "DE"
  */
-function _setMarketplaceStatus(marketplaceId, language, deliveryCountry) {
+function _setMarketplaceStatus(marketplaceId, language, locale, deliveryCountry) {
     const el = document.getElementById('ebayMarketplaceStatus');
     if (!el) return;
     if (marketplaceId) {
         const lang = language ? ` · ${language.split(',')[0]}` : '';
         el.textContent = `${marketplaceId}${lang}`;
-        el.title = `Marketplace: ${marketplaceId} | Language: ${language || 'n/a'} | Delivery country: ${deliveryCountry || 'n/a'}`;
+        el.title = `Marketplace: ${marketplaceId} | Locale: ${locale || 'n/a'} | Language: ${language || 'n/a'} | Delivery country: ${deliveryCountry || 'n/a'}`;
         el.className = 'marketplace-status marketplace-status--active';
     } else {
         el.textContent = '';

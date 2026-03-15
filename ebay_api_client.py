@@ -30,31 +30,37 @@ _CONDITION_ID_MAP: Dict[str, str] = {
     "7000": "For parts or not working",
 }
 
-# Mapping eBay marketplace ID → (Accept-Language header value, ISO-3166 country code).
-# The Accept-Language header tells eBay which language to use for item titles,
-# category names, and other localised metadata in API responses.
-# The country code is used for the deliveryCountry filter to restrict results
-# to items that ship domestically within the target market.
+# Mapping eBay marketplace ID → locale settings.
+# Keys:
+#   language — value for the HTTP Accept-Language request header.  Tells eBay
+#              which language to use for item titles, category names, and other
+#              localised metadata in API responses.
+#   country  — ISO-3166 alpha-2 country code.  Used for the deliveryCountry
+#              filter to restrict results to items that ship domestically within
+#              the target market, and for the X-EBAY-C-ENDUSERCTX header.
+#   locale   — value for the X-EBAY-C-LOCALE request header.  This is the
+#              primary signal eBay's Browse API uses to return content in the
+#              correct regional language.  Format: <language>_<COUNTRY>.
 _MARKETPLACE_LOCALE_MAP: Dict[str, Dict[str, str]] = {
-    "EBAY_AT": {"language": "de-AT,de;q=0.9", "country": "AT"},
-    "EBAY_AU": {"language": "en-AU,en;q=0.9", "country": "AU"},
-    "EBAY_BE": {"language": "nl-BE,nl;q=0.9,fr-BE;q=0.8", "country": "BE"},
-    "EBAY_CA": {"language": "en-CA,en;q=0.9", "country": "CA"},
-    "EBAY_CH": {"language": "de-CH,de;q=0.9", "country": "CH"},
-    "EBAY_DE": {"language": "de-DE,de;q=0.9", "country": "DE"},
-    "EBAY_ES": {"language": "es-ES,es;q=0.9", "country": "ES"},
-    "EBAY_FR": {"language": "fr-FR,fr;q=0.9", "country": "FR"},
-    "EBAY_GB": {"language": "en-GB,en;q=0.9", "country": "GB"},
-    "EBAY_HK": {"language": "zh-HK,zh;q=0.9,en;q=0.8", "country": "HK"},
-    "EBAY_IE": {"language": "en-IE,en;q=0.9", "country": "IE"},
-    "EBAY_IN": {"language": "en-IN,en;q=0.9", "country": "IN"},
-    "EBAY_IT": {"language": "it-IT,it;q=0.9", "country": "IT"},
-    "EBAY_MY": {"language": "en-MY,en;q=0.9", "country": "MY"},
-    "EBAY_NL": {"language": "nl-NL,nl;q=0.9", "country": "NL"},
-    "EBAY_PH": {"language": "en-PH,en;q=0.9", "country": "PH"},
-    "EBAY_PL": {"language": "pl-PL,pl;q=0.9", "country": "PL"},
-    "EBAY_SG": {"language": "en-SG,en;q=0.9", "country": "SG"},
-    "EBAY_US": {"language": "en-US,en;q=0.9", "country": "US"},
+    "EBAY_AT": {"language": "de-AT,de;q=0.9", "country": "AT", "locale": "de_AT"},
+    "EBAY_AU": {"language": "en-AU,en;q=0.9", "country": "AU", "locale": "en_AU"},
+    "EBAY_BE": {"language": "nl-BE,nl;q=0.9,fr-BE;q=0.8", "country": "BE", "locale": "nl_BE"},
+    "EBAY_CA": {"language": "en-CA,en;q=0.9", "country": "CA", "locale": "en_CA"},
+    "EBAY_CH": {"language": "de-CH,de;q=0.9", "country": "CH", "locale": "de_CH"},
+    "EBAY_DE": {"language": "de-DE,de;q=0.9", "country": "DE", "locale": "de_DE"},
+    "EBAY_ES": {"language": "es-ES,es;q=0.9", "country": "ES", "locale": "es_ES"},
+    "EBAY_FR": {"language": "fr-FR,fr;q=0.9", "country": "FR", "locale": "fr_FR"},
+    "EBAY_GB": {"language": "en-GB,en;q=0.9", "country": "GB", "locale": "en_GB"},
+    "EBAY_HK": {"language": "zh-HK,zh;q=0.9,en;q=0.8", "country": "HK", "locale": "zh_HK"},
+    "EBAY_IE": {"language": "en-IE,en;q=0.9", "country": "IE", "locale": "en_IE"},
+    "EBAY_IN": {"language": "en-IN,en;q=0.9", "country": "IN", "locale": "en_IN"},
+    "EBAY_IT": {"language": "it-IT,it;q=0.9", "country": "IT", "locale": "it_IT"},
+    "EBAY_MY": {"language": "en-MY,en;q=0.9", "country": "MY", "locale": "en_MY"},
+    "EBAY_NL": {"language": "nl-NL,nl;q=0.9", "country": "NL", "locale": "nl_NL"},
+    "EBAY_PH": {"language": "en-PH,en;q=0.9", "country": "PH", "locale": "en_PH"},
+    "EBAY_PL": {"language": "pl-PL,pl;q=0.9", "country": "PL", "locale": "pl_PL"},
+    "EBAY_SG": {"language": "en-SG,en;q=0.9", "country": "SG", "locale": "en_SG"},
+    "EBAY_US": {"language": "en-US,en;q=0.9", "country": "US", "locale": "en_US"},
 }
 
 
@@ -72,11 +78,20 @@ class EbayApiClient:
     EBAY_CLIENT_ID       — eBay developer application Client ID (required)
     EBAY_CLIENT_SECRET   — eBay developer application Client Secret (required)
     EBAY_MARKETPLACE_ID  — eBay marketplace (default: ``EBAY_DE``).
-                           The marketplace ID controls the regional catalogue,
-                           ``Accept-Language`` header, and ``deliveryCountry``
-                           filter so that results come from the correct national
-                           eBay site and are returned in the local language.
+                           Controls the regional catalogue, ``Accept-Language``
+                           header, ``X-EBAY-C-LOCALE`` header, and
+                           ``deliveryCountry`` filter so that results come from
+                           the correct national eBay site and are returned in
+                           the local language.
     EBAY_ENVIRONMENT     — ``production`` (default) or ``sandbox``
+
+    .. note::
+        Item titles and descriptions are stored in eBay in the language chosen
+        by the seller at listing time.  Even with all locale headers set
+        correctly, items that were listed in English by their sellers will
+        still be returned with English titles.  The locale headers maximize the
+        proportion of native-language results but cannot override seller-entered
+        content.
     """
 
     _OAUTH_PATH = "/identity/v1/oauth2/token"
@@ -109,14 +124,15 @@ class EbayApiClient:
             _locale = _MARKETPLACE_LOCALE_MAP["EBAY_DE"]
         self.accept_language: str = _locale["language"]
         self.delivery_country: str = _locale["country"]
+        self.locale: str = _locale["locale"]
 
         self._token: Optional[str] = None
         self._token_expires_at: float = 0.0
         self.session = requests.Session()
 
         logger.info(
-            "EbayApiClient: marketplace=%s language=%s country=%s env=%s",
-            self.marketplace_id, self.accept_language, self.delivery_country, env,
+            "EbayApiClient: marketplace=%s locale=%s language=%s country=%s env=%s",
+            self.marketplace_id, self.locale, self.accept_language, self.delivery_country, env,
         )
 
     # ── Public interface ───────────────────────────────────────────────────
@@ -175,6 +191,9 @@ class EbayApiClient:
             "X-EBAY-C-MARKETPLACE-ID": self.marketplace_id,
             # Tell eBay which language to use for item titles and metadata.
             "Accept-Language": self.accept_language,
+            # X-EBAY-C-LOCALE is the primary signal the Browse API uses to return
+            # content in the correct regional language (format: language_COUNTRY).
+            "X-EBAY-C-LOCALE": self.locale,
             # Provide contextual location so eBay routes to the correct regional
             # catalogue and returns localised pricing/shipping.
             "X-EBAY-C-ENDUSERCTX": f"contextualLocation=country%3D{self.delivery_country}",
@@ -182,8 +201,8 @@ class EbayApiClient:
         }
 
         logger.info(
-            "eBay Browse API search: q=%r limit=%d marketplace=%s",
-            query, params["limit"], self.marketplace_id,
+            "eBay Browse API search: q=%r limit=%d marketplace=%s locale=%s",
+            query, params["limit"], self.marketplace_id, self.locale,
         )
 
         try:
