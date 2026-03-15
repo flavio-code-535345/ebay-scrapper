@@ -919,6 +919,7 @@ a:hover { text-decoration: underline; }
 .ai-itemized-table .itemized-cost td  { color: var(--text-muted); font-size: 0.72rem; }
 .ai-itemized-table .profit-positive td { color: #3fb950; font-weight: 700; }
 .ai-itemized-table .profit-negative td { color: #f85149; font-weight: 700; }
+.ai-itemized-table .row-exceptional td { background: rgba(63,185,80,0.08); color: var(--green); font-weight: 600; }
 
 /* Price source badges inside itemized table */
 .price-source {
