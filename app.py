@@ -258,6 +258,9 @@ def health():
         'data_source': active_source,
         'data_source_setting': data_source_setting,
         'ebay_api_configured': ebay_api.is_configured,
+        'ebay_marketplace_id': ebay_api.marketplace_id,
+        'ebay_language': ebay_api.accept_language,
+        'ebay_delivery_country': ebay_api.delivery_country,
     })
 
 
@@ -271,6 +274,9 @@ def get_settings():
         'data_source': data_source_setting,
         'active_data_source': active_source,
         'ebay_api_configured': ebay_api.is_configured,
+        'ebay_marketplace_id': ebay_api.marketplace_id,
+        'ebay_language': ebay_api.accept_language,
+        'ebay_delivery_country': ebay_api.delivery_country,
     })
 
 
@@ -337,6 +343,9 @@ def update_settings():
         'data_source': data_source_setting,
         'active_data_source': active_source,
         'ebay_api_configured': ebay_api.is_configured,
+        'ebay_marketplace_id': ebay_api.marketplace_id,
+        'ebay_language': ebay_api.accept_language,
+        'ebay_delivery_country': ebay_api.delivery_country,
     })
 
 
