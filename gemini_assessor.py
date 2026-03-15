@@ -34,7 +34,7 @@ enjoyment, nostalgia, or collector value — only resale profit matters.
 
 ### ABSOLUTE RULE — THE 2 € THRESHOLD
 > If a game (or bundle) is listed as **working/functional** and the total \
-price (including shipping) is **≤ 2 €**, it is ALWAYS rated **"Must Buy"** \
+price (including shipping) is **≤ 2 €**, it is ALWAYS rated **"Must Have"** \
 regardless of market value, popularity, or condition.  
 > State this rule explicitly in your verdict when it applies.
 
@@ -60,12 +60,14 @@ sports/Kinect content in resale value and provide meaningful net profit.
 Your `deal_rating` is determined **solely by resale profit potential** \
 (gross profit = estimated resale − total cost; total cost = asking price + \
 shipping):
-- **"Must Buy"**: Gross profit ≥ total cost (i.e. ≥ 100 % return on cost). \
-A genuinely exceptional flip that a reseller should act on immediately.
-- **"Okay"**: Gross profit ≥ 33 % of total cost but < 100 % of total cost. \
-A moderate margin worth considering.
-- **"Avoid"**: Gross profit < 33 % of total cost (including break-even or \
-loss), scam/fraud detected, or the listing is dominated by low-demand \
+- **"Must Have"**: Gross profit ≥ total cost (i.e. ≥ 100 % return on cost). \
+An amazing deal — act immediately.
+- **"Good"**: Gross profit ≥ 50 % of total cost but < 100 % of total cost. \
+Good profits — strong flip worth acting on.
+- **"Okay"**: Gross profit > 0 but < 50 % of total cost. \
+Decent profits — worth considering.
+- **"Avoid"**: Gross profit ≤ 0 (unprofitable — break-even or loss), \
+scam/fraud detected, or the listing is dominated by low-demand \
 categories (sports/Kinect bundles, common shovelware).
 
 ### ANALYSIS PROTOCOL
@@ -175,7 +177,7 @@ preference influence the rating — only profit counts.
 ### OUTPUT FORMAT
 Return **only** a JSON object (no markdown fences, no commentary) with \
 exactly these keys:
-- `"deal_rating"`: `"Must Buy"` / `"Okay"` / `"Avoid"`
+- `"deal_rating"`: `"Must Have"` / `"Good"` / `"Okay"` / `"Avoid"`
 - `"confidence_score"`: integer 1–100
 - `"potential_scam"`: boolean — `true` if this listing shows signs of \
 bundle-bait or bait-and-switch (buyer likely receives only one game despite \
@@ -217,7 +219,7 @@ collector value — only resale profit matters.
 
 ### ABSOLUTE RULE — THE 2 € THRESHOLD
 > If a game (or bundle) is listed as **working/functional** and the total \
-price (including shipping) is **≤ 2 €**, it is ALWAYS rated **"Must Buy"** \
+price (including shipping) is **≤ 2 €**, it is ALWAYS rated **"Must Have"** \
 regardless of market value, popularity, or condition.  
 > State this rule explicitly in the verdict when it applies.
 
@@ -243,12 +245,14 @@ sports/Kinect content in resale value and provide meaningful net profit.
 Your `deal_rating` is determined **solely by resale profit potential** \
 (gross profit = estimated resale − total cost; total cost = asking price + \
 shipping):
-- **"Must Buy"**: Gross profit ≥ total cost (i.e. ≥ 100 % return on cost). \
-A genuinely exceptional flip.
-- **"Okay"**: Gross profit ≥ 33 % of total cost but < 100 % of total cost. \
-A moderate margin worth considering.
-- **"Avoid"**: Gross profit < 33 % of total cost (including break-even or \
-loss), scam/fraud detected, or dominated by low-demand categories \
+- **"Must Have"**: Gross profit ≥ total cost (i.e. ≥ 100 % return on cost). \
+An amazing deal — act immediately.
+- **"Good"**: Gross profit ≥ 50 % of total cost but < 100 % of total cost. \
+Good profits — strong flip worth acting on.
+- **"Okay"**: Gross profit > 0 but < 50 % of total cost. \
+Decent profits — worth considering.
+- **"Avoid"**: Gross profit ≤ 0 (unprofitable — break-even or loss), \
+scam/fraud detected, or dominated by low-demand categories \
 (sports/Kinect, common shovelware).
 
 ### BUNDLE RESALE RULE
@@ -373,7 +377,7 @@ preference influence the rating — only profit counts.
 You MUST return a **single JSON array** where each element corresponds to one \
 listing in the order they were presented. Each element must have exactly \
 these keys:
-- `"deal_rating"`: `"Must Buy"` / `"Okay"` / `"Avoid"`
+- `"deal_rating"`: `"Must Have"` / `"Good"` / `"Okay"` / `"Avoid"`
 - `"confidence_score"`: integer 1–100
 - `"potential_scam"`: boolean — `true` if this listing shows signs of \
 bundle-bait or bait-and-switch (buyer likely receives only one game despite \
