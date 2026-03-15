@@ -104,6 +104,31 @@ Add the following to your `docker-compose.yml` environment section (or Portainer
 - **GET /api/export**: Export all deals as CSV.
 - **GET /api/stats**: Database statistics.
 
+### AI Assessment — Per-Game Price Breakdown
+
+When Gemini AI is enabled and the eBay API is configured, the assessment pipeline automatically looks up **real eBay prices for each individual game** identified in a bundle listing:
+
+1. **Title parsing** — The listing title is scanned for comma/plus-separated game names (e.g. `"PS4 Bundle: God of War, Spider-Man, Horizon"`).
+2. **eBay price lookup** — Each identified game is searched on eBay:
+   - **Primary**: eBay Marketplace Insights API (recently *sold* listings — most accurate).
+   - **Fallback**: eBay Browse API (current *active* listings — proxy for market value).
+   - If neither returns data the game is marked as `"no_result"` and Gemini estimates the price.
+3. **AI analysis** — The fetched prices are injected into the Gemini prompt so the model uses real market data instead of guesswork.
+
+The deal response includes three new AI fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ai_itemized_resale_estimates` | list | Per-game breakdown: `game`, `price_eur`, `price_source` |
+| `ai_estimated_total_cost` | float | Asking price + shipping |
+| `ai_estimated_gross_profit` | float | Estimated resale total − total cost |
+
+`price_source` values:
+- `"ebay_sold"` — price from eBay sold/completed listings via Marketplace Insights API
+- `"ebay_active"` — price from current eBay active listings (Browse API fallback)
+- `"ai_estimate"` — AI estimate (no eBay data available)
+- `"no_result"` — no eBay data found; AI estimate used in verdict
+
 ### Project Structure
 ```
 /ebay-scrapper
