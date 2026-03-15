@@ -292,15 +292,22 @@ function displayResults(data) {
     document.getElementById('loadingContainer').classList.add('d-none');
     document.getElementById('dealCount').textContent = data.deal_count;
 
-    // Show a warning banner if the Gemini quota is exhausted.
+    // Show a warning banner if Gemini quota is exhausted or AI is disabled.
     const aiWarning = document.getElementById('aiWarningContainer');
     if (aiWarning) {
-        if (data.ai_enabled && data.ai_rate_limited) {
+        if (!data.ai_enabled) {
+            aiWarning.textContent =
+                '⭕ AI evaluation is OFF — showing rules-based scores only. ' +
+                'Toggle AI ON to enable Gemini scoring.';
+            aiWarning.className = 'alert alert-warning';
+            aiWarning.classList.remove('d-none');
+        } else if (data.ai_rate_limited) {
             const secs = data.ai_paused_seconds || 0;
             aiWarning.textContent =
                 `⚠️ Gemini AI is temporarily paused due to quota exhaustion` +
                 (secs > 0 ? ` (resumes in ~${secs}s)` : '') +
                 `. Showing rules-based scores only.`;
+            aiWarning.className = 'alert alert-warning';
             aiWarning.classList.remove('d-none');
         } else {
             aiWarning.classList.add('d-none');
