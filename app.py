@@ -260,6 +260,7 @@ def health():
         'ebay_api_configured': ebay_api.is_configured,
         'ebay_marketplace_id': ebay_api.marketplace_id,
         'ebay_language': ebay_api.accept_language,
+        'ebay_locale': ebay_api.locale,
         'ebay_delivery_country': ebay_api.delivery_country,
     })
 
@@ -276,6 +277,7 @@ def get_settings():
         'ebay_api_configured': ebay_api.is_configured,
         'ebay_marketplace_id': ebay_api.marketplace_id,
         'ebay_language': ebay_api.accept_language,
+        'ebay_locale': ebay_api.locale,
         'ebay_delivery_country': ebay_api.delivery_country,
     })
 
@@ -345,6 +347,7 @@ def update_settings():
         'ebay_api_configured': ebay_api.is_configured,
         'ebay_marketplace_id': ebay_api.marketplace_id,
         'ebay_language': ebay_api.accept_language,
+        'ebay_locale': ebay_api.locale,
         'ebay_delivery_country': ebay_api.delivery_country,
     })
 
