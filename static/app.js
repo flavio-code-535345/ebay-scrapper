@@ -269,6 +269,11 @@ function cancelSearch() {
     }
 }
 
+function retrySearch() {
+    const form = document.getElementById('searchForm');
+    if (form) form.requestSubmit();
+}
+
 function _applySearchResults(data) {
     // Update data-source badge
     const dsBadge = document.getElementById('dataSourceBadge');
@@ -314,7 +319,7 @@ function _applySearchResults(data) {
             aiTimeout.innerHTML =
                 `<button type="button" class="btn-dismiss-banner" aria-label="Dismiss" onclick="this.parentElement.classList.add('d-none')">✕</button>` +
                 `⏱️ <strong>${timedOut} deal${timedOut !== 1 ? 's' : ''}</strong> could not be AI-assessed within the time budget and are shown without a rating. ` +
-                `Try narrowing your search to fewer results, or re-run the search to retry.`;
+                `<button type="button" class="btn-retry-timeout" onclick="retrySearch()">🔄 Retry assessment</button>`;
             aiTimeout.classList.remove('d-none');
         } else {
             aiTimeout.classList.add('d-none');
@@ -1353,13 +1358,22 @@ function buildAiSection(deal) {
             return '<span class="price-source price-source-ai" title="AI estimate (no eBay data)">🤖 AI est.</span>';
         };
 
+        // Helper: detect aggregate/grouping placeholders (e.g. "Remaining 6 Titles",
+        // "6 Additional Games") so they are never counted toward the top-3 highlight.
+        const isAggregateEntry = name =>
+            !!name && /\d/.test(name) &&
+            /\b(remaining|additional|more|other)\b/i.test(name);
+
         // ── Top 3 value games highlight (GOOD / MUST HAVE bundles only) ──────
-        // Show only when there are ≥ 2 priced games so the block is meaningful.
+        // Only real individual games (no aggregates) count toward the top 3.
+        // Show only when there are ≥ 2 qualifying priced games.
+        const top3Set = new Set();
         if (isGoodOrBetter) {
             const withPrices = itemized
-                .filter(i => i.price_eur != null && i.price_eur > 0)
+                .filter(i => !isAggregateEntry(i.game) && i.price_eur != null && i.price_eur > 0)
                 .sort((a, b) => b.price_eur - a.price_eur)
                 .slice(0, 3);
+            withPrices.forEach(i => top3Set.add(i.game));
             if (withPrices.length >= 2) {
                 const topRows = withPrices.map((item, idx) => {
                     const medals = ['🥇', '🥈', '🥉'];
@@ -1378,9 +1392,13 @@ function buildAiSection(deal) {
             }
         }
 
-        const rows = itemized.map(item => {
+        // Sort all rows best-to-worst (highest estimated price first).
+        const sortedItemized = [...itemized].sort((a, b) => (b.price_eur || 0) - (a.price_eur || 0));
+
+        const rows = sortedItemized.map(item => {
             const priceStr = (item.price_eur != null) ? `€${Number(item.price_eur).toFixed(2)}` : '—';
-            const exceptional = isGoodOrBetter && !!item.is_exceptional;
+            // Highlight only the top-3 real games (never more than 3, never aggregates).
+            const exceptional = isGoodOrBetter && top3Set.has(item.game);
             const rowClass = exceptional ? ' class="row-exceptional"' : '';
             const gameLabel = exceptional ? `⭐ ${escapeHtml(item.game || '?')}` : escapeHtml(item.game || '?');
             return `<tr${rowClass}><td>${gameLabel}</td><td class="price-cell">${escapeHtml(priceStr)}</td><td>${sourceLabel(item.price_source)}</td></tr>`;
