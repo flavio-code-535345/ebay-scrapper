@@ -1358,24 +1358,41 @@ function buildAiSection(deal) {
             return '<span class="price-source price-source-ai" title="AI estimate (no eBay data)">🤖 AI est.</span>';
         };
 
-        // Helper: detect aggregate/grouping placeholders (e.g. "Remaining 6 Titles",
-        // "6 Additional Games") so they are never counted toward the top-3 highlight.
-        const isAggregateEntry = name =>
-            !!name && /\d/.test(name) &&
-            /\b(remaining|additional|more|other)\b/i.test(name);
+        // Helper: detect aggregate/grouping placeholders (e.g. "Remaining Titles",
+        // "Additional Games", "Weitere Spiele") so they are never counted toward
+        // the top-3 highlight. Mirrors Python _is_aggregate_placeholder().
+        const isAggregateEntry = name => {
+            if (!name || typeof name !== 'string') return false;
+            const lower = name.trim().toLowerCase();
+            // Bare tokens that are never real game titles.
+            if (['etc.', 'etc', '...', 'u.a.', 'usw.', 'and more', 'und mehr'].includes(lower)) return true;
+            // Aggregate keyword patterns (with or without a leading digit).
+            return /^(additional|remaining|other|more|weitere|restliche|sonstige)[\s\-]*(titles?|games?|spiele?|titel|items?)/.test(lower) ||
+                   /^rest\s+(of\s+)?(titles?|games?|spiele?|titel|items?)/.test(lower);
+        };
 
         // ── Top 3 value games highlight (GOOD / MUST HAVE bundles only) ──────
-        // Only real individual games (no aggregates) count toward the top 3.
-        // Show only when there are ≥ 2 qualifying priced games.
+        // Collect up to 3 UNIQUE game names (highest priced first, aggregates
+        // excluded). Deduplication prevents duplicate entries from filling more
+        // than one slot, ensuring exactly min(3, uniqueEligible) games highlight.
         const top3Set = new Set();
+        let topGamesForDisplay = [];
         if (isGoodOrBetter) {
-            const withPrices = itemized
-                .filter(i => !isAggregateEntry(i.game) && i.price_eur != null && i.price_eur > 0)
-                .sort((a, b) => b.price_eur - a.price_eur)
-                .slice(0, 3);
-            withPrices.forEach(i => top3Set.add(i.game));
-            if (withPrices.length >= 2) {
-                const topRows = withPrices.map((item, idx) => {
+            const eligible = [...itemized]
+                .filter(i => i.game && !isAggregateEntry(i.game) && i.price_eur != null && +i.price_eur > 0)
+                .sort((a, b) => +b.price_eur - +a.price_eur);
+            // Walk sorted list and take the first occurrence of each unique name.
+            const seenInTop3 = new Set();
+            for (const item of eligible) {
+                if (seenInTop3.size >= 3) break;
+                if (!seenInTop3.has(item.game)) {
+                    seenInTop3.add(item.game);
+                    topGamesForDisplay.push(item);
+                }
+            }
+            topGamesForDisplay.forEach(i => top3Set.add(i.game));
+            if (topGamesForDisplay.length >= 2) {
+                const topRows = topGamesForDisplay.map((item, idx) => {
                     const medals = ['🥇', '🥈', '🥉'];
                     const medal  = medals[idx] || '🎮';
                     return `<div class="top-value-row">
@@ -1386,19 +1403,30 @@ function buildAiSection(deal) {
                     </div>`;
                 }).join('');
                 topValueHtml = `<div class="ai-top-value-games">
-                    <div class="ai-top-value-header">🏆 Top ${withPrices.length} Value Game${withPrices.length !== 1 ? 's' : ''} (highest min. BIN price)</div>
+                    <div class="ai-top-value-header">🏆 Top ${topGamesForDisplay.length} Value Game${topGamesForDisplay.length !== 1 ? 's' : ''} (highest min. BIN price)</div>
                     ${topRows}
                 </div>`;
             }
         }
 
         // Sort all rows best-to-worst (highest estimated price first).
-        const sortedItemized = [...itemized].sort((a, b) => (b.price_eur || 0) - (a.price_eur || 0));
+        // Use +price_eur to coerce strings to numbers; null prices sort last.
+        const sortedItemized = [...itemized].sort((a, b) => {
+            const pa = a.price_eur != null ? +a.price_eur : -1;
+            const pb = b.price_eur != null ? +b.price_eur : -1;
+            return pb - pa;
+        });
 
+        // Track which top-3 game names have already been highlighted so that
+        // duplicate entries for the same title never exceed one starred row.
+        const highlightedGames = new Set();
         const rows = sortedItemized.map(item => {
             const priceStr = (item.price_eur != null) ? `€${Number(item.price_eur).toFixed(2)}` : '—';
-            // Highlight only the top-3 real games (never more than 3, never aggregates).
-            const exceptional = isGoodOrBetter && top3Set.has(item.game);
+            // Highlight only the top-3 real games (never more than 3, never aggregates,
+            // and only the first occurrence when the same title appears more than once).
+            const isTopGame = isGoodOrBetter && top3Set.has(item.game);
+            const exceptional = isTopGame && !highlightedGames.has(item.game);
+            if (exceptional) highlightedGames.add(item.game);
             const rowClass = exceptional ? ' class="row-exceptional"' : '';
             const gameLabel = exceptional ? `⭐ ${escapeHtml(item.game || '?')}` : escapeHtml(item.game || '?');
             return `<tr${rowClass}><td>${gameLabel}</td><td class="price-cell">${escapeHtml(priceStr)}</td><td>${sourceLabel(item.price_source)}</td></tr>`;

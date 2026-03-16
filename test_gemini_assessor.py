@@ -1150,20 +1150,61 @@ class TestBatchTimeoutConstants:
 class TestTopValueGamesSelection:
     """Verify the top-3 selection logic that the frontend uses is correct.
 
-    The frontend selects items by filtering to price_eur > 0, sorting by
-    price_eur descending, then taking the first 3.  These tests mirror that
-    logic in Python to ensure the algorithm stays correct.
+    The frontend selects items by:
+      1. Filtering to price_eur > 0 and excluding aggregate placeholders.
+      2. Sorting by price_eur descending (with Number() coercion for strings).
+      3. Walking the sorted list and collecting up to 3 *unique* game names
+         (first occurrence of each name wins — no duplicates fill a slot).
+
+    These tests mirror that logic in Python to ensure the algorithm stays
+    correct across edge cases.
     """
 
     @staticmethod
     def _top_value_games(itemized, max_top=3):
-        """Python mirror of the JS top-value-games selection."""
-        with_prices = [
+        """Python mirror of the updated JS top-value-games selection.
+
+        Mirrors the JS algorithm exactly:
+        - Excludes aggregate/placeholder entries via _is_aggregate_placeholder.
+        - Coerces price_eur to float to handle string values.
+        - Deduplicates by game name so a repeated title only occupies one slot.
+        """
+        eligible = [
             i for i in itemized
-            if i.get("price_eur") is not None and i["price_eur"] > 0
+            if i.get("game")
+            and not _is_aggregate_placeholder(i.get("game"))
+            and i.get("price_eur") is not None
+            and float(i["price_eur"]) > 0
         ]
-        with_prices.sort(key=lambda i: i["price_eur"], reverse=True)
-        return with_prices[:max_top]
+        eligible.sort(key=lambda i: float(i["price_eur"]), reverse=True)
+        seen: set = set()
+        result = []
+        for item in eligible:
+            if len(seen) >= max_top:
+                break
+            if item["game"] not in seen:
+                seen.add(item["game"])
+                result.append(item)
+        return result
+
+    @staticmethod
+    def _sort_itemized(itemized):
+        """Python mirror of the sortedItemized JS sort.
+
+        Null prices sort last (mapped to -1 so they appear at the bottom).
+        """
+        def sort_key(i):
+            p = i.get("price_eur")
+            return float(p) if p is not None else -1.0
+
+        return sorted(itemized, key=sort_key, reverse=True)
+
+    @staticmethod
+    def _highlight_set(top_games):
+        """Return the set of game names that should be highlighted."""
+        return {i["game"] for i in top_games}
+
+    # ── Core selection tests ──────────────────────────────────────────────────
 
     def test_top_3_selected_correctly(self):
         itemized = [
@@ -1232,6 +1273,224 @@ class TestTopValueGamesSelection:
         ]
         top = self._top_value_games(mostly_no_price)
         assert len(top) < 2, "Only one priced game — block threshold not met"
+
+    # ── Edge cases: price ties ────────────────────────────────────────────────
+
+    def test_ties_on_price_all_three_selected(self):
+        """When multiple games share the same price, all are eligible; the first
+        3 encountered after sorting (stable sort) fill the top-3 slots."""
+        itemized = [
+            {"game": "Game A", "price_eur": 10.0},
+            {"game": "Game B", "price_eur": 10.0},
+            {"game": "Game C", "price_eur": 10.0},
+            {"game": "Game D", "price_eur": 10.0},
+        ]
+        top = self._top_value_games(itemized)
+        assert len(top) == 3
+        # All selected games must have price 10.0
+        assert all(g["price_eur"] == 10.0 for g in top)
+
+    def test_ties_exactly_three_unique_names(self):
+        """Exactly 3 unique games with equal price → all 3 selected."""
+        itemized = [
+            {"game": "Alpha", "price_eur": 5.0},
+            {"game": "Beta",  "price_eur": 5.0},
+            {"game": "Gamma", "price_eur": 5.0},
+        ]
+        top = self._top_value_games(itemized)
+        assert len(top) == 3
+        names = {g["game"] for g in top}
+        assert names == {"Alpha", "Beta", "Gamma"}
+
+    # ── Edge cases: duplicate game names ────────────────────────────────────
+
+    def test_duplicate_game_name_counts_as_one_slot(self):
+        """A game appearing twice in itemized must only fill ONE top-3 slot,
+        so that the highlight count never exceeds min(3, unique_eligible)."""
+        itemized = [
+            {"game": "Halo 3",     "price_eur": 25.0},
+            {"game": "Halo 3",     "price_eur": 25.0},  # duplicate
+            {"game": "Gears",      "price_eur": 18.0},
+            {"game": "Mass Effect","price_eur": 15.0},
+            {"game": "Dead Space", "price_eur": 12.0},
+        ]
+        top = self._top_value_games(itemized)
+        # Despite the duplicate, only 3 unique slots should be filled.
+        assert len(top) == 3
+        names = [g["game"] for g in top]
+        assert names.count("Halo 3") == 1, "Duplicate title must not fill two slots"
+
+    def test_all_duplicates_produce_one_result(self):
+        """If all entries share the same game name, only 1 item is returned."""
+        itemized = [
+            {"game": "Halo 3", "price_eur": 20.0},
+            {"game": "Halo 3", "price_eur": 18.0},
+            {"game": "Halo 3", "price_eur": 15.0},
+        ]
+        top = self._top_value_games(itemized)
+        assert len(top) == 1
+        assert top[0]["game"] == "Halo 3"
+        assert top[0]["price_eur"] == 20.0  # highest price wins
+
+    def test_two_unique_names_with_duplicates(self):
+        """Two unique names with duplicates → only 2 items returned, not 3."""
+        itemized = [
+            {"game": "Alpha", "price_eur": 10.0},
+            {"game": "Alpha", "price_eur": 9.0},   # duplicate
+            {"game": "Beta",  "price_eur": 7.0},
+            {"game": "Beta",  "price_eur": 6.0},   # duplicate
+        ]
+        top = self._top_value_games(itemized)
+        assert len(top) == 2
+        assert top[0]["game"] == "Alpha"
+        assert top[1]["game"] == "Beta"
+
+    # ── Edge cases: aggregate / placeholder exclusion ────────────────────────
+
+    def test_aggregate_entries_excluded_from_top3(self):
+        """Aggregate placeholder entries must never fill a top-3 slot."""
+        itemized = [
+            {"game": "Halo 3",           "price_eur": 12.0},
+            {"game": "Gears of War",      "price_eur": 9.0},
+            {"game": "Additional Titles", "price_eur": 50.0},  # aggregate — skip
+            {"game": "Remaining Titles",  "price_eur": 40.0},  # aggregate — skip
+            {"game": "Dead Space",        "price_eur": 6.0},
+        ]
+        top = self._top_value_games(itemized)
+        names = [g["game"] for g in top]
+        assert "Additional Titles" not in names
+        assert "Remaining Titles" not in names
+        assert "Halo 3" in names
+        assert len(top) == 3
+
+    def test_german_aggregate_excluded(self):
+        """German aggregate placeholders (Weitere Spiele, Sonstige Titel) must
+        be excluded even when they have a high estimated price."""
+        itemized = [
+            {"game": "Weitere Spiele", "price_eur": 100.0},  # aggregate — skip
+            {"game": "Sonstige Titel", "price_eur": 80.0},   # aggregate — skip
+            {"game": "Game A",         "price_eur": 12.0},
+            {"game": "Game B",         "price_eur": 9.0},
+            {"game": "Game C",         "price_eur": 6.0},
+        ]
+        top = self._top_value_games(itemized)
+        names = [g["game"] for g in top]
+        assert "Weitere Spiele" not in names
+        assert "Sonstige Titel" not in names
+        assert "Game A" in names
+
+    def test_bare_token_aggregate_excluded(self):
+        """Bare tokens like '...' and 'etc.' must not appear in top-3."""
+        itemized = [
+            {"game": "...",    "price_eur": 99.0},  # placeholder
+            {"game": "etc.",   "price_eur": 88.0},  # placeholder
+            {"game": "Game A", "price_eur": 5.0},
+        ]
+        top = self._top_value_games(itemized)
+        names = [g["game"] for g in top]
+        assert "..." not in names
+        assert "etc." not in names
+        assert "Game A" in names
+
+    def test_only_aggregates_returns_empty(self):
+        """A list of only aggregate entries should return an empty top selection."""
+        itemized = [
+            {"game": "Additional Titles", "price_eur": 20.0},
+            {"game": "Remaining Titles",  "price_eur": 15.0},
+        ]
+        top = self._top_value_games(itemized)
+        assert top == []
+
+    # ── Edge cases: sorting ──────────────────────────────────────────────────
+
+    def test_sorted_descending_by_price(self):
+        """sortedItemized must always produce highest price first."""
+        itemized = [
+            {"game": "C", "price_eur": 5.0},
+            {"game": "A", "price_eur": 30.0},
+            {"game": "B", "price_eur": 15.0},
+        ]
+        sorted_list = self._sort_itemized(itemized)
+        prices = [i["price_eur"] for i in sorted_list]
+        assert prices == sorted(prices, reverse=True)
+
+    def test_null_prices_sort_last(self):
+        """Items with price_eur=None must appear after all priced items."""
+        itemized = [
+            {"game": "A", "price_eur": None},
+            {"game": "B", "price_eur": 10.0},
+            {"game": "C", "price_eur": None},
+            {"game": "D", "price_eur": 5.0},
+        ]
+        sorted_list = self._sort_itemized(itemized)
+        # Priced items come first
+        assert sorted_list[0]["price_eur"] == 10.0
+        assert sorted_list[1]["price_eur"] == 5.0
+        # Null-price items are last
+        assert sorted_list[2]["price_eur"] is None
+        assert sorted_list[3]["price_eur"] is None
+
+    def test_string_prices_coerced_correctly(self):
+        """String price_eur values (e.g. from JSON) must sort correctly."""
+        itemized = [
+            {"game": "A", "price_eur": "5.0"},
+            {"game": "B", "price_eur": "25.0"},
+            {"game": "C", "price_eur": "12.5"},
+        ]
+        top = self._top_value_games(itemized)
+        assert len(top) == 3
+        assert top[0]["game"] == "B"
+        assert top[1]["game"] == "C"
+        assert top[2]["game"] == "A"
+
+    # ── Edge cases: one-game list ────────────────────────────────────────────
+
+    def test_one_game_list(self):
+        """A single-game list returns exactly 1 item."""
+        itemized = [{"game": "Only Game", "price_eur": 7.5}]
+        top = self._top_value_games(itemized)
+        assert len(top) == 1
+        assert top[0]["game"] == "Only Game"
+
+    def test_one_game_with_no_price(self):
+        """A single game with no price → empty result."""
+        itemized = [{"game": "Only Game", "price_eur": None}]
+        top = self._top_value_games(itemized)
+        assert top == []
+
+    # ── Highlight count validation ────────────────────────────────────────────
+
+    def test_highlight_count_never_exceeds_3(self):
+        """The top3Set must never cause more than 3 rows to be highlighted,
+        even when the same game name appears multiple times in the full list."""
+        itemized = [
+            {"game": "Halo 3",  "price_eur": 20.0},
+            {"game": "Halo 3",  "price_eur": 18.0},  # duplicate
+            {"game": "Gears",   "price_eur": 15.0},
+            {"game": "Gears",   "price_eur": 14.0},  # duplicate
+            {"game": "BioShock","price_eur": 10.0},
+            {"game": "FIFA 20", "price_eur": 2.0},
+        ]
+        top = self._top_value_games(itemized)
+        highlight_set = self._highlight_set(top)
+        # Simulate the frontend highlight pass: count rows that would be starred.
+        highlighted_count = 0
+        already_highlighted: set = set()
+        sorted_list = self._sort_itemized(itemized)
+        for item in sorted_list:
+            if item["game"] in highlight_set and item["game"] not in already_highlighted:
+                already_highlighted.add(item["game"])
+                highlighted_count += 1
+        assert highlighted_count <= 3, f"Expected ≤ 3 highlights, got {highlighted_count}"
+
+    def test_highlight_count_equals_unique_eligible(self):
+        """Highlighted count should equal min(3, unique games with price > 0)."""
+        itemized = [
+            {"game": "A", "price_eur": 10.0},
+            {"game": "B", "price_eur": 8.0},
+        ]
+        top = self._top_value_games(itemized)
+        assert len(top) == 2  # only 2 unique eligible → exactly 2 highlighted
 
 
 # ---------------------------------------------------------------------------
