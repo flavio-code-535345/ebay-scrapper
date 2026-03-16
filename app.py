@@ -272,12 +272,26 @@ def search():
                 parse_errors,
                 len(ai_assessments),
             )
+            for i, (deal, a) in enumerate(zip(deals_filtered, ai_assessments)):
+                if a and a.get("ai_error_type") == "parse_error":
+                    logger.warning(
+                        "Gemini parse error – item[%d]: %r",
+                        i,
+                        (deal.get("title") or "")[:80],
+                    )
         if timed_out:
             logger.warning(
                 "Gemini batch: %d/%d items timed out; AI assessment skipped.",
                 timed_out,
                 len(ai_assessments),
             )
+            for i, (deal, a) in enumerate(zip(deals_filtered, ai_assessments)):
+                if a and a.get("ai_error_type") == "timeout":
+                    logger.info(
+                        "Gemini timeout – item[%d]: %r",
+                        i,
+                        (deal.get("title") or "")[:80],
+                    )
 
     assessed = []
     for i, deal in enumerate(deals_filtered):
