@@ -1382,3 +1382,206 @@ class TestParseBatchResponseFiltersAggregates:
         result = self._parse(payload)
         games = [e["game"] for e in result[0]["ai_itemized_resale_estimates"]]
         assert games == ["God of War", "Spider-Man", "Horizon Zero Dawn"]
+
+
+# ---------------------------------------------------------------------------
+# Tests for JSON control-character sanitisation
+# ---------------------------------------------------------------------------
+
+class TestSanitizeJsonText:
+    """Verify _sanitize_json_text strips invalid JSON control characters."""
+
+    def test_clean_text_unchanged(self):
+        """Text without control characters is returned unchanged."""
+        from gemini_assessor import _sanitize_json_text
+        text = '[{"deal_rating": "Good", "verdict_summary": "Nice deal."}]'
+        assert _sanitize_json_text(text) == text
+
+    def test_strips_form_feed(self):
+        """Form-feed (0x0C) is stripped."""
+        from gemini_assessor import _sanitize_json_text
+        text = '[{"verdict_summary": "Good\x0cdeal."}]'
+        result = _sanitize_json_text(text)
+        assert "\x0c" not in result
+        assert "Gooddeal." in result
+
+    def test_strips_backspace(self):
+        """Backspace (0x08) is stripped."""
+        from gemini_assessor import _sanitize_json_text
+        text = 'hello\x08world'
+        assert _sanitize_json_text(text) == "helloworld"
+
+    def test_preserves_tab_lf_cr(self):
+        """TAB (0x09), LF (0x0A), CR (0x0D) are preserved (valid in JSON)."""
+        from gemini_assessor import _sanitize_json_text
+        text = 'line1\nline2\r\n\ttabbed'
+        assert _sanitize_json_text(text) == text
+
+    def test_parse_batch_response_survives_control_char(self):
+        """_parse_batch_response parses correctly when response contains
+        invalid control characters that would otherwise cause json.loads to
+        raise 'Invalid control character at …'."""
+        item = {
+            "deal_rating": "Good",
+            "confidence_score": 75,
+            "potential_scam": False,
+            "scam_warning": "",
+            "visual_findings": [],
+            "red_flags": [],
+            "fair_market_estimate": "~€25",
+            "itemized_resale_estimates": [
+                {"game": "Halo 3", "price_eur": 12.0, "price_source": "ebay_sold",
+                 "is_exceptional": False},
+            ],
+            "estimated_total_cost": 10.0,
+            "estimated_gross_profit": 2.0,
+            "verdict_summary": "Good deal.",
+        }
+        raw = json.dumps([item])
+        # Inject a form-feed (0x0C) inside the verdict_summary string value.
+        raw_with_ctrl = raw.replace("Good deal.", "Good\x0cdeal.")
+        result = GeminiAssessor._parse_batch_response(raw_with_ctrl, 1)
+        assert len(result) == 1
+        assert result[0]["ai_assessed"] is True
+        assert result[0]["ai_deal_rating"] == "Good"
+        assert "ai_error_type" not in result[0]
+
+
+# ---------------------------------------------------------------------------
+# Tests for improved _extract_potential_game_titles (pipe separator, per-part
+# cleanup)
+# ---------------------------------------------------------------------------
+
+class TestExtractPotentialGameTitlesPipeSeparator:
+    """Tests for the pipe-separator and per-part noise-cleanup improvements."""
+
+    def test_pipe_separator_splits_titles(self):
+        """Pipe (|) is treated as a title separator."""
+        title = "Assassins Creed Sammlung Xbox 360 | 1, 2, Brotherhood"
+        result = _extract_potential_game_titles(title)
+        # Should extract the series name from before the pipe
+        assert any("Assassins Creed" in t for t in result)
+
+    def test_quantity_prefix_stripped_from_part(self):
+        """Leading '7x' quantity prefix is stripped from an extracted part."""
+        title = "7x Assassins Creed Konvolut Sammlung komplett Xbox 360 | 1, 2, 3"
+        result = _extract_potential_game_titles(title)
+        # 'Assassins Creed' should be extracted; '7x' should NOT be in the result
+        for t in result:
+            assert not t.startswith("7x")
+            assert not t.startswith("7X")
+
+    def test_komplett_stripped_from_part(self):
+        """Condition word 'komplett' is stripped from extracted parts."""
+        title = "5x Halo komplett Sammlung Xbox 360 | Halo 3, Halo 4"
+        result = _extract_potential_game_titles(title)
+        for t in result:
+            assert "komplett" not in t.lower()
+
+    def test_platform_number_stripped_from_part(self):
+        """Standalone platform version number '360' is removed (via full
+        platform-pattern pass on the whole title before splitting)."""
+        title = "7x Assassins Creed Konvolut Sammlung komplett Xbox 360 | 1, 2, 3"
+        result = _extract_potential_game_titles(title)
+        # '360' should not appear as a standalone suffix in any extracted part
+        for t in result:
+            assert not t.strip().endswith("360")
+
+    def test_game_word_preserved_in_game_title(self):
+        """'game' inside a real game title (e.g. 'Game Dev Tycoon') is kept."""
+        title = "Bundle: Game Dev Tycoon, Game of Thrones, Dishonored"
+        result = _extract_potential_game_titles(title)
+        assert any("Game Dev Tycoon" in t for t in result)
+
+    def test_assassins_creed_konvolut_realistic(self):
+        """Realistic 'Assassins Creed Konvolut' log example extracts the
+        series name without platform remnants."""
+        title = (
+            "7x Assassins Creed Konvolut Sammlung komplett Xbox 360 "
+            "| 1, 2, 3, 4, Brotherhoo…"
+        )
+        result = _extract_potential_game_titles(title)
+        assert len(result) >= 1
+        # The first extracted game should be the clean series name
+        assert any("Assassins Creed" in t and "360" not in t for t in result)
+
+
+# ---------------------------------------------------------------------------
+# Tests for normalised itemized_resale_estimates in _parse_batch_response
+# ---------------------------------------------------------------------------
+
+class TestParseBatchResponseNormaliseItemized:
+    """Verify that itemized entries are always fully normalised (no None fields)."""
+
+    def _make_item(self, itemized):
+        return {
+            "deal_rating": "Good",
+            "confidence_score": 70,
+            "potential_scam": False,
+            "scam_warning": "",
+            "visual_findings": [],
+            "red_flags": [],
+            "fair_market_estimate": "~€20",
+            "itemized_resale_estimates": itemized,
+            "estimated_total_cost": 10.0,
+            "estimated_gross_profit": 5.0,
+            "verdict_summary": "Decent.",
+        }
+
+    def _parse(self, payload):
+        return GeminiAssessor._parse_batch_response(json.dumps(payload), len(payload))
+
+    def test_null_price_eur_defaults_to_zero(self):
+        """price_eur=null in AI response is normalised to 0.0."""
+        payload = [self._make_item([
+            {"game": "Halo 3", "price_eur": None, "price_source": "ai_estimate",
+             "is_exceptional": False},
+        ])]
+        result = self._parse(payload)
+        entry = result[0]["ai_itemized_resale_estimates"][0]
+        assert entry["price_eur"] == 0.0
+        assert isinstance(entry["price_eur"], float)
+
+    def test_missing_price_source_defaults_to_ai_estimate(self):
+        """Missing price_source defaults to 'ai_estimate'."""
+        payload = [self._make_item([
+            {"game": "God of War", "price_eur": 15.0},
+        ])]
+        result = self._parse(payload)
+        entry = result[0]["ai_itemized_resale_estimates"][0]
+        assert entry["price_source"] == "ai_estimate"
+
+    def test_missing_game_name_entry_is_skipped(self):
+        """Entries without a game name (empty string or None) are skipped."""
+        payload = [self._make_item([
+            {"game": "", "price_eur": 5.0, "price_source": "ai_estimate",
+             "is_exceptional": False},
+            {"game": None, "price_eur": 5.0, "price_source": "ai_estimate",
+             "is_exceptional": False},
+            {"game": "Dishonored", "price_eur": 10.0, "price_source": "ebay_sold",
+             "is_exceptional": False},
+        ])]
+        result = self._parse(payload)
+        entries = result[0]["ai_itemized_resale_estimates"]
+        assert len(entries) == 1
+        assert entries[0]["game"] == "Dishonored"
+
+    def test_price_eur_string_coerced_to_float(self):
+        """price_eur given as a string is coerced to float."""
+        payload = [self._make_item([
+            {"game": "Mass Effect", "price_eur": "8.50", "price_source": "ebay_sold",
+             "is_exceptional": False},
+        ])]
+        result = self._parse(payload)
+        entry = result[0]["ai_itemized_resale_estimates"][0]
+        assert entry["price_eur"] == 8.50
+        assert isinstance(entry["price_eur"], float)
+
+    def test_is_exceptional_defaults_to_false(self):
+        """is_exceptional defaults to False when not present."""
+        payload = [self._make_item([
+            {"game": "Zelda", "price_eur": 30.0, "price_source": "ebay_sold"},
+        ])]
+        result = self._parse(payload)
+        entry = result[0]["ai_itemized_resale_estimates"][0]
+        assert entry["is_exceptional"] is False

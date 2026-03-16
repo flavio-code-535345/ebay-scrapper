@@ -517,6 +517,25 @@ _EBAY_MAX_WORKERS = 5
 _rate_limit_lock = threading.Lock()
 _rate_limited_until: float = 0.0  # monotonic timestamp
 
+# Compiled pattern matching control characters that are invalid inside JSON
+# strings (everything in 0x00–0x1F except TAB 0x09, LF 0x0A, CR 0x0D) and
+# the DEL character 0x7F.  Gemini occasionally embeds these in its responses,
+# causing json.loads to raise "Invalid control character at …".
+_JSON_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _sanitize_json_text(text: str) -> str:
+    """Remove unescaped control characters that are invalid in JSON.
+
+    JSON only permits TAB (\\t), LF (\\n), and CR (\\r) as unescaped
+    control characters.  All others (0x00–0x08, 0x0B–0x0C, 0x0E–0x1F,
+    0x7F) must be escaped in conformant JSON but are sometimes embedded
+    literally by Gemini, triggering "Invalid control character" parse
+    errors.  Stripping them is safe — they carry no semantic content in
+    the structured JSON output.
+    """
+    return _JSON_CONTROL_CHAR_RE.sub("", text)
+
 
 def _extract_json_objects(text: str) -> list:
     """Extract all top-level JSON values (objects or arrays) from *text*.
@@ -726,7 +745,22 @@ _NON_TITLE_WORDS_RE = re.compile(
 )
 
 # Separators used to split individual titles within a bundle listing title.
-_TITLE_SEPARATOR_RE = re.compile(r"\s*[,;+/&]\s*|\s+[-–—]\s+")
+# Pipe (|) is included because German eBay listings often use it to separate
+# a series name from installment numbers, e.g. "Assassins Creed | 1, 2, 3, 4".
+_TITLE_SEPARATOR_RE = re.compile(r"\s*[,;+/&|]\s*|\s+[-–—]\s+")
+
+# Matches a leading quantity token such as "7x", "5×", "12 " in extracted parts.
+_QUANTITY_PREFIX_RE = re.compile(r"^\d+\s*[xX×]\s*")
+
+# Noise words to strip from *individual* extracted bundle-game parts.
+# Narrower than _SINGLE_GAME_NOISE_RE: avoids removing words that could
+# legitimately be part of a game title (e.g. "game", "spiel", "new").
+_BUNDLE_PART_NOISE_RE = re.compile(
+    r"\b(komplett|complete|ovp|cib|sealed|ungetestet|defekt|gebraucht"
+    r"|neuwertig|wie\s+neu|like\s+new|sehr\s+gut|top\s+zustand"
+    r"|pal|ntsc|deutsch|german)\b",
+    re.IGNORECASE,
+)
 
 # Maximum number of individual game titles to search per bundle.
 _MAX_GAMES_PER_BUNDLE = 8
@@ -751,11 +785,17 @@ def _extract_potential_game_titles(title: str) -> List[str]:
     # Strip quantity patterns ("10 Spiele", "5 Games") from the start.
     cleaned = re.sub(r"^\d+\s+(spiele?|games?)\s*", "", title.strip(), flags=re.IGNORECASE)
 
-    # Remove console/platform prefixes and bundle collection keywords so they
-    # don't appear in extracted game titles.
+    # Remove platform names using the full _PLATFORM_MAP patterns (most specific
+    # first) so that compound names like "Xbox 360" are removed as a unit and
+    # don't leave orphaned version numbers (e.g. a bare "360") in the result.
+    for _pat, _ in _PLATFORM_MAP:
+        cleaned = _pat.sub(" ", cleaned)
+
+    # Remove any remaining standalone platform/manufacturer keywords and
+    # bundle/collection keywords that weren't caught by the compound patterns.
     cleaned = re.sub(
-        r"\b(nintendo|playstation|ps[1-5]|xbox|sega|atari|gamecube|gameboy"
-        r"|game\s+boy|mega\s+drive|snes|nes|n64|wii|switch|3ds|ds|psp|vita|pc"
+        r"\b(microsoft|nintendo|sony|sega|atari|pc"
+        r"|switch|wii|gameboy|gamecube|n64|snes|nes|psp|vita|3ds|nds|gba"
         r"|bundle|lot|paket|sammlung|konvolut|spielesammlung|spielepaket"
         r"|spieleset|spiele[- ]set|spiele[- ]paket|collection)\b",
         " ",
@@ -776,6 +816,26 @@ def _extract_potential_game_titles(title: str) -> List[str]:
             continue
         # Skip "N Spiele", "N Games" patterns (number + generic word).
         if re.match(r"^\d+\s+(spiele?|games?)\s*$", part, re.IGNORECASE):
+            continue
+
+        # Strip leading quantity tokens like "7x", "5×" that prefix the whole
+        # part (e.g. "7x Assassins Creed komplett 360" → "Assassins Creed …").
+        part = _QUANTITY_PREFIX_RE.sub("", part).strip()
+
+        # Strip bundle-game noise words (condition/edition markers) from each
+        # part.  Uses _BUNDLE_PART_NOISE_RE rather than _SINGLE_GAME_NOISE_RE
+        # to avoid incorrectly removing words like "game" or "spiel" that can
+        # be part of a legitimate game title.
+        part = _BUNDLE_PART_NOISE_RE.sub(" ", part)
+
+        # Strip any remaining platform tokens from the part so they are not
+        # duplicated when the platform is appended to the search query.
+        for _pat, _ in _PLATFORM_MAP:
+            part = _pat.sub(" ", part)
+
+        part = re.sub(r"\s+", " ", part).strip(" \t\n:()-")
+
+        if not part:
             continue
         if _NON_TITLE_WORDS_RE.match(part):
             continue
@@ -1231,6 +1291,9 @@ class GeminiAssessor:
         timed_out = sum(
             1 for a in results if a and a.get("ai_error_type") == "timeout"
         )
+        parse_errors = sum(
+            1 for a in results if a and a.get("ai_error_type") == "parse_error"
+        )
         logger.info(
             "GeminiAssessor: assess_deals_batch done – %d assessed, %d timeout, "
             "%d other in %.1f s total.",
@@ -1239,6 +1302,25 @@ class GeminiAssessor:
             len(results) - assessed_ok - timed_out,
             total_elapsed,
         )
+
+        # Log item-level diagnostics so operators can pinpoint which deals
+        # consistently fail parsing or time out.
+        if parse_errors:
+            for i, (deal, assessment) in enumerate(zip(deals, results)):
+                if assessment and assessment.get("ai_error_type") == "parse_error":
+                    logger.warning(
+                        "GeminiAssessor: parse error for deal[%d] %r",
+                        i,
+                        (deal.get("title") or "")[:80],
+                    )
+        if timed_out:
+            for i, (deal, assessment) in enumerate(zip(deals, results)):
+                if assessment and assessment.get("ai_error_type") == "timeout":
+                    logger.info(
+                        "GeminiAssessor: timeout for deal[%d] %r",
+                        i,
+                        (deal.get("title") or "")[:80],
+                    )
 
         return results
 
@@ -1453,6 +1535,43 @@ class GeminiAssessor:
 
             for e in errs:
                 logger.debug("GeminiAssessor: eBay price lookup note for %r: %s", game, e)
+
+            # ── Simplified-query fallback ─────────────────────────────────────
+            # When the full-name query returns no price, retry with a shorter
+            # version (first two words of the game name) to improve the hit
+            # rate for partially-extracted or truncated titles.  Only apply
+            # when the game name contains more than two words so we don't
+            # degrade precision for already-short names.
+            if price is None:
+                words = game.split()
+                if len(words) > 2:
+                    simplified_name = " ".join(words[:2])
+                    simplified_query = (
+                        f"{simplified_name} ({platform})" if platform else simplified_name
+                    )
+                    if simplified_query != search_query:
+                        cached_s = self._cached_ebay_price(simplified_query)
+                        if cached_s is not None:
+                            price, source = cached_s
+                        else:
+                            try:
+                                price, source, errs_s = self._ebay_client.get_median_sold_price(
+                                    simplified_query, max_results=10
+                                )
+                                self._store_ebay_price_in_cache(simplified_query, price, source)
+                            except Exception as exc_s:
+                                logger.debug(
+                                    "GeminiAssessor: Simplified eBay query failed for %r: %s",
+                                    simplified_query,
+                                    exc_s,
+                                )
+                        if price is not None:
+                            logger.debug(
+                                "GeminiAssessor: Simplified query %r found price %.2f for %r",
+                                simplified_query,
+                                price,
+                                game,
+                            )
 
             if price is not None:
                 price_source = "ebay_sold" if source == "sold_listings" else "ebay_active"
@@ -1813,6 +1932,9 @@ class GeminiAssessor:
         if fenced:
             text = fenced.group(1).strip()
 
+        # Remove invalid JSON control characters before parsing.
+        text = _sanitize_json_text(text)
+
         data = None
         try:
             data = json.loads(text)
@@ -1928,6 +2050,13 @@ class GeminiAssessor:
         if fenced:
             text = fenced.group(1).strip()
 
+        # Proactively remove control characters that are invalid in JSON strings.
+        # Gemini occasionally embeds literal 0x00–0x08/0x0B–0x0C/0x0E–0x1F/0x7F
+        # bytes, causing json.loads to raise "Invalid control character at …".
+        # Sanitising before every parse attempt means the primary path (and all
+        # fallbacks) benefit without repeated cleanup code.
+        text = _sanitize_json_text(text)
+
         data = None
         try:
             data = json.loads(text)
@@ -1999,12 +2128,16 @@ class GeminiAssessor:
                 itemized = item_data.get("itemized_resale_estimates", [])
                 if not isinstance(itemized, list):
                     itemized = []
-                # Filter out any aggregate placeholder entries the AI may have
-                # created despite the prompt instructions (e.g. "Additional Titles").
+                # Filter out aggregate placeholder entries and normalise every
+                # remaining entry so that no field is ever None/undefined.
+                # This prevents downstream null-reference errors and ensures the
+                # UI always has valid values to display.
                 filtered_itemized = []
                 for entry in itemized:
                     if isinstance(entry, dict):
-                        game_name = entry.get("game", "")
+                        game_name = str(entry.get("game") or "").strip()
+                        if not game_name:
+                            continue
                         if _is_aggregate_placeholder(game_name):
                             logger.warning(
                                 "GeminiAssessor: Removed aggregate placeholder entry "
@@ -2012,8 +2145,19 @@ class GeminiAssessor:
                                 "every game must have its own individual entry.",
                                 game_name,
                             )
-                        else:
-                            filtered_itemized.append(entry)
+                            continue
+                        try:
+                            price_eur = float(entry.get("price_eur") or 0)
+                        except (TypeError, ValueError):
+                            price_eur = 0.0
+                        price_source = str(entry.get("price_source") or "ai_estimate")
+                        is_exceptional = bool(entry.get("is_exceptional", False))
+                        filtered_itemized.append({
+                            "game": game_name,
+                            "price_eur": round(price_eur, 2),
+                            "price_source": price_source,
+                            "is_exceptional": is_exceptional,
+                        })
                 itemized = filtered_itemized
                 results.append(
                     {
