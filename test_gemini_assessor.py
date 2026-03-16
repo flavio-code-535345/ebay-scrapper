@@ -25,6 +25,7 @@ from gemini_assessor import (
     _detect_sports_kinect_deal,
     _extract_platform_name,
     _extract_potential_game_titles,
+    _is_aggregate_placeholder,
 )
 
 # ---------------------------------------------------------------------------
@@ -1231,3 +1232,153 @@ class TestTopValueGamesSelection:
         ]
         top = self._top_value_games(mostly_no_price)
         assert len(top) < 2, "Only one priced game — block threshold not met"
+
+
+# ---------------------------------------------------------------------------
+# _is_aggregate_placeholder — detect grouped/bundled placeholder game entries
+# ---------------------------------------------------------------------------
+
+
+class TestIsAggregatePlaceholder:
+    """Verify _is_aggregate_placeholder correctly identifies entries that
+    should never appear in per-game resale breakdowns."""
+
+    def test_additional_titles_is_placeholder(self):
+        assert _is_aggregate_placeholder("Additional Titles") is True
+
+    def test_remaining_titles_is_placeholder(self):
+        assert _is_aggregate_placeholder("Remaining Titles") is True
+
+    def test_other_games_is_placeholder(self):
+        assert _is_aggregate_placeholder("Other Games") is True
+
+    def test_more_games_is_placeholder(self):
+        assert _is_aggregate_placeholder("More Games") is True
+
+    def test_rest_of_games_is_placeholder(self):
+        assert _is_aggregate_placeholder("Rest of Games") is True
+
+    def test_weitere_spiele_is_placeholder(self):
+        assert _is_aggregate_placeholder("Weitere Spiele") is True
+
+    def test_sonstige_titel_is_placeholder(self):
+        assert _is_aggregate_placeholder("Sonstige Titel") is True
+
+    def test_etc_is_placeholder(self):
+        assert _is_aggregate_placeholder("etc.") is True
+
+    def test_ellipsis_is_placeholder(self):
+        assert _is_aggregate_placeholder("...") is True
+
+    def test_and_more_is_placeholder(self):
+        assert _is_aggregate_placeholder("and more") is True
+
+    def test_real_game_title_is_not_placeholder(self):
+        assert _is_aggregate_placeholder("Halo 3") is False
+
+    def test_zelda_is_not_placeholder(self):
+        assert _is_aggregate_placeholder("The Legend of Zelda: Breath of the Wild") is False
+
+    def test_batman_is_not_placeholder(self):
+        assert _is_aggregate_placeholder("Batman Arkham Knight") is False
+
+    def test_empty_string_is_not_placeholder(self):
+        assert _is_aggregate_placeholder("") is False
+
+    def test_non_string_is_not_placeholder(self):
+        assert _is_aggregate_placeholder(None) is False
+        assert _is_aggregate_placeholder(42) is False
+
+
+class TestParseBatchResponseFiltersAggregates:
+    """Verify _parse_batch_response removes aggregate placeholder entries
+    from itemized_resale_estimates automatically."""
+
+    def _parse(self, payload):
+        return GeminiAssessor._parse_batch_response(json.dumps(payload), len(payload))
+
+    def test_additional_titles_entry_removed(self):
+        """An 'Additional Titles' aggregate entry must be stripped from results."""
+        payload = [
+            {
+                "deal_rating": "Good",
+                "confidence_score": 80,
+                "potential_scam": False,
+                "scam_warning": "",
+                "visual_findings": [],
+                "red_flags": [],
+                "fair_market_estimate": "~€30",
+                "itemized_resale_estimates": [
+                    {"game": "Halo 3", "price_eur": 12.0, "price_source": "ebay_sold",
+                     "is_exceptional": False},
+                    {"game": "Gears of War", "price_eur": 10.0, "price_source": "ebay_sold",
+                     "is_exceptional": False},
+                    {"game": "Additional Titles", "price_eur": 8.0,
+                     "price_source": "ai_estimate", "is_exceptional": False},
+                ],
+                "estimated_total_cost": 15.0,
+                "estimated_gross_profit": 15.0,
+                "verdict_summary": "Good bundle.",
+            }
+        ]
+        result = self._parse(payload)
+        games = [e["game"] for e in result[0]["ai_itemized_resale_estimates"]]
+        assert "Additional Titles" not in games
+        assert "Halo 3" in games
+        assert "Gears of War" in games
+        assert len(games) == 2
+
+    def test_remaining_titles_entry_removed(self):
+        """A 'Remaining Titles' placeholder entry must be stripped."""
+        payload = [
+            {
+                "deal_rating": "Okay",
+                "confidence_score": 60,
+                "potential_scam": False,
+                "scam_warning": "",
+                "visual_findings": [],
+                "red_flags": [],
+                "fair_market_estimate": "~€20",
+                "itemized_resale_estimates": [
+                    {"game": "Batman Arkham Knight", "price_eur": 8.0,
+                     "price_source": "ebay_active", "is_exceptional": False},
+                    {"game": "Remaining Titles", "price_eur": 5.0,
+                     "price_source": "ai_estimate", "is_exceptional": False},
+                ],
+                "estimated_total_cost": 12.0,
+                "estimated_gross_profit": 1.0,
+                "verdict_summary": "Decent.",
+            }
+        ]
+        result = self._parse(payload)
+        games = [e["game"] for e in result[0]["ai_itemized_resale_estimates"]]
+        assert "Remaining Titles" not in games
+        assert "Batman Arkham Knight" in games
+
+    def test_no_aggregate_entries_unchanged(self):
+        """When no aggregate entries are present the list is returned unchanged."""
+        payload = [
+            {
+                "deal_rating": "Must Have",
+                "confidence_score": 95,
+                "potential_scam": False,
+                "scam_warning": "",
+                "visual_findings": [],
+                "red_flags": [],
+                "fair_market_estimate": "~€60",
+                "itemized_resale_estimates": [
+                    {"game": "God of War", "price_eur": 20.0, "price_source": "ebay_sold",
+                     "is_exceptional": True},
+                    {"game": "Spider-Man", "price_eur": 18.0, "price_source": "ebay_sold",
+                     "is_exceptional": False},
+                    {"game": "Horizon Zero Dawn", "price_eur": 12.0,
+                     "price_source": "ai_estimate", "is_exceptional": False},
+                ],
+                "estimated_total_cost": 15.0,
+                "estimated_gross_profit": 35.0,
+                "verdict_summary": "Amazing deal.",
+            }
+        ]
+        result = self._parse(payload)
+        games = [e["game"] for e in result[0]["ai_itemized_resale_estimates"]]
+        assert games == ["God of War", "Spider-Man", "Horizon Zero Dawn"]
