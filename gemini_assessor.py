@@ -204,7 +204,15 @@ estimated resale price in EUR), `"price_source"` (`"ebay_sold"`, \
 is notably above the bundle average or which are rare/high-demand titles; \
 always `false` for single-item listings and for bundles rated below "Good"); \
 use provided `Fetched eBay Market Price` or `Fetched eBay Prices` data when \
-available, otherwise estimate
+available, otherwise estimate; \
+**MANDATORY — NO GROUPING: every identified game title must have its own \
+individual entry in this list; never group or collapse multiple titles into \
+a single aggregate placeholder entry (e.g. "Additional Titles", \
+"Remaining Titles", "Other Games", "More Games", "etc.", or any similar \
+combined/bundled entry); if a game lacks eBay data, still create its own \
+individual entry with `"price_source": "ai_estimate"` and your best \
+estimated `"price_eur"`; this rule is absolute and applies to bundles of \
+any size**
 - `"estimated_total_cost"`: number — asking price + shipping in EUR (0 if unknown)
 - `"estimated_gross_profit"`: number — sum of all itemized_resale_estimates \
 price_eur values minus estimated_total_cost; **always compute this value** — \
@@ -278,6 +286,11 @@ shipping) and flag any particularly valuable or worthless titles in the lot.
 higher resale price than the bundle average, rare or high-demand title), \
 set `"is_exceptional": true` in its `itemized_resale_estimates` entry. \
 Only mark a game exceptional when the bundle rating is "Good" or better.
+> - **MANDATORY — EVERY game must appear as its own individual entry in \
+`itemized_resale_estimates`. Never collapse multiple games into a single \
+grouped placeholder such as "Additional Titles", "Remaining Titles", \
+"Other Games", or any similar aggregate. If a game has no eBay price data, \
+use `"price_source": "ai_estimate"` and provide your best estimate.**
 
 ### ANALYSIS PROTOCOL (apply to EACH listing)
 1. **SCAM / BAIT-AND-SWITCH DETECTION (CHECK THIS FIRST)**
@@ -416,7 +429,15 @@ estimated resale price in EUR), `"price_source"` (`"ebay_sold"`, \
 is notably above the bundle average or which are rare/high-demand titles; \
 always `false` for single-item listings and for bundles rated below "Good"); \
 use provided `Fetched eBay Market Price` or `Fetched eBay Prices` data when \
-available, otherwise estimate
+available, otherwise estimate; \
+**MANDATORY — NO GROUPING: every identified game title must have its own \
+individual entry in this list; never group or collapse multiple titles into \
+a single aggregate placeholder entry (e.g. "Additional Titles", \
+"Remaining Titles", "Other Games", "More Games", "etc.", or any similar \
+combined/bundled entry); if a game lacks eBay data, still create its own \
+individual entry with `"price_source": "ai_estimate"` and your best \
+estimated `"price_eur"`; this rule is absolute and applies to bundles of \
+any size**
 - `"estimated_total_cost"`: number — asking price + shipping in EUR (0 if unknown)
 - `"estimated_gross_profit"`: number — sum of all itemized_resale_estimates \
 price_eur values minus estimated_total_cost; **always compute this value** — \
@@ -523,6 +544,37 @@ def _extract_json_objects(text: str) -> list:
         else:
             pos += 1
     return results
+
+
+# Compiled regex that matches aggregate placeholder game-entry names like
+# "Additional Titles", "Remaining Titles", "Other Games", "Rest of Games", etc.
+_AGGREGATE_PLACEHOLDER_RE = re.compile(
+    r"^(additional|remaining|other|more|weitere|restliche|sonstige)"
+    r"[\s\-]*(titles?|games?|spiele?|titel|items?)"
+    r"|^rest\s+(of\s+)?(titles?|games?|spiele?|titel|items?)",
+    re.IGNORECASE,
+)
+
+# Bare string tokens that are always aggregate placeholders (never real game titles).
+_AGGREGATE_PLACEHOLDER_TOKENS: frozenset = frozenset(
+    {"etc.", "etc", "...", "u.a.", "usw.", "and more", "und mehr"}
+)
+
+
+def _is_aggregate_placeholder(game_name: str) -> bool:
+    """Return True if *game_name* looks like an aggregate placeholder entry.
+
+    Detects entries such as "Additional Titles", "Remaining Titles",
+    "Other Games", "Rest of Games" that incorrectly group multiple
+    games into a single line instead of listing each game individually.
+    """
+    if not isinstance(game_name, str):
+        return False
+    name_lower = game_name.strip().lower()
+    if _AGGREGATE_PLACEHOLDER_RE.match(name_lower):
+        return True
+    # Catch bare "etc.", "...", "u.a.", "usw." as game names
+    return name_lower in _AGGREGATE_PLACEHOLDER_TOKENS
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
@@ -1499,6 +1551,13 @@ class GeminiAssessor:
                 lines.append(f"  - {game}: €{price:.2f} (source: {source_label})")
             else:
                 lines.append(f"  - {game}: no eBay data found — please estimate")
+        lines.append(
+            "IMPORTANT: For every game in this bundle that is NOT listed above,"
+            " you MUST still create its own individual entry in"
+            " itemized_resale_estimates with price_source \"ai_estimate\" and your"
+            " best estimated price_eur. Never group unlisted games into a single"
+            " aggregate entry."
+        )
         return "\n".join(lines)
 
     def _build_contents(self, deal: Dict) -> List:
@@ -1806,6 +1865,22 @@ class GeminiAssessor:
         itemized = data.get("itemized_resale_estimates", [])
         if not isinstance(itemized, list):
             itemized = []
+        # Filter out any aggregate placeholder entries the AI may have
+        # created despite the prompt instructions (e.g. "Additional Titles").
+        filtered_itemized = []
+        for entry in itemized:
+            if isinstance(entry, dict):
+                game_name = entry.get("game", "")
+                if _is_aggregate_placeholder(game_name):
+                    logger.warning(
+                        "GeminiAssessor: Removed aggregate placeholder entry "
+                        "%r from itemized_resale_estimates — "
+                        "every game must have its own individual entry.",
+                        game_name,
+                    )
+                else:
+                    filtered_itemized.append(entry)
+        itemized = filtered_itemized
         return {
             "ai_deal_rating": str(data.get("deal_rating", "Unknown")),
             "ai_confidence_score": int(data.get("confidence_score", 0)),
@@ -1924,6 +1999,22 @@ class GeminiAssessor:
                 itemized = item_data.get("itemized_resale_estimates", [])
                 if not isinstance(itemized, list):
                     itemized = []
+                # Filter out any aggregate placeholder entries the AI may have
+                # created despite the prompt instructions (e.g. "Additional Titles").
+                filtered_itemized = []
+                for entry in itemized:
+                    if isinstance(entry, dict):
+                        game_name = entry.get("game", "")
+                        if _is_aggregate_placeholder(game_name):
+                            logger.warning(
+                                "GeminiAssessor: Removed aggregate placeholder entry "
+                                "%r from itemized_resale_estimates — "
+                                "every game must have its own individual entry.",
+                                game_name,
+                            )
+                        else:
+                            filtered_itemized.append(entry)
+                itemized = filtered_itemized
                 results.append(
                     {
                         "ai_deal_rating": str(item_data.get("deal_rating", "Unknown")),
