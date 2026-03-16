@@ -431,6 +431,24 @@ a:hover { text-decoration: underline; }
 
 .btn-dismiss-banner:hover { opacity: 1; }
 
+.btn-retry-timeout {
+    display: inline-block;
+    margin-left: 0.6rem;
+    padding: 0.2rem 0.6rem;
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.35);
+    border-radius: 4px;
+    color: inherit;
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 600;
+    line-height: 1.4;
+    vertical-align: middle;
+    transition: background 0.15s;
+}
+
+.btn-retry-timeout:hover { background: rgba(255,255,255,0.28); }
+
 .error-details-list {
     margin-top: 0.4rem;
     padding-left: 1.1rem;
