@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone
 from flask import Flask, request, jsonify, render_template, Response
 
 from scraper import EbayScraper
@@ -136,31 +137,6 @@ def _is_german_location(location: str) -> bool:
     return False
 
 
-# Keywords (lower-case) indicating a multi-item lot / bundle listing.
-# Checked against the deal title for bundle-first sort priority.
-_BUNDLE_KEYWORDS = frozenset({
-    # German
-    "sammlung", "konvolut", "paket", "lot", "bundle",
-    "spielesammlung", "spielepaket", "spielekonvolut",
-    # Common numeric-quantity patterns are handled separately below.
-})
-
-_BUNDLE_NUMBER_RE = re.compile(
-    r'\b\d+\s*[xX×]\s*\w+|\b\d+\s*(?:spiele|games|stück|pieces|items)\b',
-    re.IGNORECASE,
-)
-
-
-def _is_bundle(deal: dict) -> bool:
-    """Return True when the deal title suggests a multi-item lot or bundle."""
-    title = (deal.get("title") or "").lower()
-    for kw in _BUNDLE_KEYWORDS:
-        if kw in title:
-            return True
-    if _BUNDLE_NUMBER_RE.search(title):
-        return True
-    return False
-
 
 @app.route('/')
 def index():
@@ -229,7 +205,7 @@ def search():
 
     # Cap deals before sending to Gemini — no score-based pre-filtering.
     # All deals that pass the post-filters above are eligible for AI assessment.
-    _MAX_DISPLAY = 50
+    _MAX_DISPLAY = 30
     deals_filtered = deals[:_MAX_DISPLAY]
 
     # AI assessment via Gemini: send only the top filtered deals in a single
@@ -298,16 +274,22 @@ def search():
         ai_assessment = ai_assessments[i] if i < len(ai_assessments) else None
         assessed.append({**deal, **(ai_assessment or {})})
 
-    # Sort deals: bundles first, then by AI rating and confidence score.
-    # Within each group (bundle / single), AI-rated "Must Have"/"Good" with
-    # high confidence leads, followed by "Okay", then "Avoid", then unrated.
-    _rating_order = {"must have": 0, "must buy": 0, "good": 1, "okay": 2, "avoid": 3}
+    # Sort deals: "Must Have"/"Must Buy" first, then all others — both groups
+    # ordered newest → oldest by listing_date.
+    def _parse_listing_date(d: dict) -> datetime:
+        raw = d.get("listing_date") or ""
+        if not raw:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.min.replace(tzinfo=timezone.utc)
 
     def _sort_key(d: dict):
-        is_single = not _is_bundle(d)  # 0 = bundle, 1 = single game
-        ai_order = _rating_order.get((d.get("ai_deal_rating") or "").lower(), 3)
-        ai_conf = -(d.get("ai_confidence_score") or 0)
-        return (is_single, not d.get("ai_assessed", False), ai_order, ai_conf)
+        rating = (d.get("ai_deal_rating") or "").lower()
+        not_must_have = int(rating not in ("must have", "must buy"))  # 0 = must have first
+        date = _parse_listing_date(d)
+        return (not_must_have, -date.timestamp())
 
     assessed.sort(key=_sort_key)
 

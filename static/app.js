@@ -15,6 +15,7 @@ let _lastDeals       = [];
 let _maxAgeDays      = 0;
 let _keywordFilter   = '';
 let _ratingFilter    = '';
+let _sortOrder       = 'newest';
 let _savedUrls       = new Set();
 let _selectedUrls    = new Set();
 let _abortController = null;
@@ -119,6 +120,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (ratingSelect) {
         ratingSelect.addEventListener('change', () => {
             _ratingFilter = ratingSelect.value.toLowerCase();
+            if (_currentPipeline === 'ready') _renderDeals(_lastDeals);
+        });
+    }
+
+    // Sort order
+    const sortOrderSelect = document.getElementById('sortOrderSelect');
+    if (sortOrderSelect) {
+        sortOrderSelect.addEventListener('change', () => {
+            _sortOrder = sortOrderSelect.value;
             if (_currentPipeline === 'ready') _renderDeals(_lastDeals);
         });
     }
@@ -426,7 +436,12 @@ function _applyFilters(deals) {
  */
 function _renderDeals(deals, mode) {
     const renderMode = mode || _currentPipeline;
-    const filtered   = _applyFilters(deals);
+    let filtered     = _applyFilters(deals);
+
+    // Apply client-side sort order (newest/oldest) for the ready pipeline.
+    if (renderMode === 'ready' && _sortOrder === 'oldest') {
+        filtered = [...filtered].reverse();
+    }
 
     const dealsGrid = document.getElementById('dealsGrid');
     if (filtered.length === 0) {
@@ -1312,7 +1327,6 @@ function buildImageIssueSection(issues) {
 
 function buildAiSection(deal) {
     const rating         = deal.ai_deal_rating || 'Unknown';
-    const confidence     = deal.ai_confidence_score || 0;
     const summary        = deal.ai_verdict_summary || '';
     const estimate       = deal.ai_fair_market_estimate || '';
     const visualFindings = Array.isArray(deal.ai_visual_findings) ? deal.ai_visual_findings : [];
@@ -1457,7 +1471,6 @@ function buildAiSection(deal) {
         ${scamBannerHtml}
         <div class="ai-verdict-header">
             <span class="ai-badge ${badgeClass}">${escapeHtml(rating)}</span>
-            <span class="ai-confidence">AI Confidence: ${confidence}%</span>
         </div>
         ${summary  ? `<p class="ai-summary">${escapeHtml(summary)}</p>` : ''}
         ${estimateHtml}
