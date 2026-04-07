@@ -216,8 +216,6 @@ async function handleSearch(e) {
     document.getElementById('activePipelineBar').classList.remove('d-none');
     document.getElementById('errorContainer').classList.add('d-none');
     document.getElementById('aiWarningContainer').classList.add('d-none');
-    const _aiTimeoutEl = document.getElementById('aiTimeoutContainer');
-    if (_aiTimeoutEl) _aiTimeoutEl.classList.add('d-none');
     document.getElementById('emptyState').classList.add('d-none');
     document.getElementById('dealsGrid').innerHTML = '';
 
@@ -318,21 +316,6 @@ function _applySearchResults(data) {
             aiWarning.classList.remove('d-none');
         } else {
             aiWarning.classList.add('d-none');
-        }
-    }
-
-    // AI timeout notice banner
-    const aiTimeout = document.getElementById('aiTimeoutContainer');
-    if (aiTimeout) {
-        const timedOut = data.ai_timeout_count || 0;
-        if (timedOut > 0) {
-            aiTimeout.innerHTML =
-                `<button type="button" class="btn-dismiss-banner" aria-label="Dismiss" onclick="this.parentElement.classList.add('d-none')">✕</button>` +
-                `⏱️ <strong>${timedOut} deal${timedOut !== 1 ? 's' : ''}</strong> could not be AI-assessed within the time budget and are shown without a rating. ` +
-                `<button type="button" class="btn-retry-timeout" onclick="retrySearch()">🔄 Retry assessment</button>`;
-            aiTimeout.classList.remove('d-none');
-        } else {
-            aiTimeout.classList.add('d-none');
         }
     }
 
@@ -578,8 +561,6 @@ function createDealCard(deal, mode) {
         aiSection = buildAiErrorSection('⏳ AI paused (quota limit reached)');
     } else if (deal.ai_error_type === 'parse_error') {
         aiSection = buildAiErrorSection('⚠️ AI response could not be parsed');
-    } else if (deal.ai_error_type === 'timeout') {
-        aiSection = buildAiErrorSection('⏱️ AI assessment timed out');
     }
 
     // Meta rows

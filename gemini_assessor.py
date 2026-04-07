@@ -473,7 +473,7 @@ _DEFAULT_BACKOFF_SECONDS = 60
 _BATCH_SIZE = 5
 
 # Retry configuration for transient (non-rate-limit) API errors.
-_MAX_RETRIES = 3
+_MAX_RETRIES = 2
 _RETRY_BASE_DELAY = 2.0  # seconds; doubled on each retry (exponential back-off)
 
 # Hard timeout (seconds) applied around a single Gemini generateContent call,
@@ -481,18 +481,19 @@ _RETRY_BASE_DELAY = 2.0  # seconds; doubled on each retry (exponential back-off)
 # enough to complete well within this window under normal network conditions.
 # If the call stalls, the ThreadPoolExecutor future times out here and returns
 # graceful timeout errors rather than blocking the Gunicorn worker.
-_GEMINI_REQUEST_TIMEOUT = 20
+# Increased from 20 s to 35 s to give more headroom for slow but valid Gemini
+# responses (e.g. 30 deals → 6 batches of 5 is a typical expected maximum).
+_GEMINI_REQUEST_TIMEOUT = 35
 
 # Total wall-clock budget (seconds) for the entire assess_deals_batch() call
 # (all sub-batches combined).  This is the last line of defence against a
 # Gunicorn worker timeout: if the cumulative Gemini time exceeds this limit,
 # remaining batches are skipped and their deals are returned as timeout errors.
 # Set well below the Gunicorn worker timeout (180 s) to leave room for eBay
-# API calls and other per-request work.  Increased from 90 s to 120 s so that
-# larger result sets (50 deals → 10 batches of 5) have a better chance of
-# completing fully; the eBay pre-fetch (≤20 s) + 120 s Gemini budget still
-# leaves a 40 s safety margin before the 180 s Gunicorn limit.
-_ASSESS_TOTAL_BUDGET_S = 120
+# API calls and other per-request work.  For example, with 30 deals (6 batches
+# of 5) and the eBay pre-fetch (≤15 s), 145 s gives comfortable headroom:
+# 15 + 145 = 160 s stays safely below the 180 s Gunicorn limit.
+_ASSESS_TOTAL_BUDGET_S = 145
 
 # ---------------------------------------------------------------------------
 # eBay price pre-fetch / caching settings
@@ -506,7 +507,8 @@ _EBAY_CACHE_TTL = 300.0
 # after this limit so the Gunicorn worker is never blocked waiting for slow eBay
 # API responses.  Must be < (_ASSESS_TOTAL_BUDGET_S - _GEMINI_REQUEST_TIMEOUT)
 # so at least one Gemini batch call can still complete within the overall budget.
-_EBAY_PREFETCH_BUDGET_S = 20
+# Reduced from 20 s to 15 s to reclaim time for Gemini calls.
+_EBAY_PREFETCH_BUDGET_S = 15
 
 # Maximum number of concurrent eBay lookup threads during the pre-fetch step.
 _EBAY_MAX_WORKERS = 5
