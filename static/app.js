@@ -14,7 +14,7 @@ let _currentPipeline = 'ready';
 let _lastDeals       = [];
 let _maxAgeDays      = 0;
 let _keywordFilter   = '';
-let _ratingFilter    = '';
+let _ratingFilter    = 'must_have_good';
 let _sortOrder       = 'newest';
 let _savedUrls       = new Set();
 let _selectedUrls    = new Set();
@@ -319,6 +319,11 @@ function _applySearchResults(data) {
         }
     }
 
+    // Reset rating filter to "Must Have + Good" after each new search
+    _ratingFilter = 'must_have_good';
+    const ratingFilterEl = document.getElementById('ratingFilter');
+    if (ratingFilterEl) ratingFilterEl.value = 'must_have_good';
+
     _lastDeals = data.deals || [];
     _renderDeals(_lastDeals);
 }
@@ -405,7 +410,11 @@ function _applyFilters(deals) {
             const rating = (deal.ai_deal_rating || '').toLowerCase();
             // Treat legacy "fair" ratings as "okay" and "must buy" as "must have" for filter purposes
             const normRating = rating === 'fair' ? 'okay' : rating === 'must buy' ? 'must have' : rating;
-            if (normRating !== _ratingFilter) return false;
+            if (_ratingFilter === 'must_have_good') {
+                if (normRating !== 'must have' && normRating !== 'good') return false;
+            } else {
+                if (normRating !== _ratingFilter) return false;
+            }
         }
 
         return true;
