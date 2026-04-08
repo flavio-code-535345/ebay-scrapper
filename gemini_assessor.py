@@ -178,13 +178,6 @@ preference influence the rating — only profit counts.
 ### OUTPUT FORMAT
 Return **only** a JSON object (no markdown fences, no commentary) with \
 exactly these keys:
-- `"brand"`: string — manufacturer or brand name of the item (e.g. \
-`"Sony"`, `"Nintendo"`, `"Apple"`); empty string if unknown
-- `"model"`: string — specific model name or number (e.g. `"PlayStation 4"`, \
-`"iPhone 13 Pro"`, `"Air Jordan 1"`); empty string if unknown
-- `"category"`: string — product category in English (e.g. `"consoles"`, \
-`"smartphones"`, `"sneakers"`, `"watches"`, `"video games"`); empty string \
-if unknown
 - `"deal_rating"`: `"Must Have"` / `"Good"` / `"Okay"` / `"Avoid"`
 - `"confidence_score"`: integer 1–100
 - `"potential_scam"`: boolean — `true` if this listing shows signs of \
@@ -230,13 +223,6 @@ market value, condition, resell-ability, and a clear recommendation with \
 reasoning; invoke the 2 € rule explicitly when applicable; if \
 `potential_scam` is true, lead with the scam warning and make clear this \
 overrides all other advice
-- `"hidden_gem"`: boolean — `true` when the item's resale value may be \
-significantly higher than the listing suggests and poor/missing photos are \
-hiding its true condition or completeness; `false` otherwise
-
-**LANGUAGE RULE**: Respond in English regardless of the listing language \
-(titles, descriptions, and seller text may be in German, French, Italian, \
-or other languages — always output all fields in English).
 """
 
 _BATCH_SYSTEM_PROMPT = """\
@@ -417,13 +403,6 @@ preference influence the rating — only profit counts.
 You MUST return a **single JSON array** where each element corresponds to one \
 listing in the order they were presented. Each element must have exactly \
 these keys:
-- `"brand"`: string — manufacturer or brand name of the item (e.g. \
-`"Sony"`, `"Nintendo"`, `"Apple"`); empty string if unknown
-- `"model"`: string — specific model name or number (e.g. `"PlayStation 4"`, \
-`"iPhone 13 Pro"`, `"Air Jordan 1"`); empty string if unknown
-- `"category"`: string — product category in English (e.g. `"consoles"`, \
-`"smartphones"`, `"sneakers"`, `"watches"`, `"video games"`); empty string \
-if unknown
 - `"deal_rating"`: `"Must Have"` / `"Good"` / `"Okay"` / `"Avoid"`
 - `"confidence_score"`: integer 1–100
 - `"potential_scam"`: boolean — `true` if this listing shows signs of \
@@ -469,13 +448,6 @@ market value, condition, resell-ability, and a clear recommendation; for \
 bundles include the resale breakdown described above; invoke the 2 € rule \
 explicitly when applicable; if `potential_scam` is true, lead with the scam \
 warning and make clear this overrides all other advice
-- `"hidden_gem"`: boolean — `true` when the item's resale value may be \
-significantly higher than the listing suggests and poor/missing photos are \
-hiding its true condition or completeness; `false` otherwise
-
-**LANGUAGE RULE**: Respond in English regardless of the listing language \
-(titles, descriptions, and seller text may be in German, French, Italian, \
-or other languages — always output all fields in English).
 
 CRITICAL: Output ONLY the JSON array — no markdown fences, no explanation \
 text, no concatenated separate objects. The entire response must be parseable \
@@ -1771,19 +1743,13 @@ class GeminiAssessor:
         """
         parts: List = []
 
-        _hidden_gem_enabled = (
-            os.environ.get("HIDDEN_GEM_DETECTION", "false").strip().lower() == "true"
-        )
-
         intro = (
             f"Below are {len(deals)} eBay listings to analyze. "
             f"Return a JSON array of exactly {len(deals)} objects in the same "
-            "order. Each object must contain: brand, model, category, "
-            "deal_rating, confidence_score, "
+            "order. Each object must contain: deal_rating, confidence_score, "
             "potential_scam, scam_warning, visual_findings, red_flags, "
             "fair_market_estimate, itemized_resale_estimates, "
-            "estimated_total_cost, estimated_gross_profit, verdict_summary, "
-            "hidden_gem."
+            "estimated_total_cost, estimated_gross_profit, verdict_summary."
         )
         parts.append(self._types.Part.from_text(text=intro))
 
@@ -1811,16 +1777,6 @@ class GeminiAssessor:
             image_issues_line = self._format_image_issues_line(deal)
             if image_issues_line:
                 item_lines.append(image_issues_line.rstrip())
-
-            # Feature 6: Hidden gem opt-in hint.
-            if _hidden_gem_enabled:
-                issues = deal.get("image_issues") or []
-                if "no_images" in issues or "low_res" in issues:
-                    item_lines.append(
-                        "Note: This listing has poor or missing photos. "
-                        "Please evaluate whether the item's value may be hidden "
-                        "by the low-quality images and set hidden_gem=true if so."
-                    )
 
             # Inject real eBay prices when available for bundle listings.
             # For single-game listings, inject the current market price so the
@@ -2061,10 +2017,6 @@ class GeminiAssessor:
             "ai_estimated_total_cost": total_cost,
             "ai_estimated_gross_profit": gross_profit,
             "ai_verdict_summary": str(data.get("verdict_summary", "")),
-            "ai_brand": str(data.get("brand", "")),
-            "ai_model": str(data.get("model", "")),
-            "ai_category": str(data.get("category", "")),
-            "ai_hidden_gem": bool(data.get("hidden_gem", False)),
             "ai_assessed": True,
         }
 
@@ -2224,10 +2176,6 @@ class GeminiAssessor:
                         "ai_estimated_total_cost": total_cost,
                         "ai_estimated_gross_profit": gross_profit,
                         "ai_verdict_summary": str(item_data.get("verdict_summary", "")),
-                        "ai_brand": str(item_data.get("brand", "")),
-                        "ai_model": str(item_data.get("model", "")),
-                        "ai_category": str(item_data.get("category", "")),
-                        "ai_hidden_gem": bool(item_data.get("hidden_gem", False)),
                         "ai_assessed": True,
                     }
                 )
