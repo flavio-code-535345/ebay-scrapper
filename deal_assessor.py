@@ -21,6 +21,41 @@ class DealAssessor:
     
     # Price threshold (deals below this are "excellent")
     PRICE_THRESHOLD_PERCENTILE = 0.30
+
+    # Category-specific minimum profit-margin thresholds (as a fraction of price).
+    # Used by _score_price when ai_category is known.  A higher threshold means
+    # only better deals score well in that category.
+    CATEGORY_MARGIN_THRESHOLDS: Dict[str, float] = {
+        # Electronics: slim margins due to high competition and quick depreciation.
+        "electronics": 0.15,
+        "smartphones": 0.12,
+        "tablets": 0.12,
+        "laptops": 0.15,
+        "cameras": 0.18,
+        # Gaming: good margins on consoles, moderate on accessories.
+        "gaming": 0.20,
+        "consoles": 0.20,
+        "video games": 0.25,
+        # Watches & jewellery: high value, good margins possible.
+        "watches": 0.30,
+        "jewellery": 0.30,
+        "jewelry": 0.30,
+        # Clothing & footwear: sneaker flipping especially profitable.
+        "sneakers": 0.35,
+        "shoes": 0.25,
+        "clothing": 0.20,
+        # Collectibles & toys.
+        "collectibles": 0.30,
+        "toys": 0.25,
+        # Books & media: lower margins.
+        "books": 0.40,
+        "music": 0.30,
+        "dvd": 0.30,
+        "blu-ray": 0.30,
+    }
+
+    # Default margin threshold when category is unknown.
+    DEFAULT_MARGIN_THRESHOLD: float = 0.20
     
     def __init__(self):
         self.market_data = {}  # Store historical prices for comparison
@@ -73,14 +108,52 @@ class DealAssessor:
             }
     
     def _score_price(self, deal: Dict) -> float:
-        """Score deal based on price (0-100)"""
+        """Score deal based on price (0-100).
+
+        When ``ai_category`` is present the score is calibrated against the
+        category-specific margin threshold from
+        :attr:`CATEGORY_MARGIN_THRESHOLDS`.  For unknown categories the flat
+        price-bracket scoring is used as a fallback.
+        """
         price = deal.get('price', 0)
         
         if price <= 0:
             return 50
-        
-        # Lower price = higher score
-        # Normalize to 0-100 scale
+
+        # Category-aware scoring when ai_category is available.
+        ai_category = (deal.get('ai_category') or '').strip().lower()
+        if ai_category:
+            threshold = self.CATEGORY_MARGIN_THRESHOLDS.get(
+                ai_category, self.DEFAULT_MARGIN_THRESHOLD
+            )
+            # Use sold_price_ref (from Feature 2) when available; otherwise fall
+            # back to the flat bracket logic for this category.
+            sold_price = deal.get('sold_price_ref')
+            if sold_price and sold_price > 0:
+                margin = (sold_price - price) / sold_price
+                if margin >= threshold * 2:
+                    return 95
+                elif margin >= threshold:
+                    return 80
+                elif margin >= 0:
+                    return 60
+                else:
+                    return 35
+            # No sold_price_ref but category is known — use tighter flat scoring.
+            if price < 50:
+                return 95
+            elif price < 100:
+                return 85
+            elif price < 250:
+                return 75
+            elif price < 500:
+                return 65
+            elif price < 1000:
+                return 50
+            else:
+                return 40
+
+        # Flat price-bracket fallback (original logic) when category is unknown.
         if price < 50:
             return 95
         elif price < 100:
