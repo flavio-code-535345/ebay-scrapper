@@ -581,25 +581,6 @@ class EbayApiClient:
         # itemCreationDate is an ISO-8601 string like "2024-03-01T10:00:00.000Z".
         listing_date: Optional[str] = (item.get("itemCreationDate") or "").strip() or None
 
-        # ── Listing type (Feature 3: auction snipe detection) ──────────────
-        buying_options = item.get("buyingOptions") or []
-        listing_type = "Auction" if "AUCTION" in buying_options else "Fixed Price"
-
-        # ── Auction end date (Feature 3) ───────────────────────────────────
-        item_end_date: str = (item.get("itemEndDate") or "").strip()
-
-        # ── Bid count (Feature 3) ─────────────────────────────────────────
-        try:
-            bid_count = int(item.get("bidCount") or 0)
-        except (TypeError, ValueError):
-            bid_count = 0
-
-        # ── Watch count (Feature 4: high-watcher opportunities) ───────────
-        try:
-            watch_count = int(item.get("watchCount") or 0)
-        except (TypeError, ValueError):
-            watch_count = 0
-
         return {
             "title": title or "Unknown",
             "price": price,
@@ -620,12 +601,6 @@ class EbayApiClient:
             # ISO-8601 date when the listing was created on eBay (may be None
             # for older API responses or the legacy scraper).
             "listing_date": listing_date,
-            # Feature 3: Auction snipe detection fields.
-            "listing_type": listing_type,
-            "item_end_date": item_end_date,
-            "bid_count": bid_count,
-            # Feature 4: High-watcher opportunity field.
-            "watch_count": watch_count,
         }
 
     @staticmethod

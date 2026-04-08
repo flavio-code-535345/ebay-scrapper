@@ -75,51 +75,6 @@ def init_db():
     _add_column_if_missing(cursor, "deals", "ai_estimated_total_cost", "REAL")
     _add_column_if_missing(cursor, "deals", "ai_estimated_gross_profit", "REAL")
 
-    # ── Feature 1: AI product identification ────────────────────────────
-    _add_column_if_missing(cursor, "deals", "ai_brand", "TEXT")
-    _add_column_if_missing(cursor, "deals", "ai_model", "TEXT")
-    _add_column_if_missing(cursor, "deals", "ai_category", "TEXT")
-
-    # ── Feature 2: Below-sold-price strategy ────────────────────────────
-    _add_column_if_missing(cursor, "deals", "sold_price_ref", "REAL")
-    _add_column_if_missing(cursor, "deals", "sold_price_source", "TEXT")
-    _add_column_if_missing(cursor, "deals", "margin_pct", "REAL")
-
-    # ── Feature 3: Auction snipe detection ──────────────────────────────
-    _add_column_if_missing(cursor, "deals", "listing_type", "TEXT")
-    _add_column_if_missing(cursor, "deals", "item_end_date", "TEXT")
-    _add_column_if_missing(cursor, "deals", "bid_count", "INTEGER")
-    _add_column_if_missing(cursor, "deals", "is_snipe_opportunity", "INTEGER DEFAULT 0")
-    _add_column_if_missing(cursor, "deals", "snipe_reason", "TEXT")
-
-    # ── Feature 4: High-watcher opportunities ───────────────────────────
-    _add_column_if_missing(cursor, "deals", "watch_count", "INTEGER")
-    _add_column_if_missing(cursor, "deals", "is_high_watcher_opportunity", "INTEGER DEFAULT 0")
-
-    # ── Feature 5: Condition arbitrage ──────────────────────────────────
-    _add_column_if_missing(cursor, "deals", "is_condition_arbitrage", "INTEGER DEFAULT 0")
-
-    # ── Feature 6: Hidden gem detection ─────────────────────────────────
-    _add_column_if_missing(cursor, "deals", "ai_hidden_gem", "INTEGER DEFAULT 0")
-
-    # ── Feature 7: Price drop tracking ──────────────────────────────────
-    _add_column_if_missing(cursor, "deals", "price_dropped", "INTEGER DEFAULT 0")
-    _add_column_if_missing(cursor, "deals", "price_drop_amount", "REAL")
-
-    # ── Feature 8: Strategy tags ─────────────────────────────────────────
-    _add_column_if_missing(cursor, "deals", "strategies", "TEXT")
-
-    # Price history table for cross-run deduplication and price-drop tracking.
-    cursor.executescript("""
-        CREATE TABLE IF NOT EXISTS price_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            url TEXT NOT NULL,
-            price REAL NOT NULL,
-            recorded_at REAL NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_price_history_url ON price_history(url);
-    """)
-
     # User-managed deal preferences.
     cursor.executescript("""
         CREATE TABLE IF NOT EXISTS user_saved_deals (
@@ -182,32 +137,6 @@ def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> No
         "ai_itemized_resale_estimates",
         "ai_estimated_total_cost",
         "ai_estimated_gross_profit",
-        # Feature 1: AI product identification
-        "ai_brand",
-        "ai_model",
-        "ai_category",
-        # Feature 2: Below-sold-price strategy
-        "sold_price_ref",
-        "sold_price_source",
-        "margin_pct",
-        # Feature 3: Auction snipe detection
-        "listing_type",
-        "item_end_date",
-        "bid_count",
-        "is_snipe_opportunity",
-        "snipe_reason",
-        # Feature 4: High-watcher opportunities
-        "watch_count",
-        "is_high_watcher_opportunity",
-        # Feature 5: Condition arbitrage
-        "is_condition_arbitrage",
-        # Feature 6: Hidden gem detection
-        "ai_hidden_gem",
-        # Feature 7: Price drop tracking
-        "price_dropped",
-        "price_drop_amount",
-        # Feature 8: Strategy tags
-        "strategies",
     }
     _ALLOWED_TYPES = {
         "TEXT",
@@ -242,35 +171,12 @@ def save_search(query: str, deals: List[Dict]) -> int:
     search_id = cursor.lastrowid
 
     for deal in deals:
-        # ── Price drop tracking (Feature 7) ──────────────────────────────
-        url = deal.get('url')
-        current_price = deal.get('price')
-        if url and current_price is not None:
-            # Fetch the most recent price for this URL (if any).
-            cursor.execute(
-                "SELECT price FROM price_history WHERE url = ? ORDER BY recorded_at DESC LIMIT 1",
-                (url,),
-            )
-            prev_row = cursor.fetchone()
-            if prev_row is not None:
-                prev_price = prev_row['price']
-                if prev_price != current_price:
-                    deal = dict(deal)  # avoid mutating caller's dict
-                    deal['price_dropped'] = int(prev_price > current_price)
-                    deal['price_drop_amount'] = round(prev_price - current_price, 2)
-            # Upsert into price_history.
-            cursor.execute(
-                "INSERT INTO price_history (url, price, recorded_at) VALUES (?, ?, ?)",
-                (url, current_price, now),
-            )
-
         # Serialise list fields (visual_findings, red_flags, image_issues, image_urls) as JSON strings.
         visual_findings = deal.get('ai_visual_findings')
         red_flags = deal.get('ai_red_flags')
         image_issues = deal.get('image_issues')
         image_urls = deal.get('image_urls')
         itemized = deal.get('ai_itemized_resale_estimates')
-        strategies = deal.get('strategies')
 
         cursor.execute(
             """INSERT INTO deals
@@ -283,15 +189,8 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 image_issues, image_urls, item_location, description, seller_count,
                 listing_date,
                 ai_itemized_resale_estimates, ai_estimated_total_cost, ai_estimated_gross_profit,
-                ai_brand, ai_model, ai_category,
-                sold_price_ref, sold_price_source, margin_pct,
-                listing_type, item_end_date, bid_count, is_snipe_opportunity, snipe_reason,
-                watch_count, is_high_watcher_opportunity,
-                is_condition_arbitrage, ai_hidden_gem,
-                price_dropped, price_drop_amount,
-                strategies,
                 created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 search_id,
                 deal.get('title'),
@@ -325,24 +224,6 @@ def save_search(query: str, deals: List[Dict]) -> int:
                 json.dumps(itemized) if isinstance(itemized, list) else itemized,
                 deal.get('ai_estimated_total_cost'),
                 deal.get('ai_estimated_gross_profit'),
-                deal.get('ai_brand'),
-                deal.get('ai_model'),
-                deal.get('ai_category'),
-                deal.get('sold_price_ref'),
-                deal.get('sold_price_source'),
-                deal.get('margin_pct'),
-                deal.get('listing_type'),
-                deal.get('item_end_date'),
-                deal.get('bid_count', 0),
-                int(bool(deal.get('is_snipe_opportunity'))),
-                deal.get('snipe_reason'),
-                deal.get('watch_count', 0),
-                int(bool(deal.get('is_high_watcher_opportunity'))),
-                int(bool(deal.get('is_condition_arbitrage'))),
-                int(bool(deal.get('ai_hidden_gem'))),
-                int(bool(deal.get('price_dropped'))),
-                deal.get('price_drop_amount'),
-                json.dumps(strategies) if isinstance(strategies, list) else strategies,
                 now,
             ),
         )
@@ -372,7 +253,7 @@ def get_deals_by_search(search_id: int) -> List[Dict]:
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
     # Deserialise JSON-encoded list fields.
-    _JSON_LIST_FIELDS = ('ai_visual_findings', 'ai_red_flags', 'image_issues', 'image_urls', 'ai_itemized_resale_estimates', 'strategies')
+    _JSON_LIST_FIELDS = ('ai_visual_findings', 'ai_red_flags', 'image_issues', 'image_urls', 'ai_itemized_resale_estimates')
     for row in rows:
         for field in _JSON_LIST_FIELDS:
             raw = row.get(field)

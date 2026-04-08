@@ -4,7 +4,6 @@ Flask REST API for eBay Deal Scraper
 Provides endpoints for searching, history, export, stats and health checks
 """
 
-import concurrent.futures
 import logging
 import os
 import re
@@ -139,137 +138,7 @@ def _is_german_location(location: str) -> bool:
 
 
 
-# ── Reseller / Flipper strategy constants ─────────────────────────────────────
-
-# Minimum profit margin (%) vs sold price to flag a deal as "below_sold_price".
-_MIN_MARGIN_PCT = float(os.environ.get("MIN_MARGIN_PCT", "15"))
-
-# Minimum watch_count to flag a deal as a high-watcher opportunity.
-_HIGH_WATCHER_THRESHOLD = int(os.environ.get("HIGH_WATCHER_THRESHOLD", "20"))
-
-# Per-future timeout (seconds) for sold-price lookups.
-_SOLD_PRICE_TIMEOUT_S = 5
-
-# Maximum concurrent sold-price lookup threads.
-_SOLD_PRICE_MAX_WORKERS = 5
-
-
-def _compute_below_sold_price(deals: list) -> None:
-    """Populate sold_price_ref, sold_price_source, and margin_pct on each deal.
-
-    Calls ``ebay_api.get_median_sold_price`` for each deal in parallel via a
-    ThreadPoolExecutor.  Deals are enriched in-place.  Gracefully degrades when
-    the eBay API is not configured (all fields remain absent/None).
-    """
-    if not ebay_api.is_configured:
-        return
-
-    def _fetch(deal: dict):
-        query = deal.get("ai_model") or deal.get("title") or ""
-        if not query:
-            return
-        try:
-            price, source, _ = ebay_api.get_median_sold_price(query, max_results=10)
-        except Exception as exc:
-            logger.warning("below_sold_price: price lookup failed for %r: %s", query, exc)
-            return
-        if price is None:
-            return
-        deal["sold_price_ref"] = price
-        deal["sold_price_source"] = source
-        active_price = deal.get("price") or 0
-        if price > 0:
-            deal["margin_pct"] = round((price - active_price) / price * 100, 2)
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=_SOLD_PRICE_MAX_WORKERS) as executor:
-        futures = {executor.submit(_fetch, d): d for d in deals}
-        done, not_done = concurrent.futures.wait(futures, timeout=_SOLD_PRICE_TIMEOUT_S * len(deals))
-        if not_done:
-            logger.warning(
-                "below_sold_price: %d/%d lookups did not complete within timeout.",
-                len(not_done), len(deals),
-            )
-
-
-def _compute_snipe_opportunity(deal: dict) -> None:
-    """Set is_snipe_opportunity and snipe_reason on *deal* in-place."""
-    if deal.get("listing_type") != "Auction":
-        deal.setdefault("is_snipe_opportunity", False)
-        deal.setdefault("snipe_reason", "")
-        return
-
-    item_end_date_str = deal.get("item_end_date") or ""
-    bid_count = int(deal.get("bid_count") or 0)
-
-    # Parse item_end_date.
-    time_remaining_hours: float = float("inf")
-    if item_end_date_str:
-        try:
-            end_dt = datetime.fromisoformat(item_end_date_str.replace("Z", "+00:00"))
-            now_utc = datetime.now(timezone.utc)
-            delta = end_dt - now_utc
-            time_remaining_hours = delta.total_seconds() / 3600
-        except (ValueError, OverflowError):
-            pass
-
-    # Off-peak hours check (UTC): 00:00–07:00 or 13:00–15:00.
-    now_hour = datetime.now(timezone.utc).hour
-    is_off_peak = (0 <= now_hour < 7) or (13 <= now_hour < 15)
-
-    reasons = []
-    if time_remaining_hours <= 4:
-        reasons.append(f"ending in {time_remaining_hours:.1f}h")
-    if bid_count <= 3:
-        reasons.append(f"{bid_count} bid(s)")
-    if is_off_peak:
-        reasons.append("off-peak hours")
-
-    is_snipe = (
-        time_remaining_hours <= 4
-        and bid_count <= 3
-        and is_off_peak
-    )
-    deal["is_snipe_opportunity"] = is_snipe
-    deal["snipe_reason"] = "; ".join(reasons) if is_snipe else ""
-
-
-def _compute_high_watcher(deal: dict, ai_model_counts: dict) -> None:
-    """Set is_high_watcher_opportunity and low_competition on *deal* in-place."""
-    watch_count = int(deal.get("watch_count") or 0)
-    ai_model = (deal.get("ai_model") or "").strip().lower()
-    low_competition = bool(ai_model and ai_model_counts.get(ai_model, 0) <= 1)
-    deal["is_high_watcher_opportunity"] = (
-        watch_count >= _HIGH_WATCHER_THRESHOLD and low_competition
-    )
-    deal["low_competition"] = low_competition
-
-
-def _compute_condition_arbitrage(deal: dict) -> None:
-    """Set is_condition_arbitrage on *deal* in-place."""
-    condition = (deal.get("condition") or "").lower()
-    margin_pct = deal.get("margin_pct")
-    is_new = "new" in condition
-    has_margin = margin_pct is not None and margin_pct >= 10
-    deal["is_condition_arbitrage"] = bool(is_new and has_margin)
-
-
-def _compute_strategies(deal: dict) -> list:
-    """Return the list of strategy tags that fired for *deal*."""
-    tags = []
-    margin_pct = deal.get("margin_pct")
-    if margin_pct is not None and margin_pct >= _MIN_MARGIN_PCT:
-        tags.append("below_sold_price")
-    if deal.get("is_snipe_opportunity"):
-        tags.append("auction_snipe")
-    if deal.get("is_high_watcher_opportunity"):
-        tags.append("high_watcher")
-    if deal.get("is_condition_arbitrage"):
-        tags.append("condition_arbitrage")
-    if deal.get("ai_hidden_gem"):
-        tags.append("hidden_gem")
-    if deal.get("price_dropped"):
-        tags.append("price_drop")
-    return tags
+@app.route('/')
 def index():
     return render_template('index.html')
 
@@ -404,31 +273,6 @@ def search():
     for i, deal in enumerate(deals_filtered):
         ai_assessment = ai_assessments[i] if i < len(ai_assessments) else None
         assessed.append({**deal, **(ai_assessment or {})})
-
-    # ── Feature 2: Below-sold-price strategy ─────────────────────────────────
-    _compute_below_sold_price(assessed)
-
-    # ── Feature 3: Auction snipe detection ───────────────────────────────────
-    for deal in assessed:
-        _compute_snipe_opportunity(deal)
-
-    # ── Feature 4: High-watcher opportunities ────────────────────────────────
-    # Build a count of how many deals share the same ai_model (case-insensitive).
-    ai_model_counts: dict = {}
-    for deal in assessed:
-        m = (deal.get("ai_model") or "").strip().lower()
-        if m:
-            ai_model_counts[m] = ai_model_counts.get(m, 0) + 1
-    for deal in assessed:
-        _compute_high_watcher(deal, ai_model_counts)
-
-    # ── Feature 5: Condition arbitrage ───────────────────────────────────────
-    for deal in assessed:
-        _compute_condition_arbitrage(deal)
-
-    # ── Feature 8: Strategy tags ─────────────────────────────────────────────
-    for deal in assessed:
-        deal["strategies"] = _compute_strategies(deal)
 
     # Sort deals: "Must Have"/"Must Buy" first, then all others — both groups
     # ordered newest → oldest by listing_date.
