@@ -361,7 +361,13 @@ class EbayScraper:
                 'item_location': item_location,
                 'image_urls': image_urls,
                 'image_issues': image_issues,
-                'timestamp': time.time()
+                'timestamp': time.time(),
+                # Feature 3: Auction snipe detection – defaults for scraper path.
+                'listing_type': 'Fixed Price',
+                'item_end_date': '',
+                'bid_count': 0,
+                # Feature 4: High-watcher opportunities – default for scraper path.
+                'watch_count': 0,
             }
 
         except Exception as exc:
@@ -558,12 +564,20 @@ class EbayScraper:
         No extra HTTP requests are made; issues are inferred from URL metadata.
 
         Possible identifiers returned:
-        - ``"no_images"``   – the listing has no product images at all.
+        - ``"no_images"``  – the listing has no product images at all.
+        - ``"low_res"``    – at least one image URL matches the low-resolution
+                             CDN pattern (below ~230 px wide).
         """
         if not image_urls:
             return ["no_images"]
 
-        return []
+        issues: List[str] = []
+        for url in image_urls:
+            if _LOW_RES_URL_RE.search(url):
+                issues.append("low_res")
+                break  # one low-res hit is enough to flag the listing
+
+        return issues
 
     def _extract_item_location(self, item_element) -> str:
         """Extract the physical item location (Standort) from an eBay listing card.
