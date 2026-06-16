@@ -16,7 +16,8 @@ WORKDIR /app
 
 COPY --from=builder /root/.local /home/ebay/.local
 
-COPY app.py database.py gemini_assessor.py scraper.py ebay_api_client.py ./
+COPY app.py database.py scraper.py ebay_api_client.py ./
+COPY ai_providers/ ai_providers/
 COPY templates/ templates/
 COPY static/ static/
 
