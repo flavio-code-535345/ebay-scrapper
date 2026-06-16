@@ -9,7 +9,6 @@ import base64
 import logging
 import os
 import time
-from typing import Dict, List, Optional, Tuple
 
 import requests
 
@@ -17,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Mapping eBay API conditionId → human-readable English label understood by
 # the existing DealAssessor (which scores on 'new', 'refurbished', 'used', etc.)
-_CONDITION_ID_MAP: Dict[str, str] = {
+_CONDITION_ID_MAP: dict[str, str] = {
     "1000": "New",
     "1500": "New – Other",
     "1750": "New with defects",
@@ -41,7 +40,7 @@ _CONDITION_ID_MAP: Dict[str, str] = {
 #   locale   — value for the X-EBAY-C-LOCALE request header.  This is the
 #              primary signal eBay's Browse API uses to return content in the
 #              correct regional language.  Format: <language>_<COUNTRY>.
-_MARKETPLACE_LOCALE_MAP: Dict[str, Dict[str, str]] = {
+_MARKETPLACE_LOCALE_MAP: dict[str, dict[str, str]] = {
     "EBAY_AT": {"language": "de-AT,de;q=0.9", "country": "AT", "locale": "de_AT"},
     "EBAY_AU": {"language": "en-AU,en;q=0.9", "country": "AU", "locale": "en_AU"},
     "EBAY_BE": {"language": "nl-BE,nl;q=0.9,fr-BE;q=0.8", "country": "BE", "locale": "nl_BE"},
@@ -127,7 +126,7 @@ class EbayApiClient:
         self.delivery_country: str = _locale["country"]
         self.locale: str = _locale["locale"]
 
-        self._token: Optional[str] = None
+        self._token: str | None = None
         self._token_expires_at: float = 0.0
         self.session = requests.Session()
 
@@ -143,13 +142,13 @@ class EbayApiClient:
         """Return ``True`` when both required credentials are present."""
         return bool(self.client_id and self.client_secret)
 
-    def search(self, query: str, max_results: int = 50) -> Tuple[List[Dict], List[str]]:
+    def search(self, query: str, max_results: int = 50) -> tuple[list[dict], list[str]]:
         """Search eBay via the Browse API.
 
         Returns a ``(deals, errors)`` tuple that matches the contract of
         :meth:`EbayScraper.search` so the two engines are interchangeable.
         """
-        errors: List[str] = []
+        errors: list[str] = []
 
         if not self.is_configured:
             errors.append(
@@ -282,7 +281,7 @@ class EbayApiClient:
                 )
             return [], errors
 
-        deals: List[Dict] = []
+        deals: list[dict] = []
         parse_errors = 0
         for item in raw_items:
             try:
@@ -294,14 +293,16 @@ class EbayApiClient:
                 logger.warning("Failed to parse API item %r: %s", item.get("itemId"), exc)
 
         if parse_errors:
-            errors.append(f"{parse_errors} item(s) from the eBay API could not be parsed and were skipped.")
+            errors.append(
+            f"{parse_errors} item(s) from the eBay API could not be parsed and were skipped."
+        )
 
         logger.info("Returning %d normalised deals (%d errors)", len(deals), len(errors))
         return deals, errors
 
     def get_median_sold_price(
         self, query: str, max_results: int = 10
-    ) -> "Tuple[Optional[float], str, List[str]]":
+    ) -> "tuple[float | None, str, list[str]]":
         """Return the lowest Buy It Now (BIN/fixed-price) price for *query*.
 
         Tries the eBay Marketplace Insights API (sold/completed listings) first.
@@ -320,7 +321,7 @@ class EbayApiClient:
           a price is returned, e.g. because the primary source failed but the
           fallback succeeded).
         """
-        errors: List[str] = []
+        errors: list[str] = []
 
         if not self.is_configured:
             errors.append("eBay API credentials not configured — cannot fetch item prices.")
@@ -431,7 +432,7 @@ class EbayApiClient:
         logger.info("Requesting new eBay OAuth application token")
 
         credentials = base64.b64encode(
-            f"{self.client_id}:{self.client_secret}".encode("utf-8")
+            f"{self.client_id}:{self.client_secret}".encode()
         ).decode("ascii")
 
         response = self.session.post(
@@ -456,19 +457,23 @@ class EbayApiClient:
         return self._token
 
     @staticmethod
-    def _extract_prices_from_items(items: list) -> List[float]:
+    def _extract_prices_from_items(items: list) -> list[float]:
         """Extract numeric prices from a list of Browse/Insights API item dicts.
 
         Items with conditionId ``"7000"`` ("For parts or not working") are
         excluded so that non-functional listings do not depress resale estimates
         for functional copies.  Cosmetic/aesthetic condition is not filtered.
         """
-        prices: List[float] = []
+        prices: list[float] = []
         for item in items:
             # Exclude explicitly non-functional items from price reference data.
             condition_id = str(item.get("conditionId", ""))
             condition_text = (item.get("condition") or "").lower()
-            if condition_id == "7000" or ("not working" in condition_text) or ("for parts" in condition_text):
+            if (
+            condition_id == "7000"
+            or "not working" in condition_text
+            or "for parts" in condition_text
+        ):
                 continue
             # Browse API uses 'price'; Marketplace Insights uses 'lastSoldPrice'
             price_obj = item.get("lastSoldPrice") or item.get("price") or {}
@@ -480,7 +485,7 @@ class EbayApiClient:
                 pass
         return prices
 
-    def _normalize_item(self, item: dict) -> Optional[Dict]:
+    def _normalize_item(self, item: dict) -> dict | None:
         """Map a Browse API ``itemSummary`` object to our internal deal dict.
 
         Returns ``None`` when the item lacks both a title and a URL (i.e. is
@@ -569,7 +574,7 @@ class EbayApiClient:
             seller_count = ""
 
         # ── Images ─────────────────────────────────────────────────────────
-        image_urls: List[str] = []
+        image_urls: list[str] = []
         primary_image = item.get("image") or item.get("thumbnailImages", [{}])[0]
         if isinstance(primary_image, dict) and primary_image.get("imageUrl"):
             image_urls.append(primary_image["imageUrl"])
@@ -579,7 +584,7 @@ class EbayApiClient:
 
         # ── Listing date ───────────────────────────────────────────────────
         # itemCreationDate is an ISO-8601 string like "2024-03-01T10:00:00.000Z".
-        listing_date: Optional[str] = (item.get("itemCreationDate") or "").strip() or None
+        listing_date: str | None = (item.get("itemCreationDate") or "").strip() or None
 
         return {
             "title": title or "Unknown",

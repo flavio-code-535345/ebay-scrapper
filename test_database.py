@@ -2,7 +2,6 @@
 
 import os
 import tempfile
-import time
 
 import pytest
 
@@ -78,7 +77,7 @@ class TestSaveSearch:
                 "listing_date": "2024-01-01T00:00:00Z",
             }
         ]
-        search_id = database.save_search("query", deals)
+        database.save_search("query", deals)
         history = database.get_history()
         assert len(history) == 1
         assert history[0]["query"] == "query"
@@ -140,7 +139,6 @@ class TestSaveSearch:
         fetched = database.get_deals_by_search(sid)
         assert fetched[0]["ai_deal_rating"] == "Must Have"
         assert fetched[0]["ai_estimated_gross_profit"] == 10.0
-        import json
         estimates = fetched[0]["ai_itemized_resale_estimates"]
         assert estimates[0]["game"] == "Game1"
 

@@ -9,13 +9,15 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, timezone
-from flask import Flask, request, jsonify, render_template, Response
+from datetime import UTC, datetime
 
-from scraper import EbayScraper
+from flask import Flask, Response, jsonify, render_template, request
+
+import database
 from ebay_api_client import EbayApiClient
 from gemini_assessor import GeminiAssessor, _detect_sports_kinect_deal
-import database
+from scraper import EbayScraper
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -167,7 +169,9 @@ def index():
 def search():
     data = request.get_json(silent=True)
     if data is None:
-        return jsonify({'error': 'Request body must be valid JSON with Content-Type: application/json'}), 400
+        return jsonify({
+        'error': 'Request body must be valid JSON with Content-Type: application/json'
+    }), 400
     query = data.get('query', '').strip()
     try:
         max_results = max(1, min(int(data.get('max_results', 50)), 200))
@@ -236,7 +240,10 @@ def search():
     # is not shared across processes.
     _user_enabled = _db_ai_user_enabled()
     ai_active = gemini.enabled and _user_enabled
-    ai_assessments = gemini.assess_deals_batch(deals_filtered) if (deals_filtered and ai_active) else []
+    ai_assessments = (
+        gemini.assess_deals_batch(deals_filtered)
+        if (deals_filtered and ai_active) else []
+    )
 
     timed_out = 0
     if gemini.enabled and ai_assessments:
@@ -299,11 +306,11 @@ def search():
     def _parse_listing_date(d: dict) -> datetime:
         raw = d.get("listing_date") or ""
         if not raw:
-            return datetime.min.replace(tzinfo=timezone.utc)
+            return datetime.min.replace(tzinfo=UTC)
         try:
             return datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError:
-            return datetime.min.replace(tzinfo=timezone.utc)
+            return datetime.min.replace(tzinfo=UTC)
 
     def _sort_key(d: dict):
         rating = (d.get("ai_deal_rating") or "").lower()
@@ -406,7 +413,9 @@ def get_settings():
 def update_settings():
     data = request.get_json(silent=True)
     if data is None:
-        return jsonify({'error': 'Request body must be valid JSON with Content-Type: application/json'}), 400
+        return jsonify({
+        'error': 'Request body must be valid JSON with Content-Type: application/json'
+    }), 400
 
     # Gemini model names: alphanumeric, hyphens, underscores, and dots only.
     _MODEL_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_\-.]{0,99}$')

@@ -5,12 +5,12 @@ Handles fetching and parsing eBay listings (defaults to ebay.de)
 """
 
 import logging
+import random
 import re
+import time
+
 import requests
 from bs4 import BeautifulSoup
-import time
-from typing import Dict, List, Tuple
-import random
 
 logger = logging.getLogger(__name__)
 
@@ -96,13 +96,13 @@ class EbayScraper:
         }
         self.session = requests.Session()
 
-    def search(self, query: str, max_results: int = 50) -> Tuple[List[Dict], List[str]]:
+    def search(self, query: str, max_results: int = 50) -> tuple[list[dict], list[str]]:
         """Search eBay for items matching query.
 
         Returns a tuple of (deals, errors) where errors is a list of
         human-readable strings describing any problems encountered.
         """
-        errors: List[str] = []
+        errors: list[str] = []
 
         try:
             params = {
@@ -153,7 +153,7 @@ class EbayScraper:
                 return [], errors
 
             soup = BeautifulSoup(response.content, 'html.parser')
-            deals: List[Dict] = []
+            deals: list[dict] = []
 
             # ── Selector strategy ─────────────────────────────────────────────
             # eBay uses <li class="s-item …"> inside <ul class="srp-results …">.
@@ -267,7 +267,7 @@ class EbayScraper:
             errors.append(msg)
             return [], errors
 
-    def _parse_item(self, item_element) -> Dict:
+    def _parse_item(self, item_element) -> dict:
         """Parse individual item element into deal dictionary.
 
         Uses a cascade of selectors for each field so that parsing continues
@@ -486,13 +486,13 @@ class EbayScraper:
 
         return False
 
-    def _extract_image_urls(self, item_element) -> List[str]:
+    def _extract_image_urls(self, item_element) -> list[str]:
         """Extract listing image URLs from the item element.
 
         eBay lazy-loads images using ``data-src`` / ``s-src`` attributes;
         this method checks both standard and lazy-load variants.
         """
-        urls: List[str] = []
+        urls: list[str] = []
         seen: set = set()
 
         for img in item_element.find_all('img'):
@@ -551,7 +551,7 @@ class EbayScraper:
 
         return False
 
-    def _detect_image_issues(self, image_urls: List[str]) -> List[str]:
+    def _detect_image_issues(self, image_urls: list[str]) -> list[str]:
         """Detect potential image quality issues from the URL list alone.
 
         Returns a (possibly empty) list of human-readable issue identifiers.
@@ -639,7 +639,7 @@ class EbayScraper:
         except Exception:
             return 0.0
 
-    def get_item_details(self, item_url: str) -> Dict:
+    def get_item_details(self, item_url: str) -> dict:
         """Fetch detailed information about specific item"""
         try:
             response = self.session.get(item_url, headers=self.headers, timeout=10)
@@ -661,7 +661,7 @@ class EbayScraper:
         except Exception as exc:
             logger.error("Error getting item details: %s", exc, exc_info=True)
             return {}
-    
+
     def _extract_views(self, soup) -> int:
         """Extract view count from item page"""
         try:
@@ -669,10 +669,10 @@ class EbayScraper:
             if views_elem:
                 count = views_elem.text.split()[0].replace(',', '')
                 return int(count)
-        except:
+        except Exception:
             pass
         return 0
-    
+
     def _extract_watchers(self, soup) -> int:
         """Extract watcher count from item page"""
         try:
@@ -680,10 +680,10 @@ class EbayScraper:
             if watchers_elem:
                 count = watchers_elem.text.split()[0].replace(',', '')
                 return int(count)
-        except:
+        except Exception:
             pass
         return 0
-    
+
     def _extract_sold_count(self, soup) -> int:
         """Extract sold count from item page"""
         try:
@@ -691,16 +691,16 @@ class EbayScraper:
             if sold_elem:
                 count = sold_elem.text.split()[0].replace(',', '')
                 return int(count)
-        except:
+        except Exception:
             pass
         return 0
-    
+
     def _extract_time_listed(self, soup) -> str:
         """Extract when item was listed"""
         try:
             time_elem = soup.find('span', string=lambda s: s and 'listed' in s.lower())
             if time_elem:
                 return time_elem.text.strip()
-        except:
+        except Exception:
             pass
         return "Unknown"

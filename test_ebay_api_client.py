@@ -1,11 +1,10 @@
 """Tests for ebay_api_client.py — eBay Browse API client."""
 
-import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ebay_api_client import EbayApiClient, _CONDITION_ID_MAP
+from ebay_api_client import _CONDITION_ID_MAP, EbayApiClient
 
 
 @pytest.fixture
@@ -187,7 +186,7 @@ class TestGetMedianSoldPrice:
         with patch.object(client, "_get_access_token", mock_token):
             with patch.object(
                 client.session, "get", side_effect=[mock_fail, mock_ok]
-            ) as mock_get:
+            ):
                 price, source, errors = client.get_median_sold_price("Test Game Xbox 360")
         assert price == 15.0
         assert source == "active_listings"

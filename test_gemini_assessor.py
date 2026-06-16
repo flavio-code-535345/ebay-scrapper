@@ -12,12 +12,11 @@ import unittest.mock as mock
 import pytest
 
 from gemini_assessor import (
-    GeminiAssessor,
     _ASSESS_TOTAL_BUDGET_S,
     _BATCH_SIZE,
-    _EBAY_CACHE_TTL,
     _EBAY_PREFETCH_BUDGET_S,
     _GEMINI_REQUEST_TIMEOUT,
+    GeminiAssessor,
     _apply_scam_override,
     _apply_sports_kinect_override,
     _build_single_game_search_query,
@@ -788,7 +787,11 @@ class TestParseBatchResponseGoodMustHave:
                 "red_flags": [],
                 "fair_market_estimate": "~€20",
                 "itemized_resale_estimates": [
-                    {"game": "Batman Arkham Knight", "price_eur": 18.0, "price_source": "ebay_active"},
+                    {
+                    "game": "Batman Arkham Knight",
+                    "price_eur": 18.0,
+                    "price_source": "ebay_active",
+                },
                 ],
                 "estimated_total_cost": 10.99,
                 "estimated_gross_profit": 7.01,
@@ -816,7 +819,11 @@ class TestParseBatchResponseGoodMustHave:
              "scam_warning": "", "visual_findings": [], "red_flags": [],
              "fair_market_estimate": "~€25",
              "itemized_resale_estimates": [
-                 {"game": "Batman Arkham Knight PS4", "price_eur": 25.0, "price_source": "ebay_active"}
+                 {
+                    "game": "Batman Arkham Knight PS4",
+                    "price_eur": 25.0,
+                    "price_source": "ebay_active",
+                }
              ],
              "estimated_total_cost": 15.0, "estimated_gross_profit": 10.0,
              "verdict_summary": "Good."},
@@ -1091,7 +1098,9 @@ class TestPrefetchEbayPricesParallel:
         a._prefetch_ebay_prices_parallel(deals)
         first_count = call_count["n"]
         a._prefetch_ebay_prices_parallel(deals)
-        assert call_count["n"] == first_count, "Second prefetch should hit cache, not call eBay again"
+        assert call_count["n"] == first_count, (
+            "Second prefetch should hit cache, not call eBay again"
+        )
 
     def test_no_ebay_client_is_noop(self):
         """When no eBay client is registered the method returns without error."""
