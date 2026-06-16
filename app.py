@@ -538,3 +538,31 @@ if __name__ == '__main__':
     port = int(os.environ.get('FLASK_PORT', 5000))
     debug = os.environ.get('FLASK_ENV', 'production') != 'production'
     app.run(host=host, port=port, debug=debug)
+
+# ── Startup validation ──────────────────────────────────────────────────────
+
+_data_source = os.environ.get("DATA_SOURCE", "auto").strip().lower()
+if _data_source == "api" and not ebay_api.is_configured:
+    logger.warning(
+        "DATA_SOURCE=api but EBAY_CLIENT_ID and EBAY_CLIENT_SECRET are not set — "
+        "the eBay API engine will fall back to HTML scraping at search time. "
+        "Set both credentials in your environment (or switch DATA_SOURCE to 'auto'/'scraper')."
+    )
+elif not ebay_api.is_configured:
+    logger.info(
+        "eBay API credentials not set — falling back to HTML scraper. "
+        "Set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET to use the official Browse API."
+    )
+else:
+    logger.info(
+        "eBay API credentials found — Browse API will be used when data_source is 'api' or 'auto'."
+    )
+
+if not os.environ.get("GEMINI_API_KEY", "").strip():
+    logger.info(
+        "GEMINI_API_KEY not set — AI deal assessment is disabled. "
+        "Deals will be returned without Gemini ratings. "
+        "Set GEMINI_API_KEY in your environment to enable AI assessment."
+    )
+else:
+    logger.info("GEMINI_API_KEY found — Gemini AI assessment is enabled.")
