@@ -4,8 +4,8 @@ FROM python:3.11-slim AS builder
 WORKDIR /build
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --user -r requirements.txt && \
-    find /root/.local -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+RUN pip install --no-cache-dir -r requirements.txt && \
+    find /usr/local -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
 # ── Runtime stage ──────────────────────────────────────────────────────────
 FROM python:3.11-slim
@@ -14,7 +14,7 @@ RUN groupadd -r ebay && useradd -r -g ebay -d /app ebay
 
 WORKDIR /app
 
-COPY --from=builder /root/.local /home/ebay/.local
+COPY --from=builder /usr/local /usr/local
 
 COPY app.py database.py scraper.py ebay_api_client.py ./
 COPY ai_providers/ ai_providers/
@@ -23,8 +23,7 @@ COPY static/ static/
 
 RUN mkdir -p /data && chown ebay:ebay /data
 
-ENV PATH=/home/ebay/.local/bin:$PATH \
-    PYTHONDONTWRITEBYTECODE=1 \
+ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 USER ebay
