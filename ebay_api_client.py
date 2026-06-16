@@ -175,6 +175,11 @@ class EbayApiClient:
             logger.error(msg)
             errors.append(msg)
             return [], errors
+        except Exception as exc:
+            msg = f"eBay API authentication failed: {exc}"
+            logger.error(msg)
+            errors.append(msg)
+            return [], errors
 
         # Call the search endpoint.
         url = self._base_url + self._SEARCH_PATH

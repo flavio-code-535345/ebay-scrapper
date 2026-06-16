@@ -128,7 +128,7 @@ class EbayScraper:
                 logger.error(msg)
                 errors.append(msg)
                 return [], errors
-            except requests.exceptions.ConnectionError as exc:
+            except (requests.exceptions.ConnectionError, ConnectionError) as exc:
                 msg = f"Connection error: {exc}"
                 logger.error(msg)
                 errors.append(msg)
