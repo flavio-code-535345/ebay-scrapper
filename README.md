@@ -110,7 +110,6 @@ Add the following to your `docker-compose.yml` environment section (or Portainer
     ├── app.py               Flask application & API routes
     ├── scraper.py           Legacy HTML scraper (eBay.de)
     ├── ebay_api_client.py   eBay Browse API client (OAuth + search)
-    ├── deal_assessor.py     Rules-based deal scoring
     ├── gemini_assessor.py   Gemini AI assessment
     ├── database.py          SQLite persistence
     ├── templates/

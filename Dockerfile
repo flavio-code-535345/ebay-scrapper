@@ -1,26 +1,36 @@
+# ── Build stage ────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt && \
+    find /root/.local -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+
+# ── Runtime stage ──────────────────────────────────────────────────────────
 FROM python:3.11-slim
 
-# Set working directory
+RUN groupadd -r ebay && useradd -r -g ebay -d /app ebay
+
 WORKDIR /app
 
-# Install dependencies first (better layer caching)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=builder /root/.local /home/ebay/.local
 
-# Copy application files
-COPY app.py database.py deal_assessor.py gemini_assessor.py scraper.py ebay_api_client.py ./
+COPY app.py database.py gemini_assessor.py scraper.py ebay_api_client.py ./
 COPY templates/ templates/
 COPY static/ static/
 
-# Create data directory for SQLite database
-RUN mkdir -p /data
+RUN mkdir -p /data && chown ebay:ebay /data
 
-# Expose Flask port
+ENV PATH=/home/ebay/.local/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+USER ebay
+
 EXPOSE 5000
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')" || exit 1
 
-# Run with gunicorn in production
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "180", "app:app"]
