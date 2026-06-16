@@ -18,6 +18,7 @@ COPY --from=builder /usr/local /usr/local
 
 COPY app.py database.py scraper.py ebay_api_client.py ./
 COPY ai_providers/ ai_providers/
+COPY prompts/ prompts/
 COPY templates/ templates/
 COPY static/ static/
 
