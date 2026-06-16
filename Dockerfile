@@ -10,11 +10,6 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 # ── Runtime stage ──────────────────────────────────────────────────────────
 FROM python:3.11-slim
 
-RUN groupadd -r ebay && useradd -r -g ebay -d /app ebay
-
-RUN apt-get update && apt-get install -y --no-install-recommends tini && \
-    rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 COPY --from=builder /usr/local /usr/local
@@ -24,9 +19,8 @@ COPY ai_providers/ ai_providers/
 COPY prompts/ prompts/
 COPY templates/ templates/
 COPY static/ static/
-COPY entrypoint.sh /entrypoint.sh
 
-RUN mkdir -p /data && chmod +x /entrypoint.sh
+RUN mkdir -p /data
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -36,5 +30,5 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')" || exit 1
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "180", "app:app"]
+

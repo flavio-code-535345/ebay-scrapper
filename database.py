@@ -30,12 +30,20 @@ def get_db():
 
 
 def _ensure_wal_mode():
-    """Enable WAL journal mode for better concurrent-read performance."""
-    conn = sqlite3.connect(DB_PATH)
+    """Enable WAL journal mode for better concurrent-read performance.
+    
+    If WAL mode cannot be enabled (e.g., readonly filesystem), continue anyway.
+    WAL is an optimization, not required for database functionality.
+    """
     try:
-        conn.execute("PRAGMA journal_mode=WAL")
-    finally:
-        conn.close()
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        finally:
+            conn.close()
+    except sqlite3.OperationalError as e:
+        import sys
+        print(f"[WARNING] Could not enable WAL mode: {e}", file=sys.stderr)
 
 
 def init_db():
