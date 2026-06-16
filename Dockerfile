@@ -22,12 +22,10 @@ COPY prompts/ prompts/
 COPY templates/ templates/
 COPY static/ static/
 
-RUN mkdir -p /data && chown ebay:ebay /data
+RUN mkdir -p /data
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
-
-USER ebay
 
 EXPOSE 5000
 
