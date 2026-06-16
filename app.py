@@ -460,8 +460,8 @@ def update_settings():
 
     if 'ai_provider' in data:
         provider = str(data['ai_provider']).strip().lower()
-        if provider not in ("gemini", "deepseek"):
-            errors['ai_provider'] = "ai_provider must be 'gemini' or 'deepseek'"
+        if provider not in ("gemini", "claude"):
+            errors['ai_provider'] = "ai_provider must be 'gemini' or 'claude'"
         else:
             database.set_setting('ai_provider', provider)
             assessor = create_assessor(provider)

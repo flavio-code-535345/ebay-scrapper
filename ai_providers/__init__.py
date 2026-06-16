@@ -1,4 +1,4 @@
-"""AI provider factory — select Gemini or DeepSeek based on setting or environment."""
+"""AI provider factory — select Gemini or Claude based on setting or environment."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ _AI_PROVIDER_CACHE: dict | None = None
 def create_assessor(provider: str | None = None):
     """Return an assessor instance.
 
-    *provider* can be ``"gemini"`` (default) or ``"deepseek"``.
+    *provider* can be ``"gemini"`` (default) or ``"claude"``.
     When ``None`` the ``AI_PROVIDER`` env var is read (default ``"gemini"``).
     The instance is cached per provider so that switching providers at
     runtime (e.g. from the settings UI) recreates the assessor.
@@ -30,10 +30,10 @@ def create_assessor(provider: str | None = None):
         if cached_provider == provider:
             return cached_assessor
 
-    if provider == "deepseek":
-        from ai_providers.deepseek import DeepSeekAssessor
+    if provider == "claude":
+        from ai_providers.claude import ClaudeAssessor
 
-        assessor = DeepSeekAssessor()
+        assessor = ClaudeAssessor()
     else:
         from ai_providers.gemini import GeminiAssessor
 

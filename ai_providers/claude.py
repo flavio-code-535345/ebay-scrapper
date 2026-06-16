@@ -1,9 +1,8 @@
-"""DeepSeek AI provider — improved implementation with dedicated client and error handling.
+"""Claude Haiku AI provider — uses Anthropic's Claude 3.5 Haiku model (free tier friendly).
 
 Architecture:
-- DeepSeekClient: HTTP client with connection pooling, validation, retry logic
-- Custom exceptions: RateLimitError, TransientError, APIError for better error handling
-- DeepSeekAssessor: Uses client for API calls, inherits prompt building from BaseAssessor
+- ClaudeClient: HTTP client with connection pooling for Anthropic API
+- ClaudeAssessor: Uses client for API calls, inherits prompt building from BaseAssessor
 """
 
 from __future__ import annotations
@@ -37,12 +36,13 @@ from ai_providers.base import (
 
 # ── Configuration ───────────────────────────────────────────────────────────
 
-_MODEL_NAME = "deepseek-chat"
-_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-_DEEPSEEK_REQUEST_TIMEOUT = 60
+_MODEL_NAME = "claude-3-5-haiku-20241022"
+_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+_ANTHROPIC_API_VERSION = "2023-06-01"
+_ANTHROPIC_REQUEST_TIMEOUT = 60
 _ASSESS_TOTAL_BUDGET_S = 145
 
-# DeepSeek does not support image inputs in its chat API.
+# Claude does not support image inputs in the free tier.
 _MAX_IMAGES = 0
 
 # HTTP configuration
@@ -58,8 +58,8 @@ _MAX_RESPONSE_SIZE = 32 * 1024  # 32 KB limit for safety
 # ── Custom Exceptions ───────────────────────────────────────────────────────
 
 
-class DeepSeekError(Exception):
-    """Base exception for DeepSeek API errors."""
+class ClaudeError(Exception):
+    """Base exception for Claude API errors."""
 
     def __init__(self, message: str, status_code: int | None = None, details: str | None = None):
         self.message = message
@@ -68,13 +68,13 @@ class DeepSeekError(Exception):
         super().__init__(f"{message}" + (f" (status={status_code})" if status_code else ""))
 
 
-class DeepSeekConfigError(DeepSeekError):
+class ClaudeConfigError(ClaudeError):
     """Configuration error (e.g., missing API key)."""
 
     pass
 
 
-class DeepSeekRateLimitError(DeepSeekError):
+class ClaudeRateLimitError(ClaudeError):
     """Rate limit error (HTTP 429)."""
 
     def __init__(self, message: str, retry_after: int | None = None):
@@ -82,44 +82,44 @@ class DeepSeekRateLimitError(DeepSeekError):
         self.retry_after = retry_after
 
 
-class DeepSeekTransientError(DeepSeekError):
+class ClaudeTransientError(ClaudeError):
     """Transient error (e.g., connection timeout, 5xx errors)."""
 
     pass
 
 
-class DeepSeekAPIError(DeepSeekError):
+class ClaudeAPIError(ClaudeError):
     """API error (invalid response format, content parsing error)."""
 
     pass
 
 
-# ── DeepSeek HTTP Client ────────────────────────────────────────────────────
+# ── Claude HTTP Client ──────────────────────────────────────────────────────
 
 
-class DeepSeekClient:
-    """HTTP client for DeepSeek API with connection pooling, validation, and error handling."""
+class ClaudeClient:
+    """HTTP client for Anthropic Claude API with connection pooling and error handling."""
 
     def __init__(
         self,
         api_key: str,
-        base_url: str = _DEEPSEEK_BASE_URL,
-        timeout: int = _DEEPSEEK_REQUEST_TIMEOUT,
+        base_url: str = _ANTHROPIC_BASE_URL,
+        timeout: int = _ANTHROPIC_REQUEST_TIMEOUT,
         model: str = _MODEL_NAME,
     ) -> None:
-        """Initialize DeepSeek client.
+        """Initialize Claude client.
 
         Args:
-            api_key: DeepSeek API key
+            api_key: Anthropic API key
             base_url: API base URL (default: production)
             timeout: Request timeout in seconds
-            model: Model name to use (default: deepseek-chat)
+            model: Model name to use (default: claude-3-5-haiku-20241022)
 
         Raises:
-            DeepSeekConfigError: If API key is empty
+            ClaudeConfigError: If API key is empty
         """
         if not api_key or not api_key.strip():
-            raise DeepSeekConfigError("DeepSeek API key is required")
+            raise ClaudeConfigError("Anthropic API key is required")
 
         self._api_key = api_key.strip()
         self._base_url = base_url.rstrip("/")
@@ -130,7 +130,7 @@ class DeepSeekClient:
         self._error_count = 0
 
         logger.debug(
-            "DeepSeekClient: Initialized (model=%s, base_url=%s, timeout=%d)",
+            "ClaudeClient: Initialized (model=%s, base_url=%s, timeout=%d)",
             self._model,
             self._base_url,
             self._timeout,
@@ -159,11 +159,12 @@ class DeepSeekClient:
         return session
 
     def _build_headers(self) -> dict[str, str]:
-        """Build request headers."""
+        """Build request headers for Anthropic API."""
         return {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "DeepSeekAssessor/1.0",
+            "x-api-key": self._api_key,
+            "anthropic-version": _ANTHROPIC_API_VERSION,
+            "content-type": "application/json",
+            "User-Agent": "ClaudeAssessor/1.0",
         }
 
     def _validate_response(self, data: Any) -> str:
@@ -176,10 +177,10 @@ class DeepSeekClient:
             Response content text
 
         Raises:
-            DeepSeekAPIError: If response is malformed
+            ClaudeAPIError: If response is malformed
         """
         if not isinstance(data, dict):
-            raise DeepSeekAPIError(f"Expected dict response, got {type(data).__name__}")
+            raise ClaudeAPIError(f"Expected dict response, got {type(data).__name__}")
 
         # Check for error in response
         if "error" in data:
@@ -187,43 +188,31 @@ class DeepSeekClient:
             if isinstance(error_info, dict):
                 error_msg = error_info.get("message", "Unknown error")
                 error_type = error_info.get("type", "unknown")
-                raise DeepSeekAPIError(
+                raise ClaudeAPIError(
                     f"API error: {error_type} - {error_msg}",
                     details=json.dumps(error_info),
                 )
-            raise DeepSeekAPIError(f"API error: {error_info}")
+            raise ClaudeAPIError(f"API error: {error_info}")
 
-        # Extract content from choices
-        if "choices" not in data:
-            raise DeepSeekAPIError("No 'choices' in response")
+        # Extract content from response
+        if "content" not in data:
+            raise ClaudeAPIError("No 'content' in response")
 
-        choices = data.get("choices", [])
-        if not choices:
-            raise DeepSeekAPIError("Empty 'choices' array in response")
+        content_array = data.get("content", [])
+        if not content_array:
+            raise ClaudeAPIError("Empty 'content' array in response")
 
-        first_choice = choices[0]
-        if not isinstance(first_choice, dict):
-            raise DeepSeekAPIError(f"Expected dict in choices, got {type(first_choice).__name__}")
+        # Find text content (Claude returns array of content blocks)
+        for block in content_array:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text")
+                if isinstance(text, str):
+                    # Safety check: ensure content isn't too large
+                    if len(text) > _MAX_RESPONSE_SIZE:
+                        logger.warning("ClaudeClient: Response content exceeds %d bytes (%d)", _MAX_RESPONSE_SIZE, len(text))
+                    return text
 
-        if "message" not in first_choice:
-            raise DeepSeekAPIError("No 'message' in first choice")
-
-        message = first_choice["message"]
-        if not isinstance(message, dict):
-            raise DeepSeekAPIError(f"Expected dict message, got {type(message).__name__}")
-
-        content = message.get("content")
-        if content is None:
-            raise DeepSeekAPIError("No 'content' in message")
-
-        if not isinstance(content, str):
-            raise DeepSeekAPIError(f"Expected string content, got {type(content).__name__}")
-
-        # Safety check: ensure content isn't too large
-        if len(content) > _MAX_RESPONSE_SIZE:
-            logger.warning("DeepSeekClient: Response content exceeds %d bytes (%d)", _MAX_RESPONSE_SIZE, len(content))
-
-        return content
+        raise ClaudeAPIError("No text content found in response")
 
     def _handle_http_error(self, exc: requests.RequestException, endpoint: str) -> None:
         """Categorize and raise appropriate exception for HTTP errors.
@@ -233,9 +222,9 @@ class DeepSeekClient:
             endpoint: The API endpoint being called
 
         Raises:
-            DeepSeekRateLimitError: For 429 responses
-            DeepSeekTransientError: For connection/timeout errors
-            DeepSeekAPIError: For other errors
+            ClaudeRateLimitError: For 429 responses
+            ClaudeTransientError: For connection/timeout errors
+            ClaudeAPIError: For other errors
         """
         self._error_count += 1
 
@@ -255,41 +244,41 @@ class DeepSeekClient:
                             except ValueError:
                                 pass
 
-                    raise DeepSeekRateLimitError(
+                    raise ClaudeRateLimitError(
                         f"Rate limited by API (endpoint={endpoint})",
                         retry_after=retry_after,
                     )
 
                 # Auth errors
                 if status_code in (401, 403):
-                    raise DeepSeekConfigError(f"Authentication failed (status={status_code})")
+                    raise ClaudeConfigError(f"Authentication failed (status={status_code})")
 
                 # Server errors
                 if status_code >= 500:
-                    raise DeepSeekTransientError(
+                    raise ClaudeTransientError(
                         f"Server error (endpoint={endpoint}, status={status_code})",
                         status_code=status_code,
                     )
 
                 # Other 4xx errors
                 if status_code >= 400:
-                    raise DeepSeekAPIError(
+                    raise ClaudeAPIError(
                         f"API request failed (endpoint={endpoint}, status={status_code})",
                         status_code=status_code,
                     )
 
-            raise DeepSeekAPIError(f"HTTP error: {str(exc)}")
+            raise ClaudeAPIError(f"HTTP error: {str(exc)}")
 
         # Handle connection errors (timeout, connection refused, etc.)
         if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
-            raise DeepSeekTransientError(f"Connection error (endpoint={endpoint}): {str(exc)}")
+            raise ClaudeTransientError(f"Connection error (endpoint={endpoint}): {str(exc)}")
 
         # Handle request exceptions
         if isinstance(exc, requests.RequestException):
-            raise DeepSeekTransientError(f"Request error (endpoint={endpoint}): {str(exc)}")
+            raise ClaudeTransientError(f"Request error (endpoint={endpoint}): {str(exc)}")
 
         # Fallback
-        raise DeepSeekAPIError(f"Unexpected error: {str(exc)}")
+        raise ClaudeAPIError(f"Unexpected error: {str(exc)}")
 
     def _handle_json_error(self, exc: ValueError, response_text: str) -> None:
         """Handle JSON parsing errors.
@@ -299,10 +288,10 @@ class DeepSeekClient:
             response_text: The response text that failed to parse
 
         Raises:
-            DeepSeekAPIError: Always raises with details
+            ClaudeAPIError: Always raises with details
         """
         preview = response_text[:200] if response_text else "(empty)"
-        raise DeepSeekAPIError(
+        raise ClaudeAPIError(
             f"Failed to parse JSON response: {str(exc)}",
             details=f"Response preview: {preview}",
         )
@@ -311,42 +300,39 @@ class DeepSeekClient:
         self,
         user_content: str,
         system_prompt: str,
-        temperature: float = 0.2,
         max_tokens: int = 4096,
     ) -> str:
-        """Call DeepSeek chat completions API.
+        """Call Anthropic Claude API.
 
         Args:
             user_content: User message content
             system_prompt: System prompt for the model
-            temperature: Sampling temperature (0.0-1.0)
             max_tokens: Maximum tokens in response
 
         Returns:
             Response content from the model
 
         Raises:
-            DeepSeekRateLimitError: If rate limited
-            DeepSeekTransientError: If transient error occurs
-            DeepSeekConfigError: If configuration is invalid
-            DeepSeekAPIError: If API returns error or response is malformed
+            ClaudeRateLimitError: If rate limited
+            ClaudeTransientError: If transient error occurs
+            ClaudeConfigError: If configuration is invalid
+            ClaudeAPIError: If API returns error or response is malformed
         """
-        endpoint = "/chat/completions"
-        url = f"{self._base_url}{endpoint}"
+        endpoint = "/messages"
+        url = f"{self._base_url}/v1{endpoint}"
         self._call_count += 1
 
         payload = {
             "model": self._model,
+            "max_tokens": max_tokens,
+            "system": system_prompt,
             "messages": [
-                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
         }
 
         logger.debug(
-            "DeepSeekClient: POST %s (call=%d, tokens=%d)",
+            "ClaudeClient: POST %s (call=%d, tokens=%d)",
             endpoint,
             self._call_count,
             max_tokens,
@@ -373,7 +359,7 @@ class DeepSeekClient:
             content = self._validate_response(data)
 
             logger.debug(
-                "DeepSeekClient: Success (call=%d, elapsed=%.2f s, content_len=%d)",
+                "ClaudeClient: Success (call=%d, elapsed=%.2f s, content_len=%d)",
                 self._call_count,
                 elapsed,
                 len(content),
@@ -388,7 +374,7 @@ class DeepSeekClient:
         """Close the session."""
         if self._session:
             self._session.close()
-            logger.debug("DeepSeekClient: Closed (calls=%d, errors=%d)", self._call_count, self._error_count)
+            logger.debug("ClaudeClient: Closed (calls=%d, errors=%d)", self._call_count, self._error_count)
 
     def __del__(self) -> None:
         """Cleanup on deletion."""
@@ -398,35 +384,35 @@ class DeepSeekClient:
             pass
 
 
-# ── DeepSeek Assessor ────────────────────────────────────────────────────────
+# ── Claude Assessor ────────────────────────────────────────────────────────
 
 
-class DeepSeekAssessor(BaseAssessor):
-    """AI assessor using DeepSeek models with improved client."""
+class ClaudeAssessor(BaseAssessor):
+    """AI assessor using Anthropic's Claude 3.5 Haiku model (free tier friendly)."""
 
     def __init__(self) -> None:
-        super().__init__("DEEPSEEK_API_KEY", _MODEL_NAME)
-        self._client: DeepSeekClient | None = None
+        super().__init__("ANTHROPIC_API_KEY", _MODEL_NAME)
+        self._client: ClaudeClient | None = None
 
         if self.enabled:
             try:
-                api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-                self._client = DeepSeekClient(api_key=api_key, model=self._model_name)
-                logger.info("DeepSeekAssessor: Initialized with DeepSeek API client (model=%s)", self._model_name)
-            except DeepSeekConfigError as exc:
-                logger.error("DeepSeekAssessor: Configuration error: %s", exc)
+                api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+                self._client = ClaudeClient(api_key=api_key, model=self._model_name)
+                logger.info("ClaudeAssessor: Initialized with Claude Haiku API client (model=%s)", self._model_name)
+            except ClaudeConfigError as exc:
+                logger.error("ClaudeAssessor: Configuration error: %s", exc)
                 self.enabled = False
             except Exception as exc:
-                logger.error("DeepSeekAssessor: Unexpected error during init: %s", exc, exc_info=True)
+                logger.error("ClaudeAssessor: Unexpected error during init: %s", exc, exc_info=True)
                 self.enabled = False
         else:
             logger.info(
-                "DeepSeekAssessor: DEEPSEEK_API_KEY not set — AI assessment disabled; "
+                "ClaudeAssessor: ANTHROPIC_API_KEY not set — AI assessment disabled; "
                 "falling back to rules engine."
             )
 
     def assess_deal(self, deal: dict) -> dict | None:
-        """Assess a single eBay deal using DeepSeek."""
+        """Assess a single eBay deal using Claude."""
         if not self.enabled or not self.user_enabled or self.is_rate_limited:
             return None
 
@@ -470,7 +456,7 @@ class DeepSeekAssessor(BaseAssessor):
 
             if elapsed >= _ASSESS_TOTAL_BUDGET_S:
                 logger.warning(
-                    "DeepSeekAssessor: Total time budget exhausted after batch %d",
+                    "ClaudeAssessor: Total time budget exhausted after batch %d",
                     batch_idx,
                 )
                 results.extend([None] * (len(deals) - len(results)))
@@ -486,54 +472,54 @@ class DeepSeekAssessor(BaseAssessor):
         return results
 
     def _call_api(self, user_content: str, system_prompt: str) -> str | None:
-        """Call the DeepSeek API with error handling.
+        """Call the Claude API with error handling.
 
         Returns:
             Response text or None if error occurred
         """
         if self._client is None:
-            logger.error("DeepSeekAssessor: Client not initialized")
+            logger.error("ClaudeAssessor: Client not initialized")
             return None
 
         try:
             return self._client.chat_completion(user_content, system_prompt)
-        except DeepSeekRateLimitError as exc:
+        except ClaudeRateLimitError as exc:
             retry_after = exc.retry_after or _DEFAULT_BACKOFF_SECONDS
             with _rate_limit_lock:
                 import ai_providers.base
 
                 ai_providers.base._rate_limited_until = time.monotonic() + retry_after
-            logger.warning("DeepSeekAssessor: Rate limited — backing off %.0f s", retry_after)
+            logger.warning("ClaudeAssessor: Rate limited — backing off %.0f s", retry_after)
             raise
-        except DeepSeekTransientError as exc:
-            logger.warning("DeepSeekAssessor: Transient error: %s", exc)
+        except ClaudeTransientError as exc:
+            logger.warning("ClaudeAssessor: Transient error: %s", exc)
             raise
-        except DeepSeekConfigError as exc:
-            logger.error("DeepSeekAssessor: Configuration error: %s", exc)
+        except ClaudeConfigError as exc:
+            logger.error("ClaudeAssessor: Configuration error: %s", exc)
             self.enabled = False
             raise
-        except DeepSeekAPIError as exc:
-            logger.error("DeepSeekAssessor: API error: %s", exc)
+        except ClaudeAPIError as exc:
+            logger.error("ClaudeAssessor: API error: %s", exc)
             raise
 
     def _handle_api_error(self, exc: Exception) -> None:
         """Handle API errors and update rate limiting state."""
-        if isinstance(exc, DeepSeekRateLimitError):
+        if isinstance(exc, ClaudeRateLimitError):
             delay = exc.retry_after or _DEFAULT_BACKOFF_SECONDS
             with _rate_limit_lock:
                 import ai_providers.base
 
                 ai_providers.base._rate_limited_until = time.monotonic() + delay
-            logger.warning("DeepSeekAssessor: Rate limit — backing off %.0f s", delay)
-        elif isinstance(exc, DeepSeekTransientError):
-            logger.warning("DeepSeekAssessor: Transient error (will retry): %s", exc)
-        elif isinstance(exc, DeepSeekConfigError):
-            logger.error("DeepSeekAssessor: Configuration error (disabling): %s", exc)
+            logger.warning("ClaudeAssessor: Rate limit — backing off %.0f s", delay)
+        elif isinstance(exc, ClaudeTransientError):
+            logger.warning("ClaudeAssessor: Transient error (will retry): %s", exc)
+        elif isinstance(exc, ClaudeConfigError):
+            logger.error("ClaudeAssessor: Configuration error (disabling): %s", exc)
             self.enabled = False
-        elif isinstance(exc, DeepSeekAPIError):
-            logger.error("DeepSeekAssessor: API error: %s", exc)
+        elif isinstance(exc, ClaudeAPIError):
+            logger.error("ClaudeAssessor: API error: %s", exc)
         else:
-            logger.error("DeepSeekAssessor: Unexpected error: %s", exc, exc_info=True)
+            logger.error("ClaudeAssessor: Unexpected error: %s", exc, exc_info=True)
 
     def _assess_batch_with_retry(self, deals: list[dict]) -> list[dict | None]:
         """Assess a batch of deals with retry logic."""
@@ -548,19 +534,19 @@ class DeepSeekAssessor(BaseAssessor):
 
                 return _parse_batch_response(response, len(deals))
 
-            except DeepSeekRateLimitError:
+            except ClaudeRateLimitError:
                 logger.warning(
-                    "DeepSeekAssessor: Rate limited (batch of %d) — not retrying",
+                    "ClaudeAssessor: Rate limited (batch of %d) — not retrying",
                     len(deals),
                 )
                 return [{"ai_error_type": "rate_limit", "ai_assessed": False}] * len(deals)
 
-            except DeepSeekTransientError as exc:
+            except ClaudeTransientError as exc:
                 last_exc = exc
                 if attempt < _MAX_RETRIES - 1:
                     retry_delay = _RETRY_BASE_DELAY * (2**attempt)
                     logger.warning(
-                        "DeepSeekAssessor: Transient error (batch of %d) — "
+                        "ClaudeAssessor: Transient error (batch of %d) — "
                         "retrying in %.1f s (attempt %d/%d)",
                         len(deals),
                         retry_delay,
@@ -570,7 +556,7 @@ class DeepSeekAssessor(BaseAssessor):
                     time.sleep(retry_delay)
                 else:
                     logger.error(
-                        "DeepSeekAssessor: Transient error (batch of %d) — "
+                        "ClaudeAssessor: Transient error (batch of %d) — "
                         "max retries exhausted (attempt %d/%d)",
                         len(deals),
                         attempt + 1,
@@ -578,9 +564,9 @@ class DeepSeekAssessor(BaseAssessor):
                     )
                     return [None] * len(deals)
 
-            except (DeepSeekConfigError, DeepSeekAPIError) as exc:
+            except (ClaudeConfigError, ClaudeAPIError) as exc:
                 logger.error(
-                    "DeepSeekAssessor: Non-retryable error (batch of %d): %s",
+                    "ClaudeAssessor: Non-retryable error (batch of %d): %s",
                     len(deals),
                     exc,
                 )
@@ -588,14 +574,14 @@ class DeepSeekAssessor(BaseAssessor):
 
             except Exception as exc:
                 logger.error(
-                    "DeepSeekAssessor: Unexpected error (batch of %d): %s",
+                    "ClaudeAssessor: Unexpected error (batch of %d): %s",
                     len(deals),
                     exc,
                     exc_info=True,
                 )
                 return [None] * len(deals)
 
-        logger.error("DeepSeekAssessor: All retries exhausted (batch of %d): %s", len(deals), last_exc)
+        logger.error("ClaudeAssessor: All retries exhausted (batch of %d): %s", len(deals), last_exc)
         return [None] * len(deals)
 
     def _build_contents(self, deal: dict) -> str:

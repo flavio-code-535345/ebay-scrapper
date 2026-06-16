@@ -1162,7 +1162,7 @@ async function saveAiProvider() {
         } else {
             _setAiProviderState(data.ai_provider);
             if (status) {
-                const label = data.ai_provider === 'gemini' ? 'Gemini' : 'DeepSeek';
+                const label = data.ai_provider === 'gemini' ? 'Gemini' : 'Claude Haiku';
                 status.textContent = `✅ AI provider: ${label}`;
                 status.className   = 'model-status model-status--active';
             }
