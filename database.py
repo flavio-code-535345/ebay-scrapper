@@ -5,6 +5,7 @@ import io
 import json
 import os
 import sqlite3
+import sys
 import time
 from contextlib import contextmanager
 
@@ -31,7 +32,7 @@ def get_db():
 
 def _ensure_wal_mode():
     """Enable WAL journal mode for better concurrent-read performance.
-    
+
     If WAL mode cannot be enabled (e.g., readonly filesystem), continue anyway.
     WAL is an optimization, not required for database functionality.
     """
@@ -42,7 +43,6 @@ def _ensure_wal_mode():
         finally:
             conn.close()
     except sqlite3.OperationalError as e:
-        import sys
         print(f"[WARNING] Could not enable WAL mode: {e}", file=sys.stderr)
 
 
