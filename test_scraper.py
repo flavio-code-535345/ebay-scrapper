@@ -1,10 +1,10 @@
 """Tests for scraper.py — legacy eBay HTML scraper."""
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from scraper import EbayScraper, _LOW_RES_URL_RE
+from scraper import _LOW_RES_URL_RE, EbayScraper
 
 
 @pytest.fixture

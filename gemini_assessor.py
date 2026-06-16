@@ -12,12 +12,12 @@ import os
 import re
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 import requests
 
 if TYPE_CHECKING:
-    from ebay_api_client import EbayApiClient
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ enjoyment, nostalgia, or collector value — only resale profit matters.
 ### ABSOLUTE RULE — THE 2 € THRESHOLD
 > If a game (or bundle) is listed as **working/functional** and the total \
 price (including shipping) is **≤ 2 €**, it is ALWAYS rated **"Must Have"** \
-regardless of market value, popularity, or condition.  
+regardless of market value, popularity, or condition.
 > State this rule explicitly in your verdict when it applies.
 
 ### SPORTS & KINECT BUNDLES — INSTANT AVOID
@@ -237,7 +237,7 @@ collector value — only resale profit matters.
 ### ABSOLUTE RULE — THE 2 € THRESHOLD
 > If a game (or bundle) is listed as **working/functional** and the total \
 price (including shipping) is **≤ 2 €**, it is ALWAYS rated **"Must Have"** \
-regardless of market value, popularity, or condition.  
+regardless of market value, popularity, or condition.
 > State this rule explicitly in the verdict when it applies.
 
 ### SPORTS & KINECT BUNDLES — INSTANT AVOID
@@ -616,7 +616,7 @@ def _is_transient_error(exc: Exception) -> bool:
     return any(x in msg for x in ("timeout", "connection", "503", "500", "502", "504"))
 
 
-def _parse_retry_delay(exc: Exception) -> Optional[float]:
+def _parse_retry_delay(exc: Exception) -> float | None:
     """Try to extract retryDelay (seconds) from the Gemini API error payload."""
     try:
         msg = str(exc)
@@ -648,7 +648,7 @@ _BUNDLE_TITLE_KEYWORDS_RE = re.compile(
 # Mapping from compiled platform patterns (case-insensitive) to canonical names.
 # Ordered from most specific to least specific so that "Xbox 360" matches
 # before a bare "Xbox" pattern.
-_PLATFORM_MAP: List[Tuple[re.Pattern, str]] = [
+_PLATFORM_MAP: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bxbox\s*360\b",                    re.IGNORECASE), "Microsoft Xbox 360"),
     (re.compile(r"\bxbox\s*one\b",                    re.IGNORECASE), "Microsoft Xbox One"),
     (re.compile(r"\bxbox\s*series\s*[xs]\b",          re.IGNORECASE), "Microsoft Xbox Series X"),
@@ -665,7 +665,8 @@ _PLATFORM_MAP: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"\bgamecube\b|\bgame\s*cube\b",       re.IGNORECASE), "Nintendo GameCube"),
     (re.compile(r"\bn64\b|\bnintendo\s*64\b",          re.IGNORECASE), "Nintendo 64"),
     (re.compile(r"\bsnes\b|\bsuper\s*nintendo\b",      re.IGNORECASE), "Super Nintendo"),
-    (re.compile(r"\bnes\b|\bnintendo\s*entertainment\b", re.IGNORECASE), "Nintendo Entertainment System"),
+    (re.compile(r"\bnes\b|\bnintendo\s*entertainment\b", re.IGNORECASE),
+     "Nintendo Entertainment System"),
     (re.compile(r"\bgba\b|\bgame\s*boy\s*advance\b",   re.IGNORECASE), "Game Boy Advance"),
     (re.compile(r"\b3ds\b",                            re.IGNORECASE), "Nintendo 3DS"),
     (re.compile(r"\bnds\b|\bnintendo\s*ds\b",          re.IGNORECASE), "Nintendo DS"),
@@ -768,7 +769,7 @@ _BUNDLE_PART_NOISE_RE = re.compile(
 _MAX_GAMES_PER_BUNDLE = 8
 
 
-def _extract_potential_game_titles(title: str) -> List[str]:
+def _extract_potential_game_titles(title: str) -> list[str]:
     """Attempt to extract individual game titles from a bundle listing title.
 
     Returns a list of candidate game-title strings (possibly empty).  Titles
@@ -808,7 +809,7 @@ def _extract_potential_game_titles(title: str) -> List[str]:
 
     parts = _TITLE_SEPARATOR_RE.split(cleaned)
 
-    candidates: List[str] = []
+    candidates: list[str] = []
     for part in parts:
         part = part.strip(" \t\n:()-")
         # Skip empty, purely numeric, or generic non-title words.
@@ -888,7 +889,7 @@ _SPORTS_KINECT_AVOID_PREFIX = (
 )
 
 
-def _detect_sports_kinect_deal(deal: Dict) -> Optional[str]:
+def _detect_sports_kinect_deal(deal: dict) -> str | None:
     """Deterministic check for sports-franchise or Kinect-themed listings.
 
     Sports game franchises (FIFA, Forza, TopSpin, NBA, PES, Madden, etc.)
@@ -917,7 +918,7 @@ def _detect_sports_kinect_deal(deal: Dict) -> Optional[str]:
     )
 
 
-def _apply_sports_kinect_override(deal: Dict, assessment: Dict) -> Dict:
+def _apply_sports_kinect_override(deal: dict, assessment: dict) -> dict:
     """Apply a deterministic 'Avoid' override for sports/Kinect themed deals.
 
     If ``_detect_sports_kinect_deal`` fires, this function forces
@@ -955,7 +956,7 @@ def _apply_sports_kinect_override(deal: Dict, assessment: Dict) -> Dict:
 
     return assessment
 
-def _detect_bundle_individual_sale_scam(deal: Dict) -> Optional[str]:
+def _detect_bundle_individual_sale_scam(deal: dict) -> str | None:
     """Deterministic check for the 'bundle title + individual-unit sale' scam.
 
     Pattern (canonical case reported by user):
@@ -999,7 +1000,7 @@ def _detect_bundle_individual_sale_scam(deal: Dict) -> Optional[str]:
     )
 
 
-def _apply_scam_override(deal: Dict, assessment: Dict) -> Dict:
+def _apply_scam_override(deal: dict, assessment: dict) -> dict:
     """Apply the deterministic scam override to *assessment* if warranted.
 
     If ``_detect_bundle_individual_sale_scam`` fires, this function forces:
@@ -1055,10 +1056,10 @@ class GeminiAssessor:
         self._types = None
         self._model_name: str = _MODEL_NAME
         # Optional eBay API client used to fetch real per-game prices for bundles.
-        self._ebay_client: Optional[Any] = None
+        self._ebay_client: Any | None = None
         # In-memory cache for eBay price lookup results.
         # Maps query string → (price_or_None, source_label, expire_at_monotonic)
-        self._ebay_price_cache: Dict[str, Tuple[Optional[float], str, float]] = {}
+        self._ebay_price_cache: dict[str, tuple[float | None, str, float]] = {}
 
         if self.enabled:
             try:
@@ -1121,7 +1122,7 @@ class GeminiAssessor:
             )
             self._model_name = value
 
-    def assess_deal(self, deal: Dict) -> Optional[Dict]:
+    def assess_deal(self, deal: dict) -> dict | None:
         """Analyse *deal* with Gemini and return an AI-assessment dict.
 
         Returns ``None`` when:
@@ -1182,7 +1183,7 @@ class GeminiAssessor:
             )
             return None
 
-    def assess_deals_batch(self, deals: List[Dict]) -> List[Optional[Dict]]:
+    def assess_deals_batch(self, deals: list[dict]) -> list[dict | None]:
         """Assess a list of *deals* in as few Gemini requests as possible.
 
         Deals are grouped into batches of up to ``_BATCH_SIZE`` items (matching
@@ -1241,7 +1242,7 @@ class GeminiAssessor:
         # even invoked.
         self._prefetch_ebay_prices_parallel(deals)
 
-        results: List[Optional[Dict]] = []
+        results: list[dict | None] = []
         for batch_idx, batch_start in enumerate(range(0, len(deals), _BATCH_SIZE)):
             elapsed = time.monotonic() - t_start
             budget_remaining = _ASSESS_TOTAL_BUDGET_S - elapsed
@@ -1331,16 +1332,16 @@ class GeminiAssessor:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _format_image_issues_line(deal: Dict) -> str:
+    def _format_image_issues_line(deal: dict) -> str:
         """Return a formatted 'Image Issues: …\n' line for a deal, or empty string."""
-        issues: List[str] = deal.get("image_issues", [])
+        issues: list[str] = deal.get("image_issues", [])
         return f"Image Issues: {', '.join(issues)}\n" if issues else ""
 
     # ------------------------------------------------------------------
     # eBay price cache helpers
     # ------------------------------------------------------------------
 
-    def _cached_ebay_price(self, query: str) -> Optional[Tuple[Optional[float], str]]:
+    def _cached_ebay_price(self, query: str) -> tuple[float | None, str] | None:
         """Return ``(price, source)`` from the in-memory cache if the entry is
         still valid, or ``None`` when there is no cache hit."""
         entry = self._ebay_price_cache.get(query)
@@ -1353,11 +1354,11 @@ class GeminiAssessor:
         del self._ebay_price_cache[query]
         return None
 
-    def _store_ebay_price_in_cache(self, query: str, price: Optional[float], source: str) -> None:
+    def _store_ebay_price_in_cache(self, query: str, price: float | None, source: str) -> None:
         """Store an eBay price result in the in-memory cache with a TTL."""
         self._ebay_price_cache[query] = (price, source, time.monotonic() + _EBAY_CACHE_TTL)
 
-    def _collect_ebay_queries_for_deal(self, deal: Dict) -> List[str]:
+    def _collect_ebay_queries_for_deal(self, deal: dict) -> list[str]:
         """Return the list of eBay search queries needed to price *deal*.
 
         Bundle listings produce one query per extracted game title; single-game
@@ -1379,7 +1380,7 @@ class GeminiAssessor:
             q = _build_single_game_search_query(title)
             return [q] if q else []
 
-    def _prefetch_ebay_prices_parallel(self, deals: List[Dict]) -> None:
+    def _prefetch_ebay_prices_parallel(self, deals: list[dict]) -> None:
         """Pre-populate the eBay price cache for all queries needed by *deals*.
 
         Runs all eBay price lookups in parallel (up to ``_EBAY_MAX_WORKERS``
@@ -1398,7 +1399,7 @@ class GeminiAssessor:
             return
 
         # Collect unique queries across all deals.
-        all_queries: List[str] = []
+        all_queries: list[str] = []
         seen: set = set()
         for deal in deals:
             for q in self._collect_ebay_queries_for_deal(deal):
@@ -1418,14 +1419,17 @@ class GeminiAssessor:
             return
 
         logger.info(
-            "GeminiAssessor: eBay prefetch: %d unique queries (%d cached, %d to fetch, ≤%ds budget).",
+            (
+            "GeminiAssessor: eBay prefetch: %d unique queries"
+            " (%d cached, %d to fetch, ≤%ds budget)."
+        ),
             len(all_queries),
             len(all_queries) - len(uncached),
             len(uncached),
             _EBAY_PREFETCH_BUDGET_S,
         )
 
-        def _fetch_one(query: str) -> Tuple[str, Optional[float], str]:
+        def _fetch_one(query: str) -> tuple[str, float | None, str]:
             try:
                 price, source, _ = self._ebay_client.get_median_sold_price(query, max_results=10)
                 return query, price, source
@@ -1474,7 +1478,7 @@ class GeminiAssessor:
             elapsed, found, len(all_queries),
         )
 
-    def _fetch_ebay_prices_for_bundle(self, deal: Dict) -> List[Dict]:
+    def _fetch_ebay_prices_for_bundle(self, deal: dict) -> list[dict]:
         """Fetch real eBay prices for individual games in a bundle listing.
 
         Returns a list of dicts, each with ``game``, ``price_eur``, and
@@ -1511,7 +1515,7 @@ class GeminiAssessor:
         # minimum-price lookups.
         platform = _extract_platform_name(title)
 
-        results: List[Dict] = []
+        results: list[dict] = []
         for game in game_titles:
             search_query = f"{game} ({platform})" if platform else game
             logger.debug(
@@ -1522,7 +1526,7 @@ class GeminiAssessor:
             cached = self._cached_ebay_price(search_query)
             if cached is not None:
                 price, source = cached
-                errs: List[str] = []
+                errs: list[str] = []
             else:
                 try:
                     price, source, errs = self._ebay_client.get_median_sold_price(
@@ -1577,7 +1581,11 @@ class GeminiAssessor:
 
             if price is not None:
                 price_source = "ebay_sold" if source == "sold_listings" else "ebay_active"
-                results.append({"game": game, "price_eur": round(price, 2), "price_source": price_source})
+                results.append({
+                "game": game,
+                "price_eur": round(price, 2),
+                "price_source": price_source,
+            })
             else:
                 results.append({"game": game, "price_eur": None, "price_source": "no_result"})
 
@@ -1588,7 +1596,7 @@ class GeminiAssessor:
         )
         return results
 
-    def _fetch_ebay_price_for_single_listing(self, deal: Dict) -> Optional[float]:
+    def _fetch_ebay_price_for_single_listing(self, deal: dict) -> float | None:
         """Fetch the current lowest eBay price for a single-game listing.
 
         Uses the format ``"GAME NAME (PLATFORM NAME)"`` as required for
@@ -1654,7 +1662,7 @@ class GeminiAssessor:
 
 
     @staticmethod
-    def _format_ebay_prices_section(ebay_prices: List[Dict]) -> str:
+    def _format_ebay_prices_section(ebay_prices: list[dict]) -> str:
         """Return a formatted text block describing fetched eBay prices, or empty string."""
         if not ebay_prices:
             return ""
@@ -1681,7 +1689,7 @@ class GeminiAssessor:
         )
         return "\n".join(lines)
 
-    def _build_contents(self, deal: Dict) -> List:
+    def _build_contents(self, deal: dict) -> list:
         """Construct the Gemini contents list (text + image parts)."""
         title = deal.get("title", "Unknown")
         price = deal.get("price", 0)
@@ -1725,9 +1733,9 @@ class GeminiAssessor:
         prompt_lines.append("\nReturn your analysis in the required JSON format.")
         text_prompt = "\n".join(prompt_lines)
 
-        parts: List = [self._types.Part.from_text(text=text_prompt)]
+        parts: list = [self._types.Part.from_text(text=text_prompt)]
 
-        image_urls: List[str] = deal.get("image_urls", [])
+        image_urls: list[str] = deal.get("image_urls", [])
         for url in image_urls[:_MAX_IMAGES]:
             image_part = self._fetch_image_part(url)
             if image_part is not None:
@@ -1735,13 +1743,13 @@ class GeminiAssessor:
 
         return parts
 
-    def _build_batch_contents(self, deals: List[Dict]) -> List:
+    def _build_batch_contents(self, deals: list[dict]) -> list:
         """Construct the Gemini contents list for a batch of *deals*.
 
         Each deal is introduced with a numbered separator so that Gemini can
         unambiguously map its array response back to the original items.
         """
-        parts: List = []
+        parts: list = []
 
         intro = (
             f"Below are {len(deals)} eBay listings to analyze. "
@@ -1811,7 +1819,7 @@ class GeminiAssessor:
         )
         return parts
 
-    def _assess_batch_with_retry(self, deals: List[Dict]) -> List[Optional[Dict]]:
+    def _assess_batch_with_retry(self, deals: list[dict]) -> list[dict | None]:
         """Send *deals* as a single batch request, retrying on transient errors.
 
         Each ``generate_content`` call is wrapped in a :class:`ThreadPoolExecutor`
@@ -1822,7 +1830,7 @@ class GeminiAssessor:
         """
         global _rate_limited_until
 
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES):
             try:
                 contents = self._build_batch_contents(deals)
@@ -1924,7 +1932,7 @@ class GeminiAssessor:
             return None
 
     @staticmethod
-    def _parse_response(text: str) -> Dict:
+    def _parse_response(text: str) -> dict:
         """Extract the JSON payload from Gemini's response text."""
         original_text = text
         text = text.strip()
@@ -2021,14 +2029,14 @@ class GeminiAssessor:
         }
 
     @staticmethod
-    def _parse_batch_response(text: str, expected_count: int) -> List[Dict]:
+    def _parse_batch_response(text: str, expected_count: int) -> list[dict]:
         """Parse a batch Gemini response as a JSON array.
 
         Returns a list of exactly *expected_count* assessment dicts.  Missing
         or unparseable items are filled with a parse-error sentinel so the
         caller always gets a list of the right length.
         """
-        _parse_error: Dict = {
+        _parse_error: dict = {
             "ai_deal_rating": "Unknown",
             "ai_confidence_score": 0,
             "ai_potential_scam": False,
@@ -2081,7 +2089,7 @@ class GeminiAssessor:
             if data is None:
                 extracted = _extract_json_objects(text)
                 if extracted:
-                    items: List = []
+                    items: list = []
                     for obj in extracted:
                         if isinstance(obj, list):
                             items.extend(obj)
@@ -2109,7 +2117,7 @@ class GeminiAssessor:
         if not isinstance(data, list):
             return [dict(_parse_error)] * expected_count
 
-        results: List[Dict] = []
+        results: list[dict] = []
         for item_data in data:
             if not isinstance(item_data, dict):
                 results.append(dict(_parse_error))

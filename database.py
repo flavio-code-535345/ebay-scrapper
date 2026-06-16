@@ -7,7 +7,6 @@ import os
 import sqlite3
 import time
 from contextlib import contextmanager
-from typing import Dict, List, Optional
 
 DB_PATH = os.environ.get("DB_PATH", "ebay_deals.db")
 
@@ -142,7 +141,7 @@ def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> No
         pass
 
 
-def save_search(query: str, deals: List[Dict]) -> int:
+def save_search(query: str, deals: list[dict]) -> int:
     with get_db() as conn:
         cursor = conn.cursor()
         now = time.time()
@@ -176,7 +175,8 @@ def save_search(query: str, deals: List[Dict]) -> int:
                  deal.get("seller_score"), deal.get("condition_score"),
                  deal.get("trend_score"), deal.get("recommendation"),
                  deal.get("ai_deal_rating"), deal.get("ai_confidence_score"),
-                 json.dumps(visual_findings) if isinstance(visual_findings, list) else visual_findings,
+                 json.dumps(visual_findings)
+                if isinstance(visual_findings, list) else visual_findings,
                  json.dumps(red_flags) if isinstance(red_flags, list) else red_flags,
                  deal.get("ai_fair_market_estimate"), deal.get("ai_verdict_summary"),
                  int(bool(deal.get("ai_assessed"))),
@@ -193,7 +193,7 @@ def save_search(query: str, deals: List[Dict]) -> int:
     return search_id
 
 
-def get_history(limit: int = 20) -> List[Dict]:
+def get_history(limit: int = 20) -> list[dict]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -202,7 +202,7 @@ def get_history(limit: int = 20) -> List[Dict]:
         return [dict(row) for row in cursor.fetchall()]
 
 
-def get_deals_by_search(search_id: int) -> List[Dict]:
+def get_deals_by_search(search_id: int) -> list[dict]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM deals WHERE search_id = ?", (search_id,))
@@ -240,7 +240,7 @@ def export_csv() -> str:
     return output.getvalue()
 
 
-def get_stats() -> Dict:
+def get_stats() -> dict:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) as total FROM searches")
@@ -250,7 +250,7 @@ def get_stats() -> Dict:
     return {"total_searches": searches, "total_deals": deals}
 
 
-def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
+def get_setting(key: str, default: str | None = None) -> str | None:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
@@ -285,7 +285,7 @@ def unsave_deal(url: str) -> None:
         cursor.execute("DELETE FROM user_saved_deals WHERE url = ?", (url,))
 
 
-def get_saved_deals() -> List[Dict]:
+def get_saved_deals() -> list[dict]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -318,14 +318,14 @@ def unskip_deal(url: str) -> None:
         cursor.execute("DELETE FROM user_skipped_deals WHERE url = ?", (url,))
 
 
-def get_skipped_deal_urls() -> List[str]:
+def get_skipped_deal_urls() -> list[str]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT url FROM user_skipped_deals")
         return [row["url"] for row in cursor.fetchall()]
 
 
-def get_skipped_deals() -> List[Dict]:
+def get_skipped_deals() -> list[dict]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
