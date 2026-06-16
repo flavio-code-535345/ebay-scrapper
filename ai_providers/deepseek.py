@@ -9,7 +9,6 @@ Architecture:
 from __future__ import annotations
 
 import json
-import logging
 import os
 import time
 from typing import Any
@@ -30,11 +29,8 @@ from ai_providers.base import (
     _apply_sports_kinect_override,
     _detect_bundle_individual_sale_scam,
     _detect_sports_kinect_deal,
-    _is_rate_limit_error,
-    _is_transient_error,
     _parse_batch_response,
     _parse_response,
-    _parse_retry_delay,
     _rate_limit_lock,
     logger,
 )
@@ -552,7 +548,7 @@ class DeepSeekAssessor(BaseAssessor):
 
                 return _parse_batch_response(response, len(deals))
 
-            except DeepSeekRateLimitError as exc:
+            except DeepSeekRateLimitError:
                 logger.warning(
                     "DeepSeekAssessor: Rate limited (batch of %d) — not retrying",
                     len(deals),
