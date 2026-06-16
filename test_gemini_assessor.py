@@ -11,12 +11,10 @@ import unittest.mock as mock
 
 import pytest
 
-from gemini_assessor import (
+from ai_providers.base import (
     _ASSESS_TOTAL_BUDGET_S,
     _BATCH_SIZE,
     _EBAY_PREFETCH_BUDGET_S,
-    _GEMINI_REQUEST_TIMEOUT,
-    GeminiAssessor,
     _apply_scam_override,
     _apply_sports_kinect_override,
     _build_single_game_search_query,
@@ -26,6 +24,7 @@ from gemini_assessor import (
     _extract_potential_game_titles,
     _is_aggregate_placeholder,
 )
+from ai_providers.gemini import GeminiAssessor, _GEMINI_REQUEST_TIMEOUT
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -520,7 +519,7 @@ class TestExtractPotentialGameTitles:
 
     def test_respects_max_games_limit(self):
         """Never returns more than _MAX_GAMES_PER_BUNDLE titles."""
-        from gemini_assessor import _MAX_GAMES_PER_BUNDLE
+        from ai_providers.base import _MAX_GAMES_PER_BUNDLE
         many = ", ".join([f"Game {i}" for i in range(20)])
         title = f"Bundle: {many}"
         result = _extract_potential_game_titles(title)
@@ -1661,13 +1660,13 @@ class TestSanitizeJsonText:
 
     def test_clean_text_unchanged(self):
         """Text without control characters is returned unchanged."""
-        from gemini_assessor import _sanitize_json_text
+        from ai_providers.base import _sanitize_json_text
         text = '[{"deal_rating": "Good", "verdict_summary": "Nice deal."}]'
         assert _sanitize_json_text(text) == text
 
     def test_strips_form_feed(self):
         """Form-feed (0x0C) is stripped."""
-        from gemini_assessor import _sanitize_json_text
+        from ai_providers.base import _sanitize_json_text
         text = '[{"verdict_summary": "Good\x0cdeal."}]'
         result = _sanitize_json_text(text)
         assert "\x0c" not in result
@@ -1675,13 +1674,13 @@ class TestSanitizeJsonText:
 
     def test_strips_backspace(self):
         """Backspace (0x08) is stripped."""
-        from gemini_assessor import _sanitize_json_text
+        from ai_providers.base import _sanitize_json_text
         text = 'hello\x08world'
         assert _sanitize_json_text(text) == "helloworld"
 
     def test_preserves_tab_lf_cr(self):
         """TAB (0x09), LF (0x0A), CR (0x0D) are preserved (valid in JSON)."""
-        from gemini_assessor import _sanitize_json_text
+        from ai_providers.base import _sanitize_json_text
         text = 'line1\nline2\r\n\ttabbed'
         assert _sanitize_json_text(text) == text
 
