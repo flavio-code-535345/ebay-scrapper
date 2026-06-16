@@ -24,7 +24,7 @@ from ai_providers.base import (
     _extract_potential_game_titles,
     _is_aggregate_placeholder,
 )
-from ai_providers.gemini import GeminiAssessor, _GEMINI_REQUEST_TIMEOUT
+from ai_providers.gemini import _GEMINI_REQUEST_TIMEOUT, GeminiAssessor
 
 # ---------------------------------------------------------------------------
 # Helpers
