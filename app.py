@@ -14,8 +14,9 @@ from datetime import UTC, datetime
 from flask import Flask, Response, jsonify, render_template, request
 
 import database
+from ai_providers import create_assessor
+from ai_providers.base import _detect_sports_kinect_deal
 from ebay_api_client import EbayApiClient
-from gemini_assessor import GeminiAssessor, _detect_sports_kinect_deal
 from scraper import EbayScraper
 
 
@@ -48,7 +49,7 @@ app = Flask(__name__)
 
 scraper = EbayScraper()
 ebay_api = EbayApiClient()
-gemini = GeminiAssessor()
+gemini = create_assessor()
 
 database.init_db()
 
