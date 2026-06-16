@@ -639,6 +639,11 @@ class GeminiAssessor:
         # Maps query string → (price_or_None, source_label, expire_at_monotonic)
         self._ebay_price_cache: dict[str, tuple[float | None, str, float]] = {}
 
+        # Reusable thread pools (lazily created, never shut down — daemon
+        # threads exit when the process terminates).
+        self._prefetch_executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._timeout_executor: concurrent.futures.ThreadPoolExecutor | None = None
+
         if self.enabled:
             try:
                 from google import genai  # lazy import
@@ -1018,33 +1023,31 @@ class GeminiAssessor:
                 return query, None, "no_result"
 
         t0 = time.monotonic()
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=_EBAY_MAX_WORKERS)
-        try:
-            future_to_query = {executor.submit(_fetch_one, q): q for q in uncached}
-            done, not_done = concurrent.futures.wait(
-                future_to_query, timeout=_EBAY_PREFETCH_BUDGET_S
+        if self._prefetch_executor is None:
+            self._prefetch_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=_EBAY_MAX_WORKERS
             )
-            for fut in done:
-                try:
-                    query, price, source = fut.result()
-                    self._store_ebay_price_in_cache(query, price, source)
-                except Exception as exc:
-                    q = future_to_query[fut]
-                    logger.warning(
-                        "GeminiAssessor: eBay prefetch result error for %r: %s", q, exc
-                    )
-            if not_done:
+        future_to_query = {self._prefetch_executor.submit(_fetch_one, q): q for q in uncached}
+        done, not_done = concurrent.futures.wait(
+            future_to_query, timeout=_EBAY_PREFETCH_BUDGET_S
+        )
+        for fut in done:
+            try:
+                query, price, source = fut.result()
+                self._store_ebay_price_in_cache(query, price, source)
+            except Exception as exc:
+                q = future_to_query[fut]
                 logger.warning(
-                    "GeminiAssessor: eBay prefetch budget (%.0fs) exhausted; "
-                    "%d/%d queries did not complete in time.",
-                    _EBAY_PREFETCH_BUDGET_S,
-                    len(not_done),
-                    len(uncached),
+                    "GeminiAssessor: eBay prefetch result error for %r: %s", q, exc
                 )
-        finally:
-            # Shut down without waiting so abandoned threads do not block the
-            # Gunicorn worker past the overall request budget.
-            executor.shutdown(wait=False)
+        if not_done:
+            logger.warning(
+                "GeminiAssessor: eBay prefetch budget (%.0fs) exhausted; "
+                "%d/%d queries did not complete in time.",
+                _EBAY_PREFETCH_BUDGET_S,
+                len(not_done),
+                len(uncached),
+            )
 
         elapsed = time.monotonic() - t0
         found = sum(
@@ -1417,30 +1420,28 @@ class GeminiAssessor:
                 # Run generate_content in a background thread so we can impose a
                 # wall-clock timeout that covers the SDK's own tenacity retries.
                 t0 = time.monotonic()
-                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                if self._timeout_executor is None:
+                    self._timeout_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = self._timeout_executor.submit(
+                    self._client.models.generate_content,
+                    model=self._model_name,
+                    contents=contents,
+                    config=self._types.GenerateContentConfig(
+                        system_instruction=_BATCH_SYSTEM_PROMPT,
+                    ),
+                )
                 try:
-                    future = executor.submit(
-                        self._client.models.generate_content,
-                        model=self._model_name,
-                        contents=contents,
-                        config=self._types.GenerateContentConfig(
-                            system_instruction=_BATCH_SYSTEM_PROMPT,
-                        ),
+                    response = future.result(timeout=_GEMINI_REQUEST_TIMEOUT)
+                except concurrent.futures.TimeoutError:
+                    elapsed = time.monotonic() - t0
+                    logger.error(
+                        "GeminiAssessor: Batch of %d timed out after %.1f s "
+                        "(attempt %d/%d, timeout=%d s). Returning timeout errors.",
+                        len(deals), elapsed, attempt + 1, _MAX_RETRIES,
+                        _GEMINI_REQUEST_TIMEOUT,
                     )
-                    try:
-                        response = future.result(timeout=_GEMINI_REQUEST_TIMEOUT)
-                    except concurrent.futures.TimeoutError:
-                        elapsed = time.monotonic() - t0
-                        logger.error(
-                            "GeminiAssessor: Batch of %d timed out after %.1f s "
-                            "(attempt %d/%d, timeout=%d s). Returning timeout errors.",
-                            len(deals), elapsed, attempt + 1, _MAX_RETRIES,
-                            _GEMINI_REQUEST_TIMEOUT,
-                        )
-                        future.cancel()  # no-op for running futures; documents intent
-                        return [{"ai_error_type": "timeout", "ai_assessed": False}] * len(deals)
-                finally:
-                    executor.shutdown(wait=False)
+                    future.cancel()  # no-op for running futures; documents intent
+                    return [{"ai_error_type": "timeout", "ai_assessed": False}] * len(deals)
                 # ── End timeout wrapper ───────────────────────────────────────
 
                 elapsed = time.monotonic() - t0
