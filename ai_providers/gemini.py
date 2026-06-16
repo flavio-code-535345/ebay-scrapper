@@ -38,6 +38,7 @@ class GeminiAssessor(BaseAssessor):
 
     def __init__(self) -> None:
         super().__init__("GEMINI_API_KEY", _MODEL_NAME)
+        self._images_supported = True
         if self.enabled:
             try:
                 from google import genai
@@ -113,6 +114,11 @@ class GeminiAssessor(BaseAssessor):
                 with _rate_limit_lock:
                     _rate_limited_until = time.monotonic() + delay
                 logger.warning("GeminiAssessor: 429 RESOURCE_EXHAUSTED – backing off %.0f s.", delay)
+            exc_msg = str(exc).lower()
+            if self._images_supported and ("does not support image" in exc_msg or "image input" in exc_msg):
+                logger.warning("GeminiAssessor: model %r does not support images — disabling image input.", self._model_name)
+                self._images_supported = False
+                return self.assess_deal(deal)
             logger.error("GeminiAssessor: assess_deal failed: %s", exc, exc_info=True)
             return None
 
@@ -185,11 +191,12 @@ class GeminiAssessor(BaseAssessor):
             prompt_lines.append(f"\nDescription:\n{description[:1500]}")
         text_prompt = "\n".join(prompt_lines)
         parts: list = [self._types.Part.from_text(text=text_prompt)]
-        image_urls: list[str] = deal.get("image_urls", [])
-        for url in image_urls[:_MAX_IMAGES]:
-            image_part = self._fetch_image_part(url)
-            if image_part is not None:
-                parts.append(image_part)
+        if self._images_supported:
+            image_urls: list[str] = deal.get("image_urls", [])
+            for url in image_urls[:_MAX_IMAGES]:
+                image_part = self._fetch_image_part(url)
+                if image_part is not None:
+                    parts.append(image_part)
         return parts
 
     def _build_batch_contents(self, deals: list[dict]) -> list:
@@ -232,11 +239,12 @@ class GeminiAssessor(BaseAssessor):
             if image_issues_line:
                 item_text += image_issues_line
             parts.append(self._types.Part.from_text(text=item_text))
-            image_urls: list[str] = deal.get("image_urls", [])
-            for url in image_urls[:_MAX_IMAGES]:
-                img_part = self._fetch_image_part(url)
-                if img_part is not None:
-                    parts.append(img_part)
+            if self._images_supported:
+                image_urls: list[str] = deal.get("image_urls", [])
+                for url in image_urls[:_MAX_IMAGES]:
+                    img_part = self._fetch_image_part(url)
+                    if img_part is not None:
+                        parts.append(img_part)
         parts.append(
             self._types.Part.from_text(
                 text=(
@@ -282,6 +290,11 @@ class GeminiAssessor(BaseAssessor):
                 )
                 return self._parse_batch_response(response.text, len(deals))
             except Exception as exc:
+                exc_msg = str(exc).lower()
+                if self._images_supported and ("does not support image" in exc_msg or "image input" in exc_msg):
+                    logger.warning("GeminiAssessor: model %r does not support images — disabling image input.", self._model_name)
+                    self._images_supported = False
+                    return self._assess_batch_with_retry(deals)
                 if _is_rate_limit_error(exc):
                     delay = _parse_retry_delay(exc) or _DEFAULT_BACKOFF_SECONDS
                     with _rate_limit_lock:
