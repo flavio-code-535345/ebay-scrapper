@@ -24,11 +24,10 @@ def _temp_db():
 class TestInitDB:
     def test_tables_created(self):
         """After init_db the expected tables exist."""
-        conn = database.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-        tables = {row["name"] for row in cursor.fetchall()}
-        conn.close()
+        with database.get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            tables = {row["name"] for row in cursor.fetchall()}
         assert "searches" in tables
         assert "deals" in tables
         assert "settings" in tables
@@ -142,7 +141,7 @@ class TestSaveSearch:
         assert fetched[0]["ai_deal_rating"] == "Must Have"
         assert fetched[0]["ai_estimated_gross_profit"] == 10.0
         import json
-        estimates = json.loads(fetched[0]["ai_itemized_resale_estimates"])
+        estimates = fetched[0]["ai_itemized_resale_estimates"]
         assert estimates[0]["game"] == "Game1"
 
 
