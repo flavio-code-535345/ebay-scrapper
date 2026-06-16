@@ -52,17 +52,14 @@ ebay_api = EbayApiClient()
 
 database.init_db()
 
-# Load persisted AI provider (default: "gemini").
-_saved_provider = database.get_setting("ai_provider") or "gemini"
-
-assessor = create_assessor(_saved_provider)
+assessor = create_assessor()
 
 # Register eBay client with the assessor so it can fetch real per-game prices.
 assessor.set_ebay_client(ebay_api)
 
 # Load persisted Gemini model (if any) so it takes effect without a restart.
 _saved_model = database.get_setting("gemini_model")
-if _saved_model and _saved_provider == "gemini":
+if _saved_model:
     assessor.model_name = _saved_model
 
 # Load persisted AI-enabled toggle (default: True; stored as "true"/"false" string).
@@ -401,7 +398,6 @@ def get_settings():
     data_source_setting = _db_data_source()
     _, active_source = _resolve_engine(data_source_setting)
     return jsonify({
-        'ai_provider': database.get_setting("ai_provider") or "gemini",
         'gemini_model': assessor.model_name,
         'ai_enabled': _db_ai_user_enabled(),
         'data_source': data_source_setting,
@@ -458,26 +454,6 @@ def update_settings():
             updated['ai_enabled'] = ai_enabled
             logger.info("Settings: ai_enabled updated to %r", ai_enabled)
 
-    if 'ai_provider' in data:
-        provider = str(data['ai_provider']).strip().lower()
-        if provider not in ("gemini", "claude"):
-            errors['ai_provider'] = "ai_provider must be 'gemini' or 'claude'"
-        else:
-            database.set_setting('ai_provider', provider)
-            assessor = create_assessor(provider)
-            assessor.set_ebay_client(ebay_api)
-            # Restore AI-enabled toggle on the new assessor.
-            _saved_ai = database.get_setting("ai_enabled")
-            if _saved_ai is not None:
-                assessor.user_enabled = str(_saved_ai).lower() == "true"
-            # Restore model if switching to gemini.
-            if provider == "gemini":
-                _saved_model = database.get_setting("gemini_model")
-                if _saved_model:
-                    assessor.model_name = _saved_model
-            updated['ai_provider'] = provider
-            logger.info("Settings: ai_provider updated to %r", provider)
-
     if 'data_source' in data:
         ds = str(data['data_source']).strip().lower()
         if ds not in _VALID_DATA_SOURCES:
@@ -496,7 +472,6 @@ def update_settings():
     _, active_source = _resolve_engine(data_source_setting)
     return jsonify({
         'updated': updated,
-        'ai_provider': database.get_setting("ai_provider") or "gemini",
         'gemini_model': assessor.model_name,
         'ai_enabled': assessor.user_enabled,
         'data_source': data_source_setting,

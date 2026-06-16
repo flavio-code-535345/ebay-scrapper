@@ -14,8 +14,6 @@ services:
       # Set your Gemini API key here (or use a .env file / Docker secret).
       # Never commit the actual key value — leave blank to disable AI assessment.
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - AI_PROVIDER=${AI_PROVIDER:-gemini}
       # eBay Official API credentials (optional).
       # Obtain from https://developer.ebay.com/
       # Leave blank to use legacy HTML scraping instead.

@@ -1,44 +1,27 @@
-"""AI provider factory — select Gemini or Claude based on setting or environment."""
+"""AI provider factory — creates Gemini assessor only."""
 
 from __future__ import annotations
 
 import logging
-import os
+
+from ai_providers.gemini import GeminiAssessor
 
 logger = logging.getLogger(__name__)
 
-_AI_PROVIDER_CACHE: dict | None = None
+_DEFAULT_ASSESSOR: GeminiAssessor | None = None
 
 
-def create_assessor(provider: str | None = None):
-    """Return an assessor instance.
+def create_assessor() -> GeminiAssessor:
+    """Return a GeminiAssessor instance.
 
-    *provider* can be ``"gemini"`` (default) or ``"claude"``.
-    When ``None`` the ``AI_PROVIDER`` env var is read (default ``"gemini"``).
-    The instance is cached per provider so that switching providers at
-    runtime (e.g. from the settings UI) recreates the assessor.
+    The instance is cached so that the same assessor is reused.
     """
-    global _AI_PROVIDER_CACHE
+    global _DEFAULT_ASSESSOR
 
-    if provider is None:
-        provider = os.environ.get("AI_PROVIDER", "gemini").strip().lower()
-    else:
-        provider = provider.strip().lower()
+    if _DEFAULT_ASSESSOR is not None:
+        return _DEFAULT_ASSESSOR
 
-    if _AI_PROVIDER_CACHE is not None:
-        cached_provider, cached_assessor = _AI_PROVIDER_CACHE
-        if cached_provider == provider:
-            return cached_assessor
-
-    if provider == "claude":
-        from ai_providers.claude import ClaudeAssessor
-
-        assessor = ClaudeAssessor()
-    else:
-        from ai_providers.gemini import GeminiAssessor
-
-        assessor = GeminiAssessor()
-
-    _AI_PROVIDER_CACHE = (provider, assessor)
-    logger.info("AI provider: %s (loaded=%s)", provider, assessor.enabled)
+    assessor = GeminiAssessor()
+    _DEFAULT_ASSESSOR = assessor
+    logger.info("AI provider: gemini (loaded=%s)", assessor.enabled)
     return assessor

@@ -34,7 +34,7 @@ _EBAY_CACHE_TTL = 300.0
 _EBAY_PREFETCH_BUDGET_S = 15
 _EBAY_MAX_WORKERS = 5
 
-# Shared rate-limit state (module-level so Gemini and Claude share the same
+# Shared rate-limit state (module-level so all assessors share the same
 # gate when the user switches providers without restarting).
 _rate_limit_lock = threading.Lock()
 _rate_limited_until: float = 0.0
