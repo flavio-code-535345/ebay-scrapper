@@ -1157,7 +1157,7 @@ async function saveAiProvider() {
         });
         const data = await response.json();
         if (!response.ok) {
-            const msg = data.error || 'Failed to save.';
+            const msg = (data.errors && data.errors.ai_provider) || data.error || 'Failed to save.';
             if (status) { status.textContent = `⚠️ ${msg}`; status.className = 'model-status model-status--error'; }
         } else {
             _setAiProviderState(data.ai_provider);
