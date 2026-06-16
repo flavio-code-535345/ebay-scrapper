@@ -25,13 +25,20 @@
                 <summary class="settings-summary">⚙️ Settings</summary>
                 <div class="settings-panel">
                     <div class="settings-row">
-                        <label for="geminiModelInput" class="settings-label">🤖 Gemini Model</label>
-                        <input type="text" id="geminiModelInput" class="settings-input" placeholder="e.g. gemini-2.0-flash-lite" autocomplete="off" spellcheck="false" />
-                        <button id="saveModelBtn" class="btn-save-model">Save</button>
+                        <label for="aiProviderSelect" class="settings-label">🤖 AI Provider</label>
+                        <select id="aiProviderSelect" class="settings-select" title="Choose the AI provider for deal assessment">
+                            <option value="gemini">Gemini</option>
+                            <option value="deepseek">DeepSeek</option>
+                        </select>
                         <button id="aiToggleBtn" class="btn-ai-toggle" aria-pressed="true" title="Toggle AI evaluation on or off">
                             <span class="ai-toggle-icon">✨</span>
                             <span class="ai-toggle-label">AI: ON</span>
                         </button>
+                    </div>
+                    <div class="settings-row" id="modelRow">
+                        <label for="geminiModelInput" class="settings-label">🤖 Model</label>
+                        <input type="text" id="geminiModelInput" class="settings-input" placeholder="e.g. gemini-2.0-flash-lite" autocomplete="off" spellcheck="false" />
+                        <button id="saveModelBtn" class="btn-save-model">Save</button>
                     </div>
                     <div class="settings-row">
                         <label for="dataSourceSelect" class="settings-label">🔌 Data Source</label>

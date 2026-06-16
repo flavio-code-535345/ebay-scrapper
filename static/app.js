@@ -175,6 +175,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const aiToggleBtn = document.getElementById('aiToggleBtn');
     if (aiToggleBtn) aiToggleBtn.addEventListener('click', toggleAiEnabled);
 
+    const aiProviderSelect = document.getElementById('aiProviderSelect');
+    if (aiProviderSelect) aiProviderSelect.addEventListener('change', saveAiProvider);
+
     const dataSourceSelect = document.getElementById('dataSourceSelect');
     if (dataSourceSelect) dataSourceSelect.addEventListener('change', saveDataSource);
 
@@ -1115,6 +1118,7 @@ async function loadModelSettings() {
         const response = await fetch('/api/settings');
         if (!response.ok) return;
         const data = await response.json();
+        _setAiProviderState(data.ai_provider);
         const input  = document.getElementById('geminiModelInput');
         const status = document.getElementById('modelStatus');
         if (input && data.gemini_model) input.value = data.gemini_model;
@@ -1126,6 +1130,45 @@ async function loadModelSettings() {
         _setDataSourceState(data.data_source, data.active_data_source, data.ebay_api_configured);
     } catch (err) {
         console.warn('Failed to load model settings:', err);
+    }
+}
+
+function _setAiProviderState(provider) {
+    const sel = document.getElementById('aiProviderSelect');
+    if (!sel) return;
+    sel.value = provider || 'gemini';
+    const modelRow = document.getElementById('modelRow');
+    if (modelRow) {
+        modelRow.style.display = provider === 'gemini' ? '' : 'none';
+    }
+}
+
+async function saveAiProvider() {
+    const sel = document.getElementById('aiProviderSelect');
+    const status = document.getElementById('modelStatus');
+    if (!sel) return;
+    const provider = sel.value;
+    if (status) { status.textContent = '⏳ Saving…'; status.className = 'model-status'; }
+    try {
+        const response = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ai_provider: provider }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            const msg = data.error || 'Failed to save.';
+            if (status) { status.textContent = `⚠️ ${msg}`; status.className = 'model-status model-status--error'; }
+        } else {
+            _setAiProviderState(data.ai_provider);
+            if (status) {
+                const label = data.ai_provider === 'gemini' ? 'Gemini' : 'DeepSeek';
+                status.textContent = `✅ AI provider: ${label}`;
+                status.className   = 'model-status model-status--active';
+            }
+        }
+    } catch (err) {
+        if (status) { status.textContent = `⚠️ Error: ${err.message}`; status.className = 'model-status model-status--error'; }
     }
 }
 
