@@ -4,6 +4,7 @@ Flask REST API for eBay Deal Scraper
 Provides endpoints for searching, history, export, stats and health checks
 """
 
+import json
 import logging
 import os
 import re
@@ -16,10 +17,29 @@ from ebay_api_client import EbayApiClient
 from gemini_assessor import GeminiAssessor, _detect_sports_kinect_deal
 import database
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(name)s: %(message)s',
-)
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        base = {
+            "time": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[0]:
+            base["exception"] = self.formatException(record.exc_info)
+        return json.dumps(base, ensure_ascii=False)
+
+
+_LOG_FORMAT_ENV = os.environ.get("LOG_FORMAT", "plain").strip().lower()
+if _LOG_FORMAT_ENV == "json":
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(JsonFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[_handler])
+else:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+    )
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
