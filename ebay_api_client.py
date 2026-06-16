@@ -129,6 +129,14 @@ class EbayApiClient:
         self._token: str | None = None
         self._token_expires_at: float = 0.0
         self.session = requests.Session()
+        _proxy = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or ""
+        _proxy_https = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or ""
+        if _proxy or _proxy_https:
+            self.session.proxies = {
+                "http": _proxy or _proxy_https,
+                "https": _proxy_https or _proxy,
+            }
+            logger.info("EbayApiClient: HTTP proxy configured (%s)", self.session.proxies)
 
         logger.info(
             "EbayApiClient: marketplace=%s locale=%s language=%s country=%s env=%s",

@@ -5,6 +5,7 @@ Handles fetching and parsing eBay listings (defaults to ebay.de)
 """
 
 import logging
+import os
 import random
 import re
 import time
@@ -95,6 +96,14 @@ class EbayScraper:
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         }
         self.session = requests.Session()
+        _proxy = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or ""
+        _proxy_https = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or ""
+        if _proxy or _proxy_https:
+            self.session.proxies = {
+                "http": _proxy or _proxy_https,
+                "https": _proxy_https or _proxy,
+            }
+            logger.info("EbayScraper: HTTP proxy configured (%s)", self.session.proxies)
 
     def search(self, query: str, max_results: int = 50) -> tuple[list[dict], list[str]]:
         """Search eBay for items matching query.

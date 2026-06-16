@@ -84,6 +84,18 @@ function stopProgress(success) {
 // ---------------------------------------------------------------------------
 
 document.addEventListener('DOMContentLoaded', () => {
+    // Auto-focus search input on page load so users can start typing immediately.
+    const searchInput = document.getElementById('searchQuery');
+    if (searchInput) searchInput.focus();
+
+    // Keyboard shortcut: / or Ctrl+/ → focus search input.
+    document.addEventListener('keydown', (e) => {
+        if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
+            e.preventDefault();
+            if (searchInput) searchInput.focus();
+        }
+    });
+
     // Search form
     const searchForm = document.getElementById('searchForm');
     if (searchForm) searchForm.addEventListener('submit', handleSearch);
