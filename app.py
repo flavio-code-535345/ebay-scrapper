@@ -49,22 +49,26 @@ app = Flask(__name__)
 
 scraper = EbayScraper()
 ebay_api = EbayApiClient()
-gemini = create_assessor()
 
 database.init_db()
 
-# Register eBay client with Gemini so it can fetch real per-game prices for bundles.
-gemini.set_ebay_client(ebay_api)
+# Load persisted AI provider (default: "gemini").
+_saved_provider = database.get_setting("ai_provider") or "gemini"
+
+assessor = create_assessor(_saved_provider)
+
+# Register eBay client with the assessor so it can fetch real per-game prices.
+assessor.set_ebay_client(ebay_api)
 
 # Load persisted Gemini model (if any) so it takes effect without a restart.
 _saved_model = database.get_setting("gemini_model")
-if _saved_model:
-    gemini.model_name = _saved_model
+if _saved_model and _saved_provider == "gemini":
+    assessor.model_name = _saved_model
 
 # Load persisted AI-enabled toggle (default: True; stored as "true"/"false" string).
 _saved_ai_enabled = database.get_setting("ai_enabled")
 if _saved_ai_enabled is not None:
-    gemini.user_enabled = str(_saved_ai_enabled).lower() == "true"
+    assessor.user_enabled = str(_saved_ai_enabled).lower() == "true"
 
 # ── Data source helpers ────────────────────────────────────────────────────
 
@@ -120,7 +124,7 @@ def _db_ai_user_enabled() -> bool:
     """Read the user's AI-enabled toggle from the database.
 
     Always reads from the shared SQLite database rather than the in-memory
-    ``gemini.user_enabled`` attribute so that multi-worker (Gunicorn)
+    ``assessor.user_enabled`` attribute so that multi-worker (Gunicorn)
     deployments remain consistent: updating the setting in one worker is
     immediately visible to all other workers on the next request.
 
@@ -240,14 +244,14 @@ def search():
     # is respected in multi-worker (Gunicorn) deployments where in-memory state
     # is not shared across processes.
     _user_enabled = _db_ai_user_enabled()
-    ai_active = gemini.enabled and _user_enabled
+    ai_active = assessor.enabled and _user_enabled
     ai_assessments = (
-        gemini.assess_deals_batch(deals_filtered)
+        assessor.assess_deals_batch(deals_filtered)
         if (deals_filtered and ai_active) else []
     )
 
     timed_out = 0
-    if gemini.enabled and ai_assessments:
+    if assessor.enabled and ai_assessments:
         failed = sum(1 for a in ai_assessments if a is None)
         rate_limited = sum(
             1 for a in ai_assessments if a and a.get("ai_error_type") == "rate_limit"
@@ -324,7 +328,7 @@ def search():
     database.save_search(query, assessed)
 
     # Compute how many seconds remain in any rate-limit back-off window.
-    paused_seconds = max(0.0, gemini.rate_limited_until - time.monotonic())
+    paused_seconds = max(0.0, assessor.rate_limited_until - time.monotonic())
 
     saved_urls = set(d['url'] for d in database.get_saved_deals())
     for deal in assessed:
@@ -335,8 +339,8 @@ def search():
         'deal_count': len(assessed),
         'deals': assessed,
         'errors': search_errors,
-        'ai_enabled': gemini.enabled and _user_enabled,
-        'ai_rate_limited': gemini.is_rate_limited,
+        'ai_enabled': assessor.enabled and _user_enabled,
+        'ai_rate_limited': assessor.is_rate_limited,
         'ai_paused_seconds': round(paused_seconds),
         'ai_timeout_count': timed_out,
         'data_source': active_source,
@@ -372,15 +376,15 @@ def stats():
 
 @app.route('/api/health')
 def health():
-    paused_seconds = max(0.0, gemini.rate_limited_until - time.monotonic())
+    paused_seconds = max(0.0, assessor.rate_limited_until - time.monotonic())
     data_source_setting = _db_data_source()
     _, active_source = _resolve_engine(data_source_setting)
     return jsonify({
         'status': 'healthy',
-        'ai_enabled': gemini.enabled and _db_ai_user_enabled(),
-        'ai_rate_limited': gemini.is_rate_limited,
+        'ai_enabled': assessor.enabled and _db_ai_user_enabled(),
+        'ai_rate_limited': assessor.is_rate_limited,
         'ai_paused_seconds': round(paused_seconds),
-        'ai_model': gemini.model_name,
+        'ai_model': assessor.model_name,
         'data_source': active_source,
         'data_source_setting': data_source_setting,
         'ebay_api_configured': ebay_api.is_configured,
@@ -397,7 +401,8 @@ def get_settings():
     data_source_setting = _db_data_source()
     _, active_source = _resolve_engine(data_source_setting)
     return jsonify({
-        'gemini_model': gemini.model_name,
+        'ai_provider': database.get_setting("ai_provider") or "gemini",
+        'gemini_model': assessor.model_name,
         'ai_enabled': _db_ai_user_enabled(),
         'data_source': data_source_setting,
         'active_data_source': active_source,
@@ -412,6 +417,7 @@ def get_settings():
 
 @app.route('/api/settings', methods=['POST'])
 def update_settings():
+    global assessor
     data = request.get_json(silent=True)
     if data is None:
         return jsonify({
@@ -435,7 +441,7 @@ def update_settings():
             )
         else:
             try:
-                gemini.model_name = model
+                assessor.model_name = model
                 database.set_setting('gemini_model', model)
                 updated['gemini_model'] = model
                 logger.info("Settings: gemini_model updated to %r", model)
@@ -447,10 +453,30 @@ def update_settings():
         if not isinstance(ai_enabled, bool):
             errors['ai_enabled'] = 'ai_enabled must be a boolean (true or false)'
         else:
-            gemini.user_enabled = ai_enabled
+            assessor.user_enabled = ai_enabled
             database.set_setting('ai_enabled', str(ai_enabled).lower())
             updated['ai_enabled'] = ai_enabled
             logger.info("Settings: ai_enabled updated to %r", ai_enabled)
+
+    if 'ai_provider' in data:
+        provider = str(data['ai_provider']).strip().lower()
+        if provider not in ("gemini", "deepseek"):
+            errors['ai_provider'] = "ai_provider must be 'gemini' or 'deepseek'"
+        else:
+            database.set_setting('ai_provider', provider)
+            assessor = create_assessor(provider)
+            assessor.set_ebay_client(ebay_api)
+            # Restore AI-enabled toggle on the new assessor.
+            _saved_ai = database.get_setting("ai_enabled")
+            if _saved_ai is not None:
+                assessor.user_enabled = str(_saved_ai).lower() == "true"
+            # Restore model if switching to gemini.
+            if provider == "gemini":
+                _saved_model = database.get_setting("gemini_model")
+                if _saved_model:
+                    assessor.model_name = _saved_model
+            updated['ai_provider'] = provider
+            logger.info("Settings: ai_provider updated to %r", provider)
 
     if 'data_source' in data:
         ds = str(data['data_source']).strip().lower()
@@ -470,8 +496,9 @@ def update_settings():
     _, active_source = _resolve_engine(data_source_setting)
     return jsonify({
         'updated': updated,
-        'gemini_model': gemini.model_name,
-        'ai_enabled': gemini.user_enabled,
+        'ai_provider': database.get_setting("ai_provider") or "gemini",
+        'gemini_model': assessor.model_name,
+        'ai_enabled': assessor.user_enabled,
         'data_source': data_source_setting,
         'active_data_source': active_source,
         'ebay_api_configured': ebay_api.is_configured,
