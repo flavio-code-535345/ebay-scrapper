@@ -31,9 +31,9 @@ def client():
 @pytest.fixture(autouse=True)
 def _reset_globals():
     """Reset module-level state between tests."""
-    app.gemini.enabled = False
-    app.gemini.user_enabled = True
-    app.gemini._ebay_client = None
+    app.assessor.enabled = False
+    app.assessor.user_enabled = True
+    app.assessor._ebay_client = None
     yield
 
 
