@@ -17,8 +17,12 @@ from ai_providers.base import (
     _RETRY_BASE_DELAY,
     _SYSTEM_PROMPT,
     BaseAssessor,
+    _apply_garbage_overrides,
     _apply_scam_override,
     _apply_sports_kinect_override,
+    _build_deterministic_garbage,
+    _detect_broken_deal,
+    _detect_trash_title,
     _is_rate_limit_error,
     _is_transient_error,
     _parse_response,
@@ -61,7 +65,13 @@ class GeminiAssessor(BaseAssessor):
     def assess_deal(self, deal: dict) -> dict | None:
         if not self.enabled or not self.user_enabled or self.is_rate_limited:
             return None
-        # First check deterministic rules (sports/Kinect, scam).
+        # 1. Check deterministic rules — garbage first, then sports/Kinect, then scam.
+        broken = _detect_broken_deal(deal)
+        if broken:
+            return _build_deterministic_garbage("Garbage", 100, broken)
+        trash = _detect_trash_title(deal)
+        if trash:
+            return _build_deterministic_garbage("Garbage", 100, trash)
         sr = _detect_sports_kinect_deal(deal)
         if sr:
             return {
@@ -105,6 +115,7 @@ class GeminiAssessor(BaseAssessor):
                 ),
             )
             assessment = _parse_response(response.text)
+            assessment = _apply_garbage_overrides(deal, assessment)
             assessment = _apply_sports_kinect_override(deal, assessment)
             assessment = _apply_scam_override(deal, assessment)
             return assessment
@@ -146,6 +157,7 @@ class GeminiAssessor(BaseAssessor):
             batch_results = self._assess_batch_with_retry(batch)
             for deal, assessment in zip(batch, batch_results):
                 if isinstance(assessment, dict):
+                    assessment = _apply_garbage_overrides(deal, assessment)
                     assessment = _apply_sports_kinect_override(deal, assessment)
                     assessment = _apply_scam_override(deal, assessment)
                 results.append(assessment)

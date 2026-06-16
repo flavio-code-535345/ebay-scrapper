@@ -324,8 +324,63 @@ def _extract_potential_game_titles(title: str) -> list[str]:
     return unique[:_MAX_GAMES_PER_BUNDLE]
 
 
-# ── Sports & Kinect detection (deterministic) ────────────────────────────
+# ── Garbage & trash detection (deterministic) ────────────────────────────
+# These are common-sense rules that identify listings with near-zero or
+# negative resale value, overriding any AI-generated rating.
+#
+# Two tiers:
+#   Tier 1 — Garbage: broken, untested, empty cases, demos, shovelware
+#   Tier 2 — Avoid:  sports/Kinect bundles, low-demand categories
 
+
+# ── Tier 1: Trash title keywords (zero-value garbage) ──────────────────────
+
+_TRASH_TITLE_KEYWORDS_RE = re.compile(
+    r"\b("
+    # Demo discs / promotional items (worthless)
+    r"demo\s+disc|demo\s+volume|playstation\s+underground"
+    r"|official\s+xbox\s+magazine"
+    r"|playstation\s+magazine"
+    # Empty cases / manuals only / no game
+    r"|empty\s+case|leerhülle|ohne\s+(spiel|disk|disc|game)"
+    r"|nur\s+(hülle|case|anleitung|manual)"
+    # Common low-value shovelware & kids licensed trash
+    r"|imagine\s+(babys|fashion|teacher|doctor|mermaid)"
+    r"|carnival\s+(games|king)|family\s+feast"
+    r"|party\s+(superstars|megamix|mania)"
+    r"|game\s+party"
+    r"|rabbids|ray(mans?\s*)?rabbids"
+    r"|barbie|hannah\s+montana|high\s+school\s+musical"
+    r"|disney\s+(channel|infinity|lions|princess|sing(it)?)"
+    r"|hello\s+kitty|my\s+little\s+pony|spongebob"
+    r"|dora\s+(the\s+)?explorer"
+    r"|lego\s+(movie|batman|pirates|rock\s+band|city|friends)(\s+game)?"
+    r"|nintendogs|nintendocats"
+    r"|big\s+game\s+hunter|cabela"
+    r"|fitness\s+(evolution|academy|game|circuit)"
+    r"|your\s+shape|ea\s+sports\s+active"
+    r"|zumba\s+(fitness|party)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+# ── Broken/defective/untested detection (negative-value garbage) ───────────
+
+_BROKEN_KEYWORDS_RE = re.compile(
+    r"\b("
+    r"defekt|kaputt|beschädigt|schaden|reparatur"
+    r"|for\s+parts|as\s*[-]\s*is|not\s+working|untested"
+    r"|ungetestet|ohne\s+gewähr|ohne\s+garantie"
+    r"|verkaufe\s+ohne|keine\s+rücknahme"
+    r"|bastler|nicht\s+getestet"
+    r"|fehlerhaft|zerstört|nur\s+als\s+ersatzteil"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+# ── Tier 2: Sports & Kinect detection (low-value, but not quite garbage) ──
 
 _SPORTS_KINECT_KEYWORDS_RE = re.compile(
     r"\b("
@@ -343,8 +398,10 @@ _SPORTS_KINECT_KEYWORDS_RE = re.compile(
     r"|tour\s+de\s+france"
     r"|just\s+dance"
     r"|dance\s+central"
-    r"|wii\s+sports"
-    r"|wrc\b"
+    r"|wii\s+(sports|play|party|music)"
+    r"|wrc\b|f1\s+\d{4}"
+    r"|wii\s+fit(\s+plus|\s+board)?"
+    r"|singstar|rock\s+band|guitar\s+hero"
     r")\b",
     re.IGNORECASE,
 )
@@ -356,6 +413,55 @@ _SPORTS_KINECT_AVOID_PREFIX = (
     "These titles rarely generate profit and are best avoided unless "
     "the bundle also contains clearly high-value non-sports games."
 )
+
+_GARBAGE_VERDICT_PREFIX = (
+    "🗑️ **GARBAGE — AVOID**: This listing has near-zero or negative resale "
+    "value. These items are effectively worthless on the German secondhand "
+    "market – do not purchase even at a low price, as you will not be able "
+    "to resell them."
+)
+
+
+# ── Detection functions ────────────────────────────────────────────────────
+
+
+def _detect_broken_deal(deal: dict) -> str | None:
+    """Check for defective/broken/untested listings.
+
+    Returns a warning string, or ``None`` if the deal passes.
+    """
+    title = (deal.get("title") or "").strip()
+    description = (deal.get("description") or "").strip()
+    match_title = _BROKEN_KEYWORDS_RE.search(title) if title else None
+    match_desc = _BROKEN_KEYWORDS_RE.search(description) if description else None
+    if not match_title and not match_desc:
+        return None
+    short_title = title[:80] + ("..." if len(title) > 80 else "")
+    return (
+        f"DEFECTIVE/UNTESTED: Item '{short_title}' is listed as defective, "
+        f"untested, or for parts. Such items have zero or negative resale "
+        f"value (cost of disposal). AVOID."
+    )
+
+
+def _detect_trash_title(deal: dict) -> str | None:
+    """Check for title keywords that indicate worthless/garbage items.
+
+    Returns a warning string, or ``None`` if the deal passes.
+    """
+    title = (deal.get("title") or "").strip()
+    if not title:
+        return None
+    match = _TRASH_TITLE_KEYWORDS_RE.search(title)
+    if not match:
+        return None
+    keyword = match.group(0)
+    short_title = title[:80] + ("..." if len(title) > 80 else "")
+    return (
+        f"TRASH CONTENT DETECTED: Title '{short_title}' contains "
+        f"low/zero-value keyword '{keyword}'. This item has near-zero "
+        f"resale value on the German eBay market and should be avoided."
+    )
 
 
 def _detect_sports_kinect_deal(deal: dict) -> str | None:
@@ -380,8 +486,56 @@ def _detect_sports_kinect_deal(deal: dict) -> str | None:
     )
 
 
+# ── Override functions ──────────────────────────────────────────────────────
+
+
+def _apply_garbage_overrides(deal: dict, assessment: dict) -> dict:
+    """Apply deterministic garbage/trash overrides (Tier 1).
+
+    Checks for broken/defective items and trash title keywords first,
+    before sports/Kinect overrides. Sets rating to "Garbage".
+
+    Always returns *assessment* (mutated in-place if overridden).
+    """
+    broken_warning = _detect_broken_deal(deal)
+    if broken_warning:
+        assessment["ai_deal_rating"] = "Garbage"
+        _existing_flags = assessment.get("ai_red_flags")
+        if not isinstance(_existing_flags, list):
+            _existing_flags = []
+        if "Defective/untested: no resale value" not in _existing_flags:
+            assessment["ai_red_flags"] = _existing_flags + [
+                "Defective/untested: no resale value"
+            ]
+        _existing_summary = assessment.get("ai_verdict_summary", "")
+        assessment["ai_verdict_summary"] = (
+            f"{_GARBAGE_VERDICT_PREFIX}\n\n{_existing_summary}"
+            if _existing_summary else _GARBAGE_VERDICT_PREFIX
+        )
+        return assessment
+
+    trash_warning = _detect_trash_title(deal)
+    if trash_warning:
+        assessment["ai_deal_rating"] = "Garbage"
+        _existing_flags = assessment.get("ai_red_flags")
+        if not isinstance(_existing_flags, list):
+            _existing_flags = []
+        if "Low/zero-value content: no resale demand" not in _existing_flags:
+            assessment["ai_red_flags"] = _existing_flags + [
+                "Low/zero-value content: no resale demand"
+            ]
+        _existing_summary = assessment.get("ai_verdict_summary", "")
+        assessment["ai_verdict_summary"] = (
+            f"{_GARBAGE_VERDICT_PREFIX}\n\n{_existing_summary}"
+            if _existing_summary else _GARBAGE_VERDICT_PREFIX
+        )
+        return assessment
+
+    return assessment
+
+
 def _apply_sports_kinect_override(deal: dict, assessment: dict) -> dict:
-    """Apply a deterministic 'Avoid' override for sports/Kinect themed deals.
+    """Apply a deterministic 'Avoid' override for sports/Kinect themed deals (Tier 2).
 
     Always returns *assessment* (mutated in-place if overridden).
     """
@@ -464,6 +618,27 @@ def _apply_scam_override(deal: dict, assessment: dict) -> dict:
     else:
         assessment["ai_verdict_summary"] = scam_prefix
     return assessment
+
+
+# ── Deterministic garbage result builder ────────────────────────────────────
+
+
+def _build_deterministic_garbage(rating: str, confidence: int, summary: str) -> dict:
+    """Build deterministic garbage/trash assessment result (no AI call needed)."""
+    return {
+        "ai_deal_rating": rating,
+        "ai_confidence_score": confidence,
+        "ai_visual_findings": [],
+        "ai_red_flags": [summary],
+        "ai_fair_market_estimate": "",
+        "ai_itemized_resale_estimates": [],
+        "ai_estimated_total_cost": 0,
+        "ai_estimated_gross_profit": 0,
+        "ai_verdict_summary": _GARBAGE_VERDICT_PREFIX + "\n\n" + summary,
+        "ai_assessed": True,
+        "ai_potential_scam": False,
+        "ai_scam_warning": "",
+    }
 
 
 # ── Response parsing (shared) ─────────────────────────────────────────────
