@@ -9,7 +9,7 @@ filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.ruff]
 target-version = "py311"
-line-length = 100
+line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP"]
