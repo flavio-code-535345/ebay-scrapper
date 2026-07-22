@@ -39,6 +39,14 @@ _EBAY_MAX_WORKERS = 5
 _rate_limit_lock = threading.Lock()
 _rate_limited_until: float = 0.0
 
+
+def _set_rate_limited_until(until: float) -> None:
+    """Update the shared rate-limit clock (thread-safe)."""
+    global _rate_limited_until
+    with _rate_limit_lock:
+        _rate_limited_until = until
+
+
 _JSON_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
@@ -129,9 +137,7 @@ _AGGREGATE_PLACEHOLDER_RE = re.compile(
     r"|^rest\s+(of\s+)?(titles?|games?|spiele?|titel|items?)",
     re.IGNORECASE,
 )
-_AGGREGATE_PLACEHOLDER_TOKENS = frozenset(
-    {"etc.", "etc", "...", "u.a.", "usw.", "and more", "und mehr"}
-)
+_AGGREGATE_PLACEHOLDER_TOKENS = frozenset({"etc.", "etc", "...", "u.a.", "usw.", "and more", "und mehr"})
 
 
 def _is_aggregate_placeholder(game_name: str) -> bool:
@@ -154,10 +160,7 @@ def _is_rate_limit_error(exc: Exception) -> bool:
 
 def _is_transient_error(exc: Exception) -> bool:
     msg = str(exc).lower()
-    return any(
-        kw in msg
-        for kw in ("timeout", "connection", "reset", "unavailable", "503", "500")
-    )
+    return any(kw in msg for kw in ("timeout", "connection", "reset", "unavailable", "503", "500"))
 
 
 def _parse_retry_delay(exc: Exception) -> float | None:
@@ -504,13 +507,10 @@ def _apply_garbage_overrides(deal: dict, assessment: dict) -> dict:
         if not isinstance(_existing_flags, list):
             _existing_flags = []
         if "Defective/untested: no resale value" not in _existing_flags:
-            assessment["ai_red_flags"] = _existing_flags + [
-                "Defective/untested: no resale value"
-            ]
+            assessment["ai_red_flags"] = _existing_flags + ["Defective/untested: no resale value"]
         _existing_summary = assessment.get("ai_verdict_summary", "")
         assessment["ai_verdict_summary"] = (
-            f"{_GARBAGE_VERDICT_PREFIX}\n\n{_existing_summary}"
-            if _existing_summary else _GARBAGE_VERDICT_PREFIX
+            f"{_GARBAGE_VERDICT_PREFIX}\n\n{_existing_summary}" if _existing_summary else _GARBAGE_VERDICT_PREFIX
         )
         return assessment
 
@@ -521,13 +521,10 @@ def _apply_garbage_overrides(deal: dict, assessment: dict) -> dict:
         if not isinstance(_existing_flags, list):
             _existing_flags = []
         if "Low/zero-value content: no resale demand" not in _existing_flags:
-            assessment["ai_red_flags"] = _existing_flags + [
-                "Low/zero-value content: no resale demand"
-            ]
+            assessment["ai_red_flags"] = _existing_flags + ["Low/zero-value content: no resale demand"]
         _existing_summary = assessment.get("ai_verdict_summary", "")
         assessment["ai_verdict_summary"] = (
-            f"{_GARBAGE_VERDICT_PREFIX}\n\n{_existing_summary}"
-            if _existing_summary else _GARBAGE_VERDICT_PREFIX
+            f"{_GARBAGE_VERDICT_PREFIX}\n\n{_existing_summary}" if _existing_summary else _GARBAGE_VERDICT_PREFIX
         )
         return assessment
 
@@ -547,14 +544,10 @@ def _apply_sports_kinect_override(deal: dict, assessment: dict) -> dict:
     if not isinstance(existing_flags, list):
         existing_flags = []
     if "Sports/Kinect content: low resale value" not in existing_flags:
-        assessment["ai_red_flags"] = existing_flags + [
-            "Sports/Kinect content: low resale value"
-        ]
+        assessment["ai_red_flags"] = existing_flags + ["Sports/Kinect content: low resale value"]
     existing_summary = assessment.get("ai_verdict_summary", "")
     if existing_summary:
-        assessment["ai_verdict_summary"] = (
-            f"{_SPORTS_KINECT_AVOID_PREFIX}\n\n{existing_summary}"
-        )
+        assessment["ai_verdict_summary"] = f"{_SPORTS_KINECT_AVOID_PREFIX}\n\n{existing_summary}"
     else:
         assessment["ai_verdict_summary"] = _SPORTS_KINECT_AVOID_PREFIX
     return assessment
@@ -763,27 +756,31 @@ def _parse_batch_response(text: str, expected_count: int) -> list[dict]:
                     price_eur = 0.0
                 price_source = str(entry.get("price_source") or "ai_estimate")
                 is_exceptional = bool(entry.get("is_exceptional", False))
-                filtered_itemized.append({
-                    "game": game_name,
-                    "price_eur": round(price_eur, 2),
-                    "price_source": price_source,
-                    "is_exceptional": is_exceptional,
-                })
+                filtered_itemized.append(
+                    {
+                        "game": game_name,
+                        "price_eur": round(price_eur, 2),
+                        "price_source": price_source,
+                        "is_exceptional": is_exceptional,
+                    }
+                )
         err = _DEFAULT_PARSE_ERROR
-        results.append({
-            "ai_deal_rating": item_data.get("deal_rating", "Unknown"),
-            "ai_confidence_score": confidence,
-            "ai_visual_findings": item_data.get("visual_findings", err["ai_visual_findings"]),
-            "ai_red_flags": item_data.get("red_flags", err["ai_red_flags"]),
-            "ai_fair_market_estimate": item_data.get("fair_market_estimate", err["ai_fair_market_estimate"]),
-            "ai_itemized_resale_estimates": filtered_itemized,
-            "ai_estimated_total_cost": total_cost,
-            "ai_estimated_gross_profit": gross_profit,
-            "ai_verdict_summary": item_data.get("verdict_summary", err["ai_verdict_summary"]),
-            "ai_assessed": True,
-            "ai_potential_scam": potential_scam,
-            "ai_scam_warning": item_data.get("scam_warning", err["ai_scam_warning"]),
-        })
+        results.append(
+            {
+                "ai_deal_rating": item_data.get("deal_rating", "Unknown"),
+                "ai_confidence_score": confidence,
+                "ai_visual_findings": item_data.get("visual_findings", err["ai_visual_findings"]),
+                "ai_red_flags": item_data.get("red_flags", err["ai_red_flags"]),
+                "ai_fair_market_estimate": item_data.get("fair_market_estimate", err["ai_fair_market_estimate"]),
+                "ai_itemized_resale_estimates": filtered_itemized,
+                "ai_estimated_total_cost": total_cost,
+                "ai_estimated_gross_profit": gross_profit,
+                "ai_verdict_summary": item_data.get("verdict_summary", err["ai_verdict_summary"]),
+                "ai_assessed": True,
+                "ai_potential_scam": potential_scam,
+                "ai_scam_warning": item_data.get("scam_warning", err["ai_scam_warning"]),
+            }
+        )
     while len(results) < expected_count:
         results.append(dict(_DEFAULT_PARSE_ERROR))
     return results
@@ -901,7 +898,10 @@ class BaseAssessor:
             return
         logger.info(
             "GeminiAssessor: eBay prefetch: %d unique queries (%d cached, %d to fetch, ≤%ds budget).",
-            len(all_queries), len(all_queries) - len(uncached), len(uncached), _EBAY_PREFETCH_BUDGET_S,
+            len(all_queries),
+            len(all_queries) - len(uncached),
+            len(uncached),
+            _EBAY_PREFETCH_BUDGET_S,
         )
 
         def _fetch_one(query: str) -> tuple[str, float | None, str]:
@@ -927,13 +927,17 @@ class BaseAssessor:
         if not_done:
             logger.warning(
                 "GeminiAssessor: eBay prefetch budget (%.0fs) exhausted; %d/%d queries did not complete.",
-                _EBAY_PREFETCH_BUDGET_S, len(not_done), len(uncached),
+                _EBAY_PREFETCH_BUDGET_S,
+                len(not_done),
+                len(uncached),
             )
         elapsed = time.monotonic() - t0
         found = sum(1 for q in all_queries if (self._cached_ebay_price(q) or (None,))[0] is not None)
         logger.info(
             "GeminiAssessor: eBay prefetch done in %.1fs: %d/%d prices found.",
-            elapsed, found, len(all_queries),
+            elapsed,
+            found,
+            len(all_queries),
         )
 
     def _fetch_ebay_prices_for_bundle(self, deal: dict) -> list[dict]:
@@ -961,11 +965,13 @@ class BaseAssessor:
                     price, source = None, "no_result"
             if price is not None:
                 price_source = "ebay_sold" if source == "sold_listings" else "ebay_active"
-                results.append({
-                    "game": game,
-                    "price_eur": round(price, 2),
-                    "price_source": price_source,
-                })
+                results.append(
+                    {
+                        "game": game,
+                        "price_eur": round(price, 2),
+                        "price_source": price_source,
+                    }
+                )
             else:
                 results.append({"game": game, "price_eur": None, "price_source": "no_result"})
         return results

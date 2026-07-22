@@ -149,6 +149,7 @@ class TestEbayScraper:
     def test_extract_condition_with_text(self, scraper):
         """_extract_condition falls back to keyword matching."""
         from bs4 import BeautifulSoup
+
         html = '<span class="x">Gebraucht - Akzeptabler Zustand</span>'
         soup = BeautifulSoup(html, "html.parser")
         condition = scraper._extract_condition(soup)

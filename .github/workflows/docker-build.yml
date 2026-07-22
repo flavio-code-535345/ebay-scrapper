@@ -23,11 +23,12 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install dependencies
-        run: |
-          pip install ruff
+      - name: Install tooling
+        run: pip install "ruff>=0.8.0"
       - name: Lint with ruff
         run: ruff check .
+      - name: Format check with ruff
+        run: ruff format --check .
 
   test:
     needs: lint
@@ -39,10 +40,9 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt -r requirements-dev.txt
-      - name: Run tests
-        run: python -m pytest -v --tb=short
+        run: pip install -r requirements-dev.txt
+      - name: Run tests with coverage
+        run: python -m pytest -v --tb=short --cov --cov-report=term-missing
         env:
           GEMINI_API_KEY: ""
           EBAY_CLIENT_ID: ""

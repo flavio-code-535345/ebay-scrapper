@@ -17,21 +17,21 @@ logger = logging.getLogger(__name__)
 
 # German condition keywords used on ebay.de for best-effort text matching
 _DE_CONDITION_KEYWORDS = [
-    'Neu',
-    'Gebraucht',
-    'Generalüberholt',
-    'Akzeptabler Zustand',
-    'Sehr guter Zustand',
-    'Guter Zustand',
-    'Für Ersatzteile',
-    'Zustand:',
+    "Neu",
+    "Gebraucht",
+    "Generalüberholt",
+    "Akzeptabler Zustand",
+    "Sehr guter Zustand",
+    "Guter Zustand",
+    "Für Ersatzteile",
+    "Zustand:",
 ]
 
 # German shipping keywords
-_DE_SHIPPING_KEYWORDS = ['versand', 'lieferung', 'kostenlos', 'gratis', 'free']
+_DE_SHIPPING_KEYWORDS = ["versand", "lieferung", "kostenlos", "gratis", "free"]
 
 # German / eBay trending / popularity keywords
-_DE_TRENDING_KEYWORDS = {'beliebt', 'sehr beliebt', 'angesagt', 'hot', 'trending'}
+_DE_TRENDING_KEYWORDS = {"beliebt", "sehr beliebt", "angesagt", "hot", "trending"}
 
 # Maximum text length thresholds used to avoid accidentally matching large wrapper text
 _MAX_CONDITION_TEXT_LEN = 80
@@ -42,24 +42,24 @@ _MAX_SHIPPING_TEXT_LEN = 100
 # Listings with these phrases are NOT fixed-price bundles and are excluded.
 _VARIANT_TEXT_PATTERNS = [
     # German
-    'mehrere ausführungen',
-    'ausführung wählen',
-    'farbe wählen',
-    'größe wählen',
-    'modell wählen',
-    'variante wählen',
-    'auswahl treffen',
-    'variation verfügbar',
-    'varianten verfügbar',
+    "mehrere ausführungen",
+    "ausführung wählen",
+    "farbe wählen",
+    "größe wählen",
+    "modell wählen",
+    "variante wählen",
+    "auswahl treffen",
+    "variation verfügbar",
+    "varianten verfügbar",
     # English (fallback for mixed-language results)
-    'available in multiple',
-    'choose your',
-    'select a color',
-    'select a size',
-    'select your',
-    'color:',
-    'size:',
-    'style:',
+    "available in multiple",
+    "choose your",
+    "select a color",
+    "select a size",
+    "select your",
+    "color:",
+    "size:",
+    "style:",
 ]
 
 # Maximum text length when scanning for variant text patterns.
@@ -68,32 +68,34 @@ _MAX_VARIANT_TEXT_LEN = 80
 # eBay injects short badge/label spans directly inside the title element.
 # These must be stripped out to recover the actual listing title.
 # All entries must be lower-cased for case-insensitive comparison.
-_TITLE_NOISE_PHRASES = frozenset({
-    'neues angebot',        # "New Listing" badge – German
-    'new listing',          # "New Listing" badge – English
-    'gesponsert',           # "Sponsored" badge – German
-    'sponsored',            # "Sponsored" badge – English
-    'top-rated plus',
-    'top-bewerteter anbieter',
-})
+_TITLE_NOISE_PHRASES = frozenset(
+    {
+        "neues angebot",  # "New Listing" badge – German
+        "new listing",  # "New Listing" badge – English
+        "gesponsert",  # "Sponsored" badge – German
+        "sponsored",  # "Sponsored" badge – English
+        "top-rated plus",
+        "top-bewerteter anbieter",
+    }
+)
 
 # Regex that matches eBay CDN image URL size codes indicating very low resolution
 # (below 230 px wide) – e.g. ``s-l140``, ``s-l225``.  These are often placeholder
 # thumbnails rather than real product shots.
-_LOW_RES_URL_RE = re.compile(r's-l(1[0-9]{2}|2[0-2][0-9])\b')
+_LOW_RES_URL_RE = re.compile(r"s-l(1[0-9]{2}|2[0-2][0-9])\b")
 
 
 class EbayScraper:
     def __init__(self):
         self.base_url = "https://www.ebay.de/sch/i.html"
         self.headers = {
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/122.0.0.0 Safari/537.36'
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
             ),
-            'Accept-Language': 'de-DE,de;q=0.9,en;q=0.8',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
         self.session = requests.Session()
         _proxy = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or ""
@@ -115,23 +117,21 @@ class EbayScraper:
 
         try:
             params = {
-                '_nkw': query,
-                '_sop': '12',  # Sort by newly listed
-                'LH_ItemCondition': '3000|3000|1000',  # All conditions
+                "_nkw": query,
+                "_sop": "12",  # Sort by newly listed
+                "LH_ItemCondition": "3000|3000|1000",  # All conditions
                 # LH_ItemLocation=1 restricts search results to items physically
                 # located in Germany (the same country as the ebay.de domain).
                 # This ensures that deals originate from German sellers/warehouses
                 # and not from international sellers who ship to Germany.
-                'LH_ItemLocation': '1',
-                'rt': 'nc'
+                "LH_ItemLocation": "1",
+                "rt": "nc",
             }
 
             logger.info("Searching eBay for %r (max_results=%d)", query, max_results)
 
             try:
-                response = self.session.get(
-                    self.base_url, params=params, headers=self.headers, timeout=10
-                )
+                response = self.session.get(self.base_url, params=params, headers=self.headers, timeout=10)
             except requests.exceptions.Timeout:
                 msg = "HTTP request timed out after 10 seconds"
                 logger.error(msg)
@@ -161,7 +161,7 @@ class EbayScraper:
                     )
                 return [], errors
 
-            soup = BeautifulSoup(response.content, 'html.parser')
+            soup = BeautifulSoup(response.content, "html.parser")
             deals: list[dict] = []
 
             # ── Selector strategy ─────────────────────────────────────────────
@@ -170,24 +170,24 @@ class EbayScraper:
             # of increasingly broad selectors and log which one fired.
 
             # 1. Primary: class-based s-item selector (covers li AND div variants)
-            items = soup.select('li.s-item, div.s-item')
-            selector_used = 'li.s-item / div.s-item'
+            items = soup.select("li.s-item, div.s-item")
+            selector_used = "li.s-item / div.s-item"
 
             if not items:
                 # 2. Fallback A: any direct <li> children of the srp-results
                 #    container that contain a product link.  This handles the
                 #    case where eBay removed or renamed the s-item class while
                 #    keeping the overall srp-results wrapper intact.
-                srp_container = soup.find(class_='srp-results')
+                srp_container = soup.find(class_="srp-results")
                 if srp_container:
-                    candidate_lis = srp_container.find_all('li', recursive=False)
+                    candidate_lis = srp_container.find_all("li", recursive=False)
                     items = [
-                        li for li in candidate_lis
-                        if li.find('a', class_='s-item__link')
-                        or li.find('a', href=lambda h: h and '/itm/' in h)
+                        li
+                        for li in candidate_lis
+                        if li.find("a", class_="s-item__link") or li.find("a", href=lambda h: h and "/itm/" in h)
                     ]
                     if items:
-                        selector_used = 'srp-results > li (fallback A)'
+                        selector_used = "srp-results > li (fallback A)"
                         logger.warning(
                             "Primary 's-item' selector returned 0 results; "
                             "fell back to 'srp-results > li' — eBay likely changed "
@@ -198,9 +198,9 @@ class EbayScraper:
             if not items:
                 # 3. Fallback B: any element (any tag) carrying the s-item__wrapper
                 #    class, which has been stable across several eBay redesigns.
-                items = soup.select('.s-item__wrapper')
+                items = soup.select(".s-item__wrapper")
                 if items:
-                    selector_used = '.s-item__wrapper (fallback B)'
+                    selector_used = ".s-item__wrapper (fallback B)"
                     logger.warning(
                         "Fell back to '.s-item__wrapper' selector — eBay may have "
                         "changed their markup.  This is a selector/markup issue, NOT "
@@ -209,19 +209,16 @@ class EbayScraper:
 
             logger.info(
                 "BeautifulSoup found %d raw item elements (selector: %s)",
-                len(items), selector_used,
+                len(items),
+                selector_used,
             )
 
             if not items:
                 # Gather diagnostic context so developers can tell whether the
                 # page loaded at all vs. the selectors simply no longer match.
-                srp_container = soup.find(class_='srp-results')
-                page_title = (
-                    soup.title.string.strip()
-                    if soup.title and soup.title.string
-                    else "(no <title>)"
-                )
-                html_preview = response.text[:300].replace('\n', ' ')
+                srp_container = soup.find(class_="srp-results")
+                page_title = soup.title.string.strip() if soup.title and soup.title.string else "(no <title>)"
+                html_preview = response.text[:300].replace("\n", " ")
 
                 if srp_container:
                     diag = (
@@ -235,7 +232,7 @@ class EbayScraper:
                 else:
                     diag = (
                         f"No 'srp-results' container and no item elements were found. "
-                        f"Page title: \"{page_title}\". "
+                        f'Page title: "{page_title}". '
                         f"eBay may have significantly restructured their search results page "
                         f"or returned an unexpected page (CAPTCHA, login wall, etc.)."
                     )
@@ -290,10 +287,10 @@ class EbayScraper:
             # as child elements inside the title wrapper – strip those out so only
             # the real listing name is kept.
             title_elem = (
-                item_element.select_one('.s-item__title')
+                item_element.select_one(".s-item__title")
                 or item_element.select_one('[data-testid="item-card-title"]')  # newer eBay layout
-                or item_element.find('h3')
-                or item_element.find('h2')
+                or item_element.find("h3")
+                or item_element.find("h2")
             )
             if title_elem:
                 # Join all non-empty text nodes, skipping known eBay badge labels.
@@ -302,7 +299,7 @@ class EbayScraper:
                     stripped = s.strip()
                     if stripped and stripped.lower() not in _TITLE_NOISE_PHRASES:
                         title_parts.append(stripped)
-                title = ' '.join(title_parts).strip()
+                title = " ".join(title_parts).strip()
                 if not title:
                     title = "Unknown"
             else:
@@ -320,11 +317,9 @@ class EbayScraper:
 
             # Extract price – try stable class first, then any element containing
             # a currency symbol (€ for ebay.de, $ for .com).
-            price_elem = item_element.find(class_='s-item__price')
+            price_elem = item_element.find(class_="s-item__price")
             if not price_elem:
-                price_elem = item_element.find(
-                    'span', string=lambda s: s and ('€' in s or 'EUR' in s or '$' in s)
-                )
+                price_elem = item_element.find("span", string=lambda s: s and ("€" in s or "EUR" in s or "$" in s))
             price_text = price_elem.text.strip() if price_elem else "€0,00"
             price = self._parse_price(price_text)
 
@@ -336,11 +331,10 @@ class EbayScraper:
 
             # Extract item URL – try the dedicated link class first, then any
             # anchor that points to an individual eBay listing page (/itm/).
-            link_elem = (
-                item_element.find('a', class_='s-item__link')
-                or item_element.find('a', href=lambda h: h and '/itm/' in h)
+            link_elem = item_element.find("a", class_="s-item__link") or item_element.find(
+                "a", href=lambda h: h and "/itm/" in h
             )
-            item_url = link_elem.get('href', '') if link_elem else ""
+            item_url = link_elem.get("href", "") if link_elem else ""
 
             # Extract shipping cost (Versand) with multiple fallback strategies.
             shipping = self._extract_shipping(item_element)
@@ -358,19 +352,19 @@ class EbayScraper:
             item_location = self._extract_item_location(item_element)
 
             return {
-                'title': title,
-                'price': price,
-                'condition': condition,
-                'seller_rating': seller_rating,
-                'url': item_url,
-                'shipping': shipping,
-                'is_trending': is_trending,
+                "title": title,
+                "price": price,
+                "condition": condition,
+                "seller_rating": seller_rating,
+                "url": item_url,
+                "shipping": shipping,
+                "is_trending": is_trending,
                 # Physical location of the item (e.g. "DE" or city name).
                 # With LH_ItemLocation=1 all results should be Germany-based.
-                'item_location': item_location,
-                'image_urls': image_urls,
-                'image_issues': image_issues,
-                'timestamp': time.time()
+                "item_location": item_location,
+                "image_urls": image_urls,
+                "image_issues": image_issues,
+                "timestamp": time.time(),
             }
 
         except Exception as exc:
@@ -383,9 +377,9 @@ class EbayScraper:
         """Extract item condition (Zustand) using a cascade of strategies."""
         # 1. Known class names (stable across several eBay layouts)
         elem = (
-            item_element.find(class_='SECONDARY_INFO')
+            item_element.find(class_="SECONDARY_INFO")
             or item_element.select_one('[class*="SECONDARY_INFO"]')
-            or item_element.find(class_='s-item__subtitle')
+            or item_element.find(class_="s-item__subtitle")
             or item_element.select_one('[class*="subtitle"]')
             or item_element.select_one('[class*="condition"]')
             or item_element.select_one('[class*="Condition"]')
@@ -397,7 +391,7 @@ class EbayScraper:
                 return text
 
         # 2. Text-based search for German condition keywords
-        for node in item_element.find_all(['span', 'div', 'li']):
+        for node in item_element.find_all(["span", "div", "li"]):
             text = node.text.strip()
             # Guard against pulling in large wrapper text
             if len(text) > _MAX_CONDITION_TEXT_LEN:
@@ -414,8 +408,8 @@ class EbayScraper:
         """Extract seller rating percentage using a cascade of strategies."""
         # 1. Known class names
         seller_elem = (
-            item_element.find(class_='s-item__seller-info-text')
-            or item_element.find(class_='s-item__seller-info')
+            item_element.find(class_="s-item__seller-info-text")
+            or item_element.find(class_="s-item__seller-info")
             or item_element.select_one('[class*="seller-info"]')
             or item_element.select_one('[class*="sellerInfo"]')
         )
@@ -426,14 +420,14 @@ class EbayScraper:
                 return rating
 
         # 2. Regex search for a percentage value in any short span/div.
-        for node in item_element.find_all(['span', 'div']):
+        for node in item_element.find_all(["span", "div"]):
             text = node.text.strip()
-            if len(text) > _MAX_SELLER_TEXT_LEN or '%' not in text:
+            if len(text) > _MAX_SELLER_TEXT_LEN or "%" not in text:
                 continue
-            match = re.search(r'(\d{1,3}(?:[.,]\d+)?)\s*%', text)
+            match = re.search(r"(\d{1,3}(?:[.,]\d+)?)\s*%", text)
             if match:
                 try:
-                    rating = float(match.group(1).replace(',', '.'))
+                    rating = float(match.group(1).replace(",", "."))
                     if 0 < rating <= 100:
                         logger.debug("seller rating via regex: %.1f%%", rating)
                         return rating
@@ -447,8 +441,8 @@ class EbayScraper:
         """Extract shipping cost (Versand) using a cascade of strategies."""
         # 1. Known class names
         shipping_elem = (
-            item_element.find(class_='s-item__shipping')
-            or item_element.find(class_='s-item__logisticsCost')
+            item_element.find(class_="s-item__shipping")
+            or item_element.find(class_="s-item__logisticsCost")
             or item_element.select_one('[class*="shipping"]')
             or item_element.select_one('[class*="logisticsCost"]')
             or item_element.select_one('[class*="Shipping"]')
@@ -460,7 +454,7 @@ class EbayScraper:
                 return text
 
         # 2. Text-based search for German shipping keywords
-        for node in item_element.find_all(['span', 'div']):
+        for node in item_element.find_all(["span", "div"]):
             text = node.text.strip()
             if len(text) > _MAX_SHIPPING_TEXT_LEN:
                 continue
@@ -477,8 +471,8 @@ class EbayScraper:
         """Detect trending / popular status using a cascade of strategies."""
         # 1. Known class names
         if (
-            item_element.find(class_='SHOP_NEW_TAG')
-            or item_element.find(class_='s-item__trending-price')
+            item_element.find(class_="SHOP_NEW_TAG")
+            or item_element.find(class_="s-item__trending-price")
             or item_element.select_one('[class*="trending"]')
             or item_element.select_one('[class*="TRENDING"]')
             or item_element.select_one('[class*="hot"]')
@@ -487,7 +481,7 @@ class EbayScraper:
             return True
 
         # 2. Text-based search for German popularity keywords
-        for node in item_element.find_all(['span', 'div', 'mark', 'strong']):
+        for node in item_element.find_all(["span", "div", "mark", "strong"]):
             text = node.text.strip().lower()
             if text in _DE_TRENDING_KEYWORDS:
                 logger.debug("trending via keyword: %r", text)
@@ -504,16 +498,16 @@ class EbayScraper:
         urls: list[str] = []
         seen: set = set()
 
-        for img in item_element.find_all('img'):
-            for attr in ('src', 'data-src', 's-src'):
-                url = img.get(attr, '').strip()
+        for img in item_element.find_all("img"):
+            for attr in ("src", "data-src", "s-src"):
+                url = img.get(attr, "").strip()
                 if (
                     url
-                    and url.startswith('http')
+                    and url.startswith("http")
                     and url not in seen
                     # Skip eBay placeholder / spacer images (GIF files)
-                    and not url.lower().endswith('.gif')
-                    and 's-l' in url  # eBay image CDN pattern (e.g. s-l500, s-l1600)
+                    and not url.lower().endswith(".gif")
+                    and "s-l" in url  # eBay image CDN pattern (e.g. s-l500, s-l1600)
                 ):
                     seen.add(url)
                     urls.append(url)
@@ -533,8 +527,8 @@ class EbayScraper:
         """
         # 1. CSS class signals used by eBay to mark variation/variant listings.
         if (
-            item_element.find(class_='s-item__variations')
-            or item_element.find(class_='s-item__variants-button')
+            item_element.find(class_="s-item__variations")
+            or item_element.find(class_="s-item__variants-button")
             or item_element.select_one('[class*="variations"]')
             or item_element.select_one('[class*="variant"]')
         ):
@@ -542,20 +536,18 @@ class EbayScraper:
             return True
 
         # 2. Rendered <select> dropdown elements inside the card.
-        if item_element.find('select'):
+        if item_element.find("select"):
             logger.debug("Dropdown/variant detected via <select> element")
             return True
 
         # 3. Text-based signals (German + English) for short inline elements.
-        for node in item_element.find_all(['span', 'div', 'a']):
+        for node in item_element.find_all(["span", "div", "a"]):
             text = node.get_text(strip=True).lower()
             if not text or len(text) > _MAX_VARIANT_TEXT_LEN:
                 continue
             for phrase in _VARIANT_TEXT_PATTERNS:
                 if phrase in text:
-                    logger.debug(
-                        "Dropdown/variant detected via text phrase %r: %r", phrase, text
-                    )
+                    logger.debug("Dropdown/variant detected via text phrase %r: %r", phrase, text)
                     return True
 
         return False
@@ -586,7 +578,7 @@ class EbayScraper:
         an empty string when no location data is found on the card.
         """
         # 1. Known class names used by eBay for item location on search cards.
-        for cls in ('s-item__location', 's-item__itemLocation'):
+        for cls in ("s-item__location", "s-item__itemLocation"):
             elem = item_element.find(class_=cls)
             if elem:
                 text = elem.get_text(strip=True)
@@ -595,13 +587,13 @@ class EbayScraper:
                     return text
 
         # 2. Text search: look for "Standort:" label in short elements.
-        for node in item_element.find_all(['span', 'div']):
+        for node in item_element.find_all(["span", "div"]):
             text = node.get_text(strip=True)
             if len(text) > 80:
                 continue
             lower = text.lower()
-            if lower.startswith('standort:') or lower.startswith('item location:'):
-                location = text.split(':', 1)[-1].strip()
+            if lower.startswith("standort:") or lower.startswith("item location:"):
+                location = text.split(":", 1)[-1].strip()
                 if location:
                     logger.debug("item_location via text: %r", location)
                     return location
@@ -615,24 +607,24 @@ class EbayScraper:
         number formatting (period as thousands separator, comma as decimal)."""
         try:
             # Strip currency labels and surrounding whitespace
-            clean = price_str.replace('EUR', '').replace('€', '').replace('$', '').strip()
+            clean = price_str.replace("EUR", "").replace("€", "").replace("$", "").strip()
             # Take only the first price token (handles ranges like "10,00 bis 20,00")
             clean = clean.split()[0]
             # Detect German number format: has both '.' and ',' with ',' last
-            if ',' in clean and '.' in clean:
-                last_comma = clean.rindex(',')
-                last_dot = clean.rindex('.')
+            if "," in clean and "." in clean:
+                last_comma = clean.rindex(",")
+                last_dot = clean.rindex(".")
                 if last_comma > last_dot:
                     # German: "1.234,56" → remove '.', replace ',' with '.'
-                    clean = clean.replace('.', '').replace(',', '.')
+                    clean = clean.replace(".", "").replace(",", ".")
                 else:
                     # English: "1,234.56" → remove ','
-                    clean = clean.replace(',', '')
-            elif ',' in clean:
+                    clean = clean.replace(",", "")
+            elif "," in clean:
                 # Only comma: German decimal "12,99" → "12.99"
-                clean = clean.replace(',', '.')
+                clean = clean.replace(",", ".")
             # Remove any remaining non-numeric characters except '.' and '-'
-            clean = re.sub(r'[^\d.\-]', '', clean)
+            clean = re.sub(r"[^\d.\-]", "", clean)
             return float(clean)
         except Exception:
             return 0.0
@@ -640,10 +632,10 @@ class EbayScraper:
     def _parse_seller_rating(self, seller_str: str) -> float:
         """Extract seller rating percentage from a seller info string."""
         try:
-            if '%' in seller_str:
-                match = re.search(r'(\d{1,3}(?:[.,]\d+)?)\s*%', seller_str)
+            if "%" in seller_str:
+                match = re.search(r"(\d{1,3}(?:[.,]\d+)?)\s*%", seller_str)
                 if match:
-                    return float(match.group(1).replace(',', '.'))
+                    return float(match.group(1).replace(",", "."))
             return 0.0
         except Exception:
             return 0.0
@@ -655,13 +647,13 @@ class EbayScraper:
             logger.info("get_item_details HTTP %d %s", response.status_code, response.reason)
             response.raise_for_status()
 
-            soup = BeautifulSoup(response.content, 'html.parser')
+            soup = BeautifulSoup(response.content, "html.parser")
 
             details = {
-                'views': self._extract_views(soup),
-                'watchers': self._extract_watchers(soup),
-                'sold_count': self._extract_sold_count(soup),
-                'time_listed': self._extract_time_listed(soup)
+                "views": self._extract_views(soup),
+                "watchers": self._extract_watchers(soup),
+                "sold_count": self._extract_sold_count(soup),
+                "time_listed": self._extract_time_listed(soup),
             }
 
             time.sleep(random.uniform(1, 2))
@@ -674,9 +666,9 @@ class EbayScraper:
     def _extract_views(self, soup) -> int:
         """Extract view count from item page"""
         try:
-            views_elem = soup.find('span', string=lambda s: s and 'views' in s.lower())
+            views_elem = soup.find("span", string=lambda s: s and "views" in s.lower())
             if views_elem:
-                count = views_elem.text.split()[0].replace(',', '')
+                count = views_elem.text.split()[0].replace(",", "")
                 return int(count)
         except Exception:
             pass
@@ -685,9 +677,9 @@ class EbayScraper:
     def _extract_watchers(self, soup) -> int:
         """Extract watcher count from item page"""
         try:
-            watchers_elem = soup.find('span', string=lambda s: s and 'watchers' in s.lower())
+            watchers_elem = soup.find("span", string=lambda s: s and "watchers" in s.lower())
             if watchers_elem:
-                count = watchers_elem.text.split()[0].replace(',', '')
+                count = watchers_elem.text.split()[0].replace(",", "")
                 return int(count)
         except Exception:
             pass
@@ -696,9 +688,9 @@ class EbayScraper:
     def _extract_sold_count(self, soup) -> int:
         """Extract sold count from item page"""
         try:
-            sold_elem = soup.find('span', string=lambda s: s and 'sold' in s.lower())
+            sold_elem = soup.find("span", string=lambda s: s and "sold" in s.lower())
             if sold_elem:
-                count = sold_elem.text.split()[0].replace(',', '')
+                count = sold_elem.text.split()[0].replace(",", "")
                 return int(count)
         except Exception:
             pass
@@ -707,7 +699,7 @@ class EbayScraper:
     def _extract_time_listed(self, soup) -> str:
         """Extract when item was listed"""
         try:
-            time_elem = soup.find('span', string=lambda s: s and 'listed' in s.lower())
+            time_elem = soup.find("span", string=lambda s: s and "listed" in s.lower())
             if time_elem:
                 return time_elem.text.strip()
         except Exception:

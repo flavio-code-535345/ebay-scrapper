@@ -116,8 +116,7 @@ class EbayApiClient:
         _locale = _MARKETPLACE_LOCALE_MAP.get(self.marketplace_id)
         if _locale is None:
             logger.warning(
-                "Unknown EBAY_MARKETPLACE_ID %r — falling back to EBAY_DE locale. "
-                "Supported marketplaces: %s",
+                "Unknown EBAY_MARKETPLACE_ID %r — falling back to EBAY_DE locale. Supported marketplaces: %s",
                 self.marketplace_id,
                 ", ".join(sorted(_MARKETPLACE_LOCALE_MAP)),
             )
@@ -140,7 +139,11 @@ class EbayApiClient:
 
         logger.info(
             "EbayApiClient: marketplace=%s locale=%s language=%s country=%s env=%s",
-            self.marketplace_id, self.locale, self.accept_language, self.delivery_country, env,
+            self.marketplace_id,
+            self.locale,
+            self.accept_language,
+            self.delivery_country,
+            env,
         )
 
     # ── Public interface ───────────────────────────────────────────────────
@@ -198,10 +201,7 @@ class EbayApiClient:
         #   deliveryCountry     — additionally restricts to items that ship to the
         #                         target country, preventing cross-border listings
         #                         that technically deliver to DE but originate abroad.
-        api_filter = (
-            f"itemLocationCountry:{self.delivery_country},"
-            f"deliveryCountry:{self.delivery_country}"
-        )
+        api_filter = f"itemLocationCountry:{self.delivery_country},deliveryCountry:{self.delivery_country}"
         params = {
             "q": query,
             "limit": min(max(1, max_results), 200),
@@ -225,7 +225,10 @@ class EbayApiClient:
 
         logger.info(
             "eBay Browse API search: q=%r limit=%d marketplace=%s locale=%s",
-            query, params["limit"], self.marketplace_id, self.locale,
+            query,
+            params["limit"],
+            self.marketplace_id,
+            self.locale,
         )
 
         try:
@@ -246,9 +249,7 @@ class EbayApiClient:
         if not response.ok:
             try:
                 err_body = response.json()
-                api_msg = "; ".join(
-                    e.get("message", "") for e in err_body.get("errors", [])
-                ) or response.reason
+                api_msg = "; ".join(e.get("message", "") for e in err_body.get("errors", [])) or response.reason
             except Exception:
                 api_msg = response.reason
             msg = f"eBay Browse API error {response.status_code}: {api_msg}"
@@ -264,9 +265,7 @@ class EbayApiClient:
                     "required Browse API scopes."
                 )
             elif response.status_code == 429:
-                errors.append(
-                    "eBay API rate limit exceeded. Wait before making another request."
-                )
+                errors.append("eBay API rate limit exceeded. Wait before making another request.")
             return [], errors
 
         try:
@@ -288,10 +287,7 @@ class EbayApiClient:
                 for w in warnings:
                     errors.append(f"eBay API warning: {w.get('message', w)}")
             else:
-                errors.append(
-                    f"eBay Browse API returned 0 results for query {query!r}. "
-                    "Try a different search term."
-                )
+                errors.append(f"eBay Browse API returned 0 results for query {query!r}. Try a different search term.")
             return [], errors
 
         deals: list[dict] = []
@@ -306,16 +302,12 @@ class EbayApiClient:
                 logger.warning("Failed to parse API item %r: %s", item.get("itemId"), exc)
 
         if parse_errors:
-            errors.append(
-            f"{parse_errors} item(s) from the eBay API could not be parsed and were skipped."
-        )
+            errors.append(f"{parse_errors} item(s) from the eBay API could not be parsed and were skipped.")
 
         logger.info("Returning %d normalised deals (%d errors)", len(deals), len(errors))
         return deals, errors
 
-    def get_median_sold_price(
-        self, query: str, max_results: int = 10
-    ) -> "tuple[float | None, str, list[str]]":
+    def get_median_sold_price(self, query: str, max_results: int = 10) -> "tuple[float | None, str, list[str]]":
         """Return the lowest Buy It Now (BIN/fixed-price) price for *query*.
 
         Tries the eBay Marketplace Insights API (sold/completed listings) first.
@@ -372,9 +364,7 @@ class EbayApiClient:
         # ── Attempt 1: Marketplace Insights API (sold/completed listings) ──
         try:
             insights_url = self._base_url + self._MARKETPLACE_INSIGHTS_PATH
-            resp = self.session.get(
-                insights_url, headers=common_headers, params=params, timeout=10
-            )
+            resp = self.session.get(insights_url, headers=common_headers, params=params, timeout=10)
             if resp.ok:
                 body = resp.json()
                 prices = self._extract_prices_from_items(body.get("itemSales", []))
@@ -382,37 +372,31 @@ class EbayApiClient:
                     lowest = min(prices)
                     logger.info(
                         "eBay Insights API: %d sold BIN results for %r, lowest=€%.2f",
-                        len(prices), query, lowest,
+                        len(prices),
+                        query,
+                        lowest,
                     )
                     return lowest, "sold_listings", errors
                 # No results from Insights API — fall through to Browse.
                 errors.append(
-                    f"eBay Insights API returned 0 sold results for {query!r}; "
-                    "falling back to active listings."
+                    f"eBay Insights API returned 0 sold results for {query!r}; falling back to active listings."
                 )
             elif resp.status_code in (403, 404):
                 # Marketplace Insights scope not granted or endpoint unavailable.
                 errors.append(
-                    f"eBay Insights API unavailable (HTTP {resp.status_code}); "
-                    "falling back to active listings."
+                    f"eBay Insights API unavailable (HTTP {resp.status_code}); falling back to active listings."
                 )
             else:
                 errors.append(
-                    f"eBay Insights API error {resp.status_code} for {query!r}; "
-                    "falling back to active listings."
+                    f"eBay Insights API error {resp.status_code} for {query!r}; falling back to active listings."
                 )
         except Exception as exc:
-            errors.append(
-                f"eBay Insights API request failed for {query!r}: {exc}; "
-                "falling back to active listings."
-            )
+            errors.append(f"eBay Insights API request failed for {query!r}: {exc}; falling back to active listings.")
 
         # ── Attempt 2: Browse API (active listings, used as price proxy) ──
         try:
             browse_url = self._base_url + self._SEARCH_PATH
-            resp = self.session.get(
-                browse_url, headers=common_headers, params=params, timeout=10
-            )
+            resp = self.session.get(browse_url, headers=common_headers, params=params, timeout=10)
             if resp.ok:
                 body = resp.json()
                 raw_items = body.get("itemSummaries", [])
@@ -421,14 +405,14 @@ class EbayApiClient:
                     lowest = min(prices)
                     logger.info(
                         "eBay Browse API: %d active BIN results for %r, lowest=€%.2f",
-                        len(prices), query, lowest,
+                        len(prices),
+                        query,
+                        lowest,
                     )
                     return lowest, "active_listings", errors
                 errors.append(f"eBay Browse API returned 0 results for {query!r}.")
             else:
-                errors.append(
-                    f"eBay Browse API error {resp.status_code} for {query!r}."
-                )
+                errors.append(f"eBay Browse API error {resp.status_code} for {query!r}.")
         except Exception as exc:
             errors.append(f"eBay Browse API request failed for {query!r}: {exc}")
 
@@ -444,9 +428,7 @@ class EbayApiClient:
 
         logger.info("Requesting new eBay OAuth application token")
 
-        credentials = base64.b64encode(
-            f"{self.client_id}:{self.client_secret}".encode()
-        ).decode("ascii")
+        credentials = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode()).decode("ascii")
 
         response = self.session.post(
             self._base_url + self._OAUTH_PATH,
@@ -482,11 +464,7 @@ class EbayApiClient:
             # Exclude explicitly non-functional items from price reference data.
             condition_id = str(item.get("conditionId", ""))
             condition_text = (item.get("condition") or "").lower()
-            if (
-            condition_id == "7000"
-            or "not working" in condition_text
-            or "for parts" in condition_text
-        ):
+            if condition_id == "7000" or "not working" in condition_text or "for parts" in condition_text:
                 continue
             # Browse API uses 'price'; Marketplace Insights uses 'lastSoldPrice'
             price_obj = item.get("lastSoldPrice") or item.get("price") or {}
@@ -551,9 +529,7 @@ class EbayApiClient:
         # The Browse API exposes a "topRatedBuyingExperience" flag and
         # a "priorityListing" flag; treat either as "trending".
         is_trending = bool(
-            item.get("topRatedBuyingExperience")
-            or item.get("priorityListing")
-            or item.get("watchCount", 0) > 10
+            item.get("topRatedBuyingExperience") or item.get("priorityListing") or item.get("watchCount", 0) > 10
         )
 
         # ── Description ────────────────────────────────────────────────────

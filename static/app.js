@@ -323,7 +323,7 @@ function _applySearchResults(data) {
             aiWarning.textContent =
                 `⚠️ Gemini AI is temporarily paused due to quota exhaustion` +
                 (secs > 0 ? ` (resumes in ~${secs}s)` : '') +
-                `. Showing rules-based scores only.`;
+                `. Showing deals without full AI assessment.`;
             aiWarning.className = 'alert alert-warning';
             aiWarning.classList.remove('d-none');
         } else {
@@ -1496,6 +1496,7 @@ function getAiBadgeClass(rating) {
     if (r.includes('must')) return 'badge-must-buy';
     if (r === 'good') return 'badge-good';
     if (r === 'okay' || r === 'fair') return 'badge-okay';
+    if (r.includes('garbage') || r.includes('trash')) return 'badge-garbage';
     if (r.includes('avoid') || r.includes('hard pass')) return 'badge-avoid';
     return 'badge-unknown';
 }

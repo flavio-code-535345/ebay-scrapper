@@ -27,7 +27,7 @@ from ai_providers.base import (
     _is_transient_error,
     _parse_response,
     _parse_retry_delay,
-    _rate_limit_lock,
+    _set_rate_limited_until,
     logger,
 )
 
@@ -56,8 +56,7 @@ class GeminiAssessor(BaseAssessor):
                 self.enabled = False
         else:
             logger.info(
-                "GeminiAssessor: GEMINI_API_KEY not set — AI assessment disabled; "
-                "falling back to rules engine."
+                "GeminiAssessor: GEMINI_API_KEY not set — AI assessment disabled; falling back to rules engine."
             )
 
     # ── Single-deal assessment ────────────────────────────────────────────
@@ -122,8 +121,7 @@ class GeminiAssessor(BaseAssessor):
         except Exception as exc:
             if _is_rate_limit_error(exc):
                 delay = _parse_retry_delay(exc) or _DEFAULT_BACKOFF_SECONDS
-                with _rate_limit_lock:
-                    _rate_limited_until = time.monotonic() + delay
+                _set_rate_limited_until(time.monotonic() + delay)
                 logger.warning("GeminiAssessor: 429 RESOURCE_EXHAUSTED – backing off %.0f s.", delay)
             exc_msg = str(exc).lower()
             if self._images_supported and ("does not support image" in exc_msg or "image input" in exc_msg):
@@ -145,17 +143,18 @@ class GeminiAssessor(BaseAssessor):
         results: list[dict | None] = []
         t_start = time.monotonic()
         for batch_idx, batch_start in enumerate(range(0, len(deals), _BATCH_SIZE)):
-            batch = deals[batch_start:batch_start + _BATCH_SIZE]
+            batch = deals[batch_start : batch_start + _BATCH_SIZE]
             elapsed = time.monotonic() - t_start
             if elapsed >= _ASSESS_TOTAL_BUDGET_S:
                 logger.warning(
-                    "GeminiAssessor: total budget exhausted after batch %d; "
-                    "returning %d unassessed deals as None.", batch_idx, len(deals) - len(results)
+                    "GeminiAssessor: total budget exhausted after batch %d; returning %d unassessed deals as None.",
+                    batch_idx,
+                    len(deals) - len(results),
                 )
                 results.extend([None] * (len(deals) - len(results)))
                 break
             batch_results = self._assess_batch_with_retry(batch)
-            for deal, assessment in zip(batch, batch_results):
+            for deal, assessment in zip(batch, batch_results, strict=False):
                 if isinstance(assessment, dict):
                     assessment = _apply_garbage_overrides(deal, assessment)
                     assessment = _apply_sports_kinect_override(deal, assessment)
@@ -193,10 +192,14 @@ class GeminiAssessor(BaseAssessor):
             if single_price is not None:
                 prompt_lines.append(f"\nFetched eBay Market Price: €{single_price:.2f}")
         else:
-            prompt_lines.append("\nFetched eBay Prices:\n" + "\n".join(
-                f"  - {e['game']}: €{e['price_eur']:.2f} ({e['price_source']})"
-                for e in ebay_prices if e.get('price_eur') is not None
-            ))
+            prompt_lines.append(
+                "\nFetched eBay Prices:\n"
+                + "\n".join(
+                    f"  - {e['game']}: €{e['price_eur']:.2f} ({e['price_source']})"
+                    for e in ebay_prices
+                    if e.get("price_eur") is not None
+                )
+            )
         # Image issues
         image_issues_line = self._format_image_issues_line(deal)
         if image_issues_line:
@@ -245,9 +248,11 @@ class GeminiAssessor(BaseAssessor):
             )
             ebay_prices = self._fetch_ebay_prices_for_bundle(deal)
             if ebay_prices:
+
                 def _fmt(e):
-                    price = f"€{e['price_eur']:.2f}" if e.get('price_eur') is not None else "N/A"
+                    price = f"€{e['price_eur']:.2f}" if e.get("price_eur") is not None else "N/A"
                     return f"  - {e['game']}: {price} ({e.get('price_source', '?')})"
+
                 prices_text = "\n".join(_fmt(e) for e in ebay_prices)
                 item_text += f"Fetched eBay Prices:\n{prices_text}\n"
             image_issues_line = self._format_image_issues_line(deal)
@@ -271,7 +276,6 @@ class GeminiAssessor(BaseAssessor):
         return parts
 
     def _assess_batch_with_retry(self, deals: list[dict]) -> list[dict | None]:
-        global _rate_limited_until
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES):
             try:
@@ -292,48 +296,61 @@ class GeminiAssessor(BaseAssessor):
                 except concurrent.futures.TimeoutError:
                     elapsed = time.monotonic() - t0
                     logger.error(
-                        "GeminiAssessor: Batch of %d timed out after %.1f s "
-                        "(attempt %d/%d, timeout=%d s).",
-                        len(deals), elapsed, attempt + 1, _MAX_RETRIES, _GEMINI_REQUEST_TIMEOUT,
+                        "GeminiAssessor: Batch of %d timed out after %.1f s (attempt %d/%d, timeout=%d s).",
+                        len(deals),
+                        elapsed,
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        _GEMINI_REQUEST_TIMEOUT,
                     )
                     future.cancel()
                     return [{"ai_error_type": "timeout", "ai_assessed": False}] * len(deals)
                 elapsed = time.monotonic() - t0
                 logger.info(
                     "GeminiAssessor: Batch of %d assessed in %.1f s (attempt %d/%d)",
-                    len(deals), elapsed, attempt + 1, _MAX_RETRIES,
+                    len(deals),
+                    elapsed,
+                    attempt + 1,
+                    _MAX_RETRIES,
                 )
                 return self._parse_batch_response(response.text, len(deals))
             except Exception as exc:
                 exc_msg = str(exc).lower()
                 if self._images_supported and ("does not support image" in exc_msg or "image input" in exc_msg):
                     logger.warning(
-                    "GeminiAssessor: model %r does not support images — disabling image input.",
-                    self._model_name,
-                )
+                        "GeminiAssessor: model %r does not support images — disabling image input.",
+                        self._model_name,
+                    )
                     self._images_supported = False
                     return self._assess_batch_with_retry(deals)
                 if _is_rate_limit_error(exc):
                     delay = _parse_retry_delay(exc) or _DEFAULT_BACKOFF_SECONDS
-                    with _rate_limit_lock:
-                        _rate_limited_until = time.monotonic() + delay
+                    _set_rate_limited_until(time.monotonic() + delay)
                     logger.warning(
                         "GeminiAssessor: 429 RESOURCE_EXHAUSTED (batch of %d) – backing off %.0f s.",
-                        len(deals), delay,
+                        len(deals),
+                        delay,
                     )
                     return [{"ai_error_type": "rate_limit", "ai_assessed": False}] * len(deals)
                 last_exc = exc
                 if _is_transient_error(exc) and attempt < _MAX_RETRIES - 1:
-                    retry_delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    retry_delay = _RETRY_BASE_DELAY * (2**attempt)
                     logger.warning(
                         "GeminiAssessor: Transient error attempt %d/%d (batch of %d) – retrying in %.1f s: %s",
-                        attempt + 1, _MAX_RETRIES, len(deals), retry_delay, exc,
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        len(deals),
+                        retry_delay,
+                        exc,
                     )
                     time.sleep(retry_delay)
                 else:
                     logger.error(
                         "GeminiAssessor: Non-retryable error attempt %d/%d (batch of %d): %s",
-                        attempt + 1, _MAX_RETRIES, len(deals), exc,
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        len(deals),
+                        exc,
                     )
                     return [None] * len(deals)
         logger.error("GeminiAssessor: All retries exhausted (batch of %d): %s", len(deals), last_exc)

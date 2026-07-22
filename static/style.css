@@ -871,6 +871,7 @@ a:hover { text-decoration: underline; }
 .badge-okay     { background: var(--yellow-dim);  color: var(--yellow); }
 .badge-fair     { background: var(--yellow-dim);  color: var(--yellow); } /* legacy alias */
 .badge-avoid    { background: var(--red-dim);     color: var(--red);    }
+.badge-garbage  { background: rgba(80, 40, 40, 0.55); color: #c9a0a0;  }
 .badge-unknown  { background: var(--surface3);    color: var(--muted);  }
 
 .ai-confidence { color: var(--muted); font-size: 0.75rem; }

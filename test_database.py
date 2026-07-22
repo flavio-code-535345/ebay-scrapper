@@ -1,23 +1,19 @@
 """Tests for database.py — SQLite persistence layer."""
 
-import os
-import tempfile
-
 import pytest
 
 import database
 
 
 @pytest.fixture(autouse=True)
-def _temp_db():
+def _temp_db(tmp_path):
     """Use a temporary database for each test."""
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    db_file = tmp_path / "test.db"
     old_path = database.DB_PATH
-    database.DB_PATH = tmp.name
+    database.DB_PATH = str(db_file)
     database.init_db()
     yield
     database.DB_PATH = old_path
-    os.unlink(tmp.name)
 
 
 class TestInitDB:
@@ -128,9 +124,7 @@ class TestSaveSearch:
                 "ai_assessed": True,
                 "ai_potential_scam": False,
                 "ai_scam_warning": "",
-                "ai_itemized_resale_estimates": [
-                    {"game": "Game1", "price_eur": 15.0, "price_source": "ebay_sold"}
-                ],
+                "ai_itemized_resale_estimates": [{"game": "Game1", "price_eur": 15.0, "price_source": "ebay_sold"}],
                 "ai_estimated_total_cost": 20.0,
                 "ai_estimated_gross_profit": 10.0,
             }
@@ -222,11 +216,24 @@ class TestStats:
         assert stats["total_deals"] == 0
 
     def test_stats_with_data(self):
-        database.save_search("s1", [{"title": "A", "price": 1.0, "condition": "U",
-                                     "seller_rating": 90.0, "url": "u1", "shipping": "F",
-                                     "is_trending": False, "item_location": "DE",
-                                     "image_urls": [], "image_issues": [],
-                                     "listing_date": None}])
+        database.save_search(
+            "s1",
+            [
+                {
+                    "title": "A",
+                    "price": 1.0,
+                    "condition": "U",
+                    "seller_rating": 90.0,
+                    "url": "u1",
+                    "shipping": "F",
+                    "is_trending": False,
+                    "item_location": "DE",
+                    "image_urls": [],
+                    "image_issues": [],
+                    "listing_date": None,
+                }
+            ],
+        )
         stats = database.get_stats()
         assert stats["total_searches"] == 1
         assert stats["total_deals"] == 1
