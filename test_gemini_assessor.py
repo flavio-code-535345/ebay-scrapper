@@ -520,6 +520,7 @@ class TestExtractPotentialGameTitles:
     def test_respects_max_games_limit(self):
         """Never returns more than _MAX_GAMES_PER_BUNDLE titles."""
         from ai_providers.base import _MAX_GAMES_PER_BUNDLE
+
         many = ", ".join([f"Game {i}" for i in range(20)])
         title = f"Bundle: {many}"
         result = _extract_potential_game_titles(title)
@@ -787,10 +788,10 @@ class TestParseBatchResponseGoodMustHave:
                 "fair_market_estimate": "~€20",
                 "itemized_resale_estimates": [
                     {
-                    "game": "Batman Arkham Knight",
-                    "price_eur": 18.0,
-                    "price_source": "ebay_active",
-                },
+                        "game": "Batman Arkham Knight",
+                        "price_eur": 18.0,
+                        "price_source": "ebay_active",
+                    },
                 ],
                 "estimated_total_cost": 10.99,
                 "estimated_gross_profit": 7.01,
@@ -806,42 +807,68 @@ class TestParseBatchResponseGoodMustHave:
     def test_mixed_batch_ratings_preserved(self):
         """Batch with Must Have, Good, Okay, Avoid all preserved correctly."""
         payload = [
-            {"deal_rating": "Must Have", "confidence_score": 90, "potential_scam": False,
-             "scam_warning": "", "visual_findings": [], "red_flags": [],
-             "fair_market_estimate": "~€50",
-             "itemized_resale_estimates": [
-                 {"game": "Halo 3 Xbox 360", "price_eur": 50.0, "price_source": "ebay_sold"}
-             ],
-             "estimated_total_cost": 10.0, "estimated_gross_profit": 40.0,
-             "verdict_summary": "Amazing."},
-            {"deal_rating": "Good", "confidence_score": 75, "potential_scam": False,
-             "scam_warning": "", "visual_findings": [], "red_flags": [],
-             "fair_market_estimate": "~€25",
-             "itemized_resale_estimates": [
-                 {
-                    "game": "Batman Arkham Knight PS4",
-                    "price_eur": 25.0,
-                    "price_source": "ebay_active",
-                }
-             ],
-             "estimated_total_cost": 15.0, "estimated_gross_profit": 10.0,
-             "verdict_summary": "Good."},
-            {"deal_rating": "Okay", "confidence_score": 60, "potential_scam": False,
-             "scam_warning": "", "visual_findings": [], "red_flags": [],
-             "fair_market_estimate": "~€12",
-             "itemized_resale_estimates": [
-                 {"game": "Minecraft Xbox 360", "price_eur": 12.0, "price_source": "ai_estimate"}
-             ],
-             "estimated_total_cost": 10.0, "estimated_gross_profit": 2.0,
-             "verdict_summary": "Decent."},
-            {"deal_rating": "Avoid", "confidence_score": 85, "potential_scam": False,
-             "scam_warning": "", "visual_findings": [], "red_flags": [],
-             "fair_market_estimate": "~€8",
-             "itemized_resale_estimates": [
-                 {"game": "FIFA 22 PS4", "price_eur": 3.0, "price_source": "ebay_sold"}
-             ],
-             "estimated_total_cost": 10.0, "estimated_gross_profit": -7.0,
-             "verdict_summary": "Loss."},
+            {
+                "deal_rating": "Must Have",
+                "confidence_score": 90,
+                "potential_scam": False,
+                "scam_warning": "",
+                "visual_findings": [],
+                "red_flags": [],
+                "fair_market_estimate": "~€50",
+                "itemized_resale_estimates": [
+                    {"game": "Halo 3 Xbox 360", "price_eur": 50.0, "price_source": "ebay_sold"}
+                ],
+                "estimated_total_cost": 10.0,
+                "estimated_gross_profit": 40.0,
+                "verdict_summary": "Amazing.",
+            },
+            {
+                "deal_rating": "Good",
+                "confidence_score": 75,
+                "potential_scam": False,
+                "scam_warning": "",
+                "visual_findings": [],
+                "red_flags": [],
+                "fair_market_estimate": "~€25",
+                "itemized_resale_estimates": [
+                    {
+                        "game": "Batman Arkham Knight PS4",
+                        "price_eur": 25.0,
+                        "price_source": "ebay_active",
+                    }
+                ],
+                "estimated_total_cost": 15.0,
+                "estimated_gross_profit": 10.0,
+                "verdict_summary": "Good.",
+            },
+            {
+                "deal_rating": "Okay",
+                "confidence_score": 60,
+                "potential_scam": False,
+                "scam_warning": "",
+                "visual_findings": [],
+                "red_flags": [],
+                "fair_market_estimate": "~€12",
+                "itemized_resale_estimates": [
+                    {"game": "Minecraft Xbox 360", "price_eur": 12.0, "price_source": "ai_estimate"}
+                ],
+                "estimated_total_cost": 10.0,
+                "estimated_gross_profit": 2.0,
+                "verdict_summary": "Decent.",
+            },
+            {
+                "deal_rating": "Avoid",
+                "confidence_score": 85,
+                "potential_scam": False,
+                "scam_warning": "",
+                "visual_findings": [],
+                "red_flags": [],
+                "fair_market_estimate": "~€8",
+                "itemized_resale_estimates": [{"game": "FIFA 22 PS4", "price_eur": 3.0, "price_source": "ebay_sold"}],
+                "estimated_total_cost": 10.0,
+                "estimated_gross_profit": -7.0,
+                "verdict_summary": "Loss.",
+            },
         ]
         results = self._parse(payload)
         assert len(results) == 4
@@ -915,6 +942,7 @@ class TestEbayPriceCache:
     def test_cache_entry_expires_after_ttl(self):
         """Cache entries are evicted when their TTL has elapsed."""
         import time as _time
+
         a = self._make_assessor()
         a._store_ebay_price_in_cache("God of War (Sony PlayStation 4)", 20.0, "active_listings")
         # Manually expire the entry by backdating its timestamp.
@@ -1040,18 +1068,17 @@ class TestPrefetchEbayPricesParallel:
         deals = [{"title": "Halo 3 Xbox 360"}]
         a._prefetch_ebay_prices_parallel(deals)
         # Cache should now have a Halo 3 entry.
-        found = any(
-            a._cached_ebay_price(q) is not None
-            for q in a._collect_ebay_queries_for_deal(deals[0])
-        )
+        found = any(a._cached_ebay_price(q) is not None for q in a._collect_ebay_queries_for_deal(deals[0]))
         assert found, "Expected Halo 3 price to be in cache after prefetch"
 
     def test_populates_cache_for_bundle_deal(self):
         """Pre-fetch populates cache entries for games in a bundle listing."""
-        a = self._make_assessor_with_mock_client({
-            "Halo": (12.0, "sold_listings"),
-            "Gears": (9.0, "sold_listings"),
-        })
+        a = self._make_assessor_with_mock_client(
+            {
+                "Halo": (12.0, "sold_listings"),
+                "Gears": (9.0, "sold_listings"),
+            }
+        )
         deals = [{"title": "Xbox 360 Bundle: Halo 3, Gears of War"}]
         a._prefetch_ebay_prices_parallel(deals)
         queries = a._collect_ebay_queries_for_deal(deals[0])
@@ -1097,9 +1124,7 @@ class TestPrefetchEbayPricesParallel:
         a._prefetch_ebay_prices_parallel(deals)
         first_count = call_count["n"]
         a._prefetch_ebay_prices_parallel(deals)
-        assert call_count["n"] == first_count, (
-            "Second prefetch should hit cache, not call eBay again"
-        )
+        assert call_count["n"] == first_count, "Second prefetch should hit cache, not call eBay again"
 
     def test_no_ebay_client_is_noop(self):
         """When no eBay client is registered the method returns without error."""
@@ -1132,9 +1157,7 @@ class TestBatchTimeoutConstants:
 
     def test_batch_size_reduced_for_lower_latency(self):
         """_BATCH_SIZE must be ≤ 5 so per-call prompts stay small."""
-        assert _BATCH_SIZE <= 5, (
-            f"_BATCH_SIZE={_BATCH_SIZE} is too large; keep ≤ 5 for low per-call latency"
-        )
+        assert _BATCH_SIZE <= 5, f"_BATCH_SIZE={_BATCH_SIZE} is too large; keep ≤ 5 for low per-call latency"
 
     def test_batch_size_positive(self):
         assert _BATCH_SIZE >= 1
@@ -1178,7 +1201,8 @@ class TestTopValueGamesSelection:
         - Deduplicates by game name so a repeated title only occupies one slot.
         """
         eligible = [
-            i for i in itemized
+            i
+            for i in itemized
             if i.get("game")
             and not _is_aggregate_placeholder(i.get("game"))
             and i.get("price_eur") is not None
@@ -1201,6 +1225,7 @@ class TestTopValueGamesSelection:
 
         Null prices sort last (mapped to -1 so they appear at the bottom).
         """
+
         def sort_key(i):
             p = i.get("price_eur")
             return float(p) if p is not None else -1.0
@@ -1216,11 +1241,11 @@ class TestTopValueGamesSelection:
 
     def test_top_3_selected_correctly(self):
         itemized = [
-            {"game": "Halo 3",          "price_eur": 12.0},
-            {"game": "Mass Effect 2",    "price_eur": 25.0},
-            {"game": "Gears of War",     "price_eur": 9.0},
-            {"game": "Dead Space",       "price_eur": 18.0},
-            {"game": "Bioshock",         "price_eur": 15.0},
+            {"game": "Halo 3", "price_eur": 12.0},
+            {"game": "Mass Effect 2", "price_eur": 25.0},
+            {"game": "Gears of War", "price_eur": 9.0},
+            {"game": "Dead Space", "price_eur": 18.0},
+            {"game": "Bioshock", "price_eur": 15.0},
         ]
         top = self._top_value_games(itemized)
         assert len(top) == 3
@@ -1237,10 +1262,10 @@ class TestTopValueGamesSelection:
 
     def test_games_without_price_excluded(self):
         itemized = [
-            {"game": "No Data",   "price_eur": None},
-            {"game": "Game A",    "price_eur": 8.0},
-            {"game": "Zero Price","price_eur": 0},
-            {"game": "Game B",    "price_eur": 15.0},
+            {"game": "No Data", "price_eur": None},
+            {"game": "Game A", "price_eur": 8.0},
+            {"game": "Zero Price", "price_eur": 0},
+            {"game": "Game B", "price_eur": 15.0},
         ]
         top = self._top_value_games(itemized)
         assert len(top) == 2
@@ -1302,7 +1327,7 @@ class TestTopValueGamesSelection:
         """Exactly 3 unique games with equal price → all 3 selected."""
         itemized = [
             {"game": "Alpha", "price_eur": 5.0},
-            {"game": "Beta",  "price_eur": 5.0},
+            {"game": "Beta", "price_eur": 5.0},
             {"game": "Gamma", "price_eur": 5.0},
         ]
         top = self._top_value_games(itemized)
@@ -1316,10 +1341,10 @@ class TestTopValueGamesSelection:
         """A game appearing twice in itemized must only fill ONE top-3 slot,
         so that the highlight count never exceeds min(3, unique_eligible)."""
         itemized = [
-            {"game": "Halo 3",     "price_eur": 25.0},
-            {"game": "Halo 3",     "price_eur": 25.0},  # duplicate
-            {"game": "Gears",      "price_eur": 18.0},
-            {"game": "Mass Effect","price_eur": 15.0},
+            {"game": "Halo 3", "price_eur": 25.0},
+            {"game": "Halo 3", "price_eur": 25.0},  # duplicate
+            {"game": "Gears", "price_eur": 18.0},
+            {"game": "Mass Effect", "price_eur": 15.0},
             {"game": "Dead Space", "price_eur": 12.0},
         ]
         top = self._top_value_games(itemized)
@@ -1344,9 +1369,9 @@ class TestTopValueGamesSelection:
         """Two unique names with duplicates → only 2 items returned, not 3."""
         itemized = [
             {"game": "Alpha", "price_eur": 10.0},
-            {"game": "Alpha", "price_eur": 9.0},   # duplicate
-            {"game": "Beta",  "price_eur": 7.0},
-            {"game": "Beta",  "price_eur": 6.0},   # duplicate
+            {"game": "Alpha", "price_eur": 9.0},  # duplicate
+            {"game": "Beta", "price_eur": 7.0},
+            {"game": "Beta", "price_eur": 6.0},  # duplicate
         ]
         top = self._top_value_games(itemized)
         assert len(top) == 2
@@ -1358,11 +1383,11 @@ class TestTopValueGamesSelection:
     def test_aggregate_entries_excluded_from_top3(self):
         """Aggregate placeholder entries must never fill a top-3 slot."""
         itemized = [
-            {"game": "Halo 3",           "price_eur": 12.0},
-            {"game": "Gears of War",      "price_eur": 9.0},
+            {"game": "Halo 3", "price_eur": 12.0},
+            {"game": "Gears of War", "price_eur": 9.0},
             {"game": "Additional Titles", "price_eur": 50.0},  # aggregate — skip
-            {"game": "Remaining Titles",  "price_eur": 40.0},  # aggregate — skip
-            {"game": "Dead Space",        "price_eur": 6.0},
+            {"game": "Remaining Titles", "price_eur": 40.0},  # aggregate — skip
+            {"game": "Dead Space", "price_eur": 6.0},
         ]
         top = self._top_value_games(itemized)
         names = [g["game"] for g in top]
@@ -1376,10 +1401,10 @@ class TestTopValueGamesSelection:
         be excluded even when they have a high estimated price."""
         itemized = [
             {"game": "Weitere Spiele", "price_eur": 100.0},  # aggregate — skip
-            {"game": "Sonstige Titel", "price_eur": 80.0},   # aggregate — skip
-            {"game": "Game A",         "price_eur": 12.0},
-            {"game": "Game B",         "price_eur": 9.0},
-            {"game": "Game C",         "price_eur": 6.0},
+            {"game": "Sonstige Titel", "price_eur": 80.0},  # aggregate — skip
+            {"game": "Game A", "price_eur": 12.0},
+            {"game": "Game B", "price_eur": 9.0},
+            {"game": "Game C", "price_eur": 6.0},
         ]
         top = self._top_value_games(itemized)
         names = [g["game"] for g in top]
@@ -1390,8 +1415,8 @@ class TestTopValueGamesSelection:
     def test_bare_token_aggregate_excluded(self):
         """Bare tokens like '...' and 'etc.' must not appear in top-3."""
         itemized = [
-            {"game": "...",    "price_eur": 99.0},  # placeholder
-            {"game": "etc.",   "price_eur": 88.0},  # placeholder
+            {"game": "...", "price_eur": 99.0},  # placeholder
+            {"game": "etc.", "price_eur": 88.0},  # placeholder
             {"game": "Game A", "price_eur": 5.0},
         ]
         top = self._top_value_games(itemized)
@@ -1404,7 +1429,7 @@ class TestTopValueGamesSelection:
         """A list of only aggregate entries should return an empty top selection."""
         itemized = [
             {"game": "Additional Titles", "price_eur": 20.0},
-            {"game": "Remaining Titles",  "price_eur": 15.0},
+            {"game": "Remaining Titles", "price_eur": 15.0},
         ]
         top = self._top_value_games(itemized)
         assert top == []
@@ -1472,11 +1497,11 @@ class TestTopValueGamesSelection:
         """The top3Set must never cause more than 3 rows to be highlighted,
         even when the same game name appears multiple times in the full list."""
         itemized = [
-            {"game": "Halo 3",  "price_eur": 20.0},
-            {"game": "Halo 3",  "price_eur": 18.0},  # duplicate
-            {"game": "Gears",   "price_eur": 15.0},
-            {"game": "Gears",   "price_eur": 14.0},  # duplicate
-            {"game": "BioShock","price_eur": 10.0},
+            {"game": "Halo 3", "price_eur": 20.0},
+            {"game": "Halo 3", "price_eur": 18.0},  # duplicate
+            {"game": "Gears", "price_eur": 15.0},
+            {"game": "Gears", "price_eur": 14.0},  # duplicate
+            {"game": "BioShock", "price_eur": 10.0},
             {"game": "FIFA 20", "price_eur": 2.0},
         ]
         top = self._top_value_games(itemized)
@@ -1576,12 +1601,14 @@ class TestParseBatchResponseFiltersAggregates:
                 "red_flags": [],
                 "fair_market_estimate": "~€30",
                 "itemized_resale_estimates": [
-                    {"game": "Halo 3", "price_eur": 12.0, "price_source": "ebay_sold",
-                     "is_exceptional": False},
-                    {"game": "Gears of War", "price_eur": 10.0, "price_source": "ebay_sold",
-                     "is_exceptional": False},
-                    {"game": "Additional Titles", "price_eur": 8.0,
-                     "price_source": "ai_estimate", "is_exceptional": False},
+                    {"game": "Halo 3", "price_eur": 12.0, "price_source": "ebay_sold", "is_exceptional": False},
+                    {"game": "Gears of War", "price_eur": 10.0, "price_source": "ebay_sold", "is_exceptional": False},
+                    {
+                        "game": "Additional Titles",
+                        "price_eur": 8.0,
+                        "price_source": "ai_estimate",
+                        "is_exceptional": False,
+                    },
                 ],
                 "estimated_total_cost": 15.0,
                 "estimated_gross_profit": 15.0,
@@ -1607,10 +1634,18 @@ class TestParseBatchResponseFiltersAggregates:
                 "red_flags": [],
                 "fair_market_estimate": "~€20",
                 "itemized_resale_estimates": [
-                    {"game": "Batman Arkham Knight", "price_eur": 8.0,
-                     "price_source": "ebay_active", "is_exceptional": False},
-                    {"game": "Remaining Titles", "price_eur": 5.0,
-                     "price_source": "ai_estimate", "is_exceptional": False},
+                    {
+                        "game": "Batman Arkham Knight",
+                        "price_eur": 8.0,
+                        "price_source": "ebay_active",
+                        "is_exceptional": False,
+                    },
+                    {
+                        "game": "Remaining Titles",
+                        "price_eur": 5.0,
+                        "price_source": "ai_estimate",
+                        "is_exceptional": False,
+                    },
                 ],
                 "estimated_total_cost": 12.0,
                 "estimated_gross_profit": 1.0,
@@ -1634,12 +1669,14 @@ class TestParseBatchResponseFiltersAggregates:
                 "red_flags": [],
                 "fair_market_estimate": "~€60",
                 "itemized_resale_estimates": [
-                    {"game": "God of War", "price_eur": 20.0, "price_source": "ebay_sold",
-                     "is_exceptional": True},
-                    {"game": "Spider-Man", "price_eur": 18.0, "price_source": "ebay_sold",
-                     "is_exceptional": False},
-                    {"game": "Horizon Zero Dawn", "price_eur": 12.0,
-                     "price_source": "ai_estimate", "is_exceptional": False},
+                    {"game": "God of War", "price_eur": 20.0, "price_source": "ebay_sold", "is_exceptional": True},
+                    {"game": "Spider-Man", "price_eur": 18.0, "price_source": "ebay_sold", "is_exceptional": False},
+                    {
+                        "game": "Horizon Zero Dawn",
+                        "price_eur": 12.0,
+                        "price_source": "ai_estimate",
+                        "is_exceptional": False,
+                    },
                 ],
                 "estimated_total_cost": 15.0,
                 "estimated_gross_profit": 35.0,
@@ -1655,18 +1692,21 @@ class TestParseBatchResponseFiltersAggregates:
 # Tests for JSON control-character sanitisation
 # ---------------------------------------------------------------------------
 
+
 class TestSanitizeJsonText:
     """Verify _sanitize_json_text strips invalid JSON control characters."""
 
     def test_clean_text_unchanged(self):
         """Text without control characters is returned unchanged."""
         from ai_providers.base import _sanitize_json_text
+
         text = '[{"deal_rating": "Good", "verdict_summary": "Nice deal."}]'
         assert _sanitize_json_text(text) == text
 
     def test_strips_form_feed(self):
         """Form-feed (0x0C) is stripped."""
         from ai_providers.base import _sanitize_json_text
+
         text = '[{"verdict_summary": "Good\x0cdeal."}]'
         result = _sanitize_json_text(text)
         assert "\x0c" not in result
@@ -1675,13 +1715,15 @@ class TestSanitizeJsonText:
     def test_strips_backspace(self):
         """Backspace (0x08) is stripped."""
         from ai_providers.base import _sanitize_json_text
-        text = 'hello\x08world'
+
+        text = "hello\x08world"
         assert _sanitize_json_text(text) == "helloworld"
 
     def test_preserves_tab_lf_cr(self):
         """TAB (0x09), LF (0x0A), CR (0x0D) are preserved (valid in JSON)."""
         from ai_providers.base import _sanitize_json_text
-        text = 'line1\nline2\r\n\ttabbed'
+
+        text = "line1\nline2\r\n\ttabbed"
         assert _sanitize_json_text(text) == text
 
     def test_parse_batch_response_survives_control_char(self):
@@ -1697,8 +1739,7 @@ class TestSanitizeJsonText:
             "red_flags": [],
             "fair_market_estimate": "~€25",
             "itemized_resale_estimates": [
-                {"game": "Halo 3", "price_eur": 12.0, "price_source": "ebay_sold",
-                 "is_exceptional": False},
+                {"game": "Halo 3", "price_eur": 12.0, "price_source": "ebay_sold", "is_exceptional": False},
             ],
             "estimated_total_cost": 10.0,
             "estimated_gross_profit": 2.0,
@@ -1718,6 +1759,7 @@ class TestSanitizeJsonText:
 # Tests for improved _extract_potential_game_titles (pipe separator, per-part
 # cleanup)
 # ---------------------------------------------------------------------------
+
 
 class TestExtractPotentialGameTitlesPipeSeparator:
     """Tests for the pipe-separator and per-part noise-cleanup improvements."""
@@ -1763,10 +1805,7 @@ class TestExtractPotentialGameTitlesPipeSeparator:
     def test_assassins_creed_konvolut_realistic(self):
         """Realistic 'Assassins Creed Konvolut' log example extracts the
         series name without platform remnants."""
-        title = (
-            "7x Assassins Creed Konvolut Sammlung komplett Xbox 360 "
-            "| 1, 2, 3, 4, Brotherhoo…"
-        )
+        title = "7x Assassins Creed Konvolut Sammlung komplett Xbox 360 | 1, 2, 3, 4, Brotherhoo…"
         result = _extract_potential_game_titles(title)
         assert len(result) >= 1
         # The first extracted game should be the clean series name
@@ -1776,6 +1815,7 @@ class TestExtractPotentialGameTitlesPipeSeparator:
 # ---------------------------------------------------------------------------
 # Tests for normalised itemized_resale_estimates in _parse_batch_response
 # ---------------------------------------------------------------------------
+
 
 class TestParseBatchResponseNormaliseItemized:
     """Verify that itemized entries are always fully normalised (no None fields)."""
@@ -1800,10 +1840,13 @@ class TestParseBatchResponseNormaliseItemized:
 
     def test_null_price_eur_defaults_to_zero(self):
         """price_eur=null in AI response is normalised to 0.0."""
-        payload = [self._make_item([
-            {"game": "Halo 3", "price_eur": None, "price_source": "ai_estimate",
-             "is_exceptional": False},
-        ])]
+        payload = [
+            self._make_item(
+                [
+                    {"game": "Halo 3", "price_eur": None, "price_source": "ai_estimate", "is_exceptional": False},
+                ]
+            )
+        ]
         result = self._parse(payload)
         entry = result[0]["ai_itemized_resale_estimates"][0]
         assert entry["price_eur"] == 0.0
@@ -1811,23 +1854,28 @@ class TestParseBatchResponseNormaliseItemized:
 
     def test_missing_price_source_defaults_to_ai_estimate(self):
         """Missing price_source defaults to 'ai_estimate'."""
-        payload = [self._make_item([
-            {"game": "God of War", "price_eur": 15.0},
-        ])]
+        payload = [
+            self._make_item(
+                [
+                    {"game": "God of War", "price_eur": 15.0},
+                ]
+            )
+        ]
         result = self._parse(payload)
         entry = result[0]["ai_itemized_resale_estimates"][0]
         assert entry["price_source"] == "ai_estimate"
 
     def test_missing_game_name_entry_is_skipped(self):
         """Entries without a game name (empty string or None) are skipped."""
-        payload = [self._make_item([
-            {"game": "", "price_eur": 5.0, "price_source": "ai_estimate",
-             "is_exceptional": False},
-            {"game": None, "price_eur": 5.0, "price_source": "ai_estimate",
-             "is_exceptional": False},
-            {"game": "Dishonored", "price_eur": 10.0, "price_source": "ebay_sold",
-             "is_exceptional": False},
-        ])]
+        payload = [
+            self._make_item(
+                [
+                    {"game": "", "price_eur": 5.0, "price_source": "ai_estimate", "is_exceptional": False},
+                    {"game": None, "price_eur": 5.0, "price_source": "ai_estimate", "is_exceptional": False},
+                    {"game": "Dishonored", "price_eur": 10.0, "price_source": "ebay_sold", "is_exceptional": False},
+                ]
+            )
+        ]
         result = self._parse(payload)
         entries = result[0]["ai_itemized_resale_estimates"]
         assert len(entries) == 1
@@ -1835,10 +1883,13 @@ class TestParseBatchResponseNormaliseItemized:
 
     def test_price_eur_string_coerced_to_float(self):
         """price_eur given as a string is coerced to float."""
-        payload = [self._make_item([
-            {"game": "Mass Effect", "price_eur": "8.50", "price_source": "ebay_sold",
-             "is_exceptional": False},
-        ])]
+        payload = [
+            self._make_item(
+                [
+                    {"game": "Mass Effect", "price_eur": "8.50", "price_source": "ebay_sold", "is_exceptional": False},
+                ]
+            )
+        ]
         result = self._parse(payload)
         entry = result[0]["ai_itemized_resale_estimates"][0]
         assert entry["price_eur"] == 8.50
@@ -1846,9 +1897,13 @@ class TestParseBatchResponseNormaliseItemized:
 
     def test_is_exceptional_defaults_to_false(self):
         """is_exceptional defaults to False when not present."""
-        payload = [self._make_item([
-            {"game": "Zelda", "price_eur": 30.0, "price_source": "ebay_sold"},
-        ])]
+        payload = [
+            self._make_item(
+                [
+                    {"game": "Zelda", "price_eur": 30.0, "price_source": "ebay_sold"},
+                ]
+            )
+        ]
         result = self._parse(payload)
         entry = result[0]["ai_itemized_resale_estimates"][0]
         assert entry["is_exceptional"] is False

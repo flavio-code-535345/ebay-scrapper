@@ -41,7 +41,7 @@ if _LOG_FORMAT_ENV == "json":
 else:
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 logger = logging.getLogger(__name__)
 
@@ -101,10 +101,7 @@ def _resolve_engine(source: str):
     """
     if source == "api":
         if not ebay_api.is_configured:
-            logger.warning(
-                "data_source='api' but eBay API credentials are not set; "
-                "falling back to scraper."
-            )
+            logger.warning("data_source='api' but eBay API credentials are not set; falling back to scraper.")
             return scraper.search, "scraper"
         return ebay_api.search, "api"
 
@@ -156,32 +153,27 @@ def _is_german_location(location: str) -> bool:
     if upper.endswith(", DE"):
         return True
     # German or English country names as whole words
-    if "DEUTSCHLAND" in upper or "GERMANY" in upper:
-        return True
-    return False
+    return "DEUTSCHLAND" in upper or "GERMANY" in upper
 
 
-
-@app.route('/')
+@app.route("/")
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
 
 
-@app.route('/api/search', methods=['POST'])
+@app.route("/api/search", methods=["POST"])
 def search():
     data = request.get_json(silent=True)
     if data is None:
-        return jsonify({
-        'error': 'Request body must be valid JSON with Content-Type: application/json'
-    }), 400
-    query = data.get('query', '').strip()
+        return jsonify({"error": "Request body must be valid JSON with Content-Type: application/json"}), 400
+    query = data.get("query", "").strip()
     try:
-        max_results = max(1, min(int(data.get('max_results', 50)), 200))
+        max_results = max(1, min(int(data.get("max_results", 50)), 200))
     except (TypeError, ValueError):
-        return jsonify({'error': 'max_results must be a positive integer'}), 400
+        return jsonify({"error": "max_results must be a positive integer"}), 400
 
     if not query:
-        return jsonify({'error': 'query is required'}), 400
+        return jsonify({"error": "query is required"}), 400
 
     # Select the appropriate search engine (API or scraper) based on settings.
     data_source_setting = _db_data_source()
@@ -190,7 +182,10 @@ def search():
     deals, search_errors = search_fn(query, max_results=max_results)
     logger.info(
         "Search for %r via %s returned %d deals, %d error(s)",
-        query, active_source, len(deals), len(search_errors),
+        query,
+        active_source,
+        len(deals),
+        len(search_errors),
     )
 
     # Post-filter: exclude deals that the user has previously skipped.
@@ -213,9 +208,7 @@ def search():
         deals = [d for d in deals if _is_german_location(d.get("item_location", ""))]
         filtered_out = before - len(deals)
         if filtered_out:
-            logger.info(
-                "Germany-only filter removed %d non-German deal(s)", filtered_out
-            )
+            logger.info("Germany-only filter removed %d non-German deal(s)", filtered_out)
 
     # Post-filter: drop sports/Kinect-themed deals — these have very low
     # resale value (FIFA, Forza, Kinect, TopSpin, etc.) and should never
@@ -242,23 +235,14 @@ def search():
     # is not shared across processes.
     _user_enabled = _db_ai_user_enabled()
     ai_active = assessor.enabled and _user_enabled
-    ai_assessments = (
-        assessor.assess_deals_batch(deals_filtered)
-        if (deals_filtered and ai_active) else []
-    )
+    ai_assessments = assessor.assess_deals_batch(deals_filtered) if (deals_filtered and ai_active) else []
 
     timed_out = 0
     if assessor.enabled and ai_assessments:
         failed = sum(1 for a in ai_assessments if a is None)
-        rate_limited = sum(
-            1 for a in ai_assessments if a and a.get("ai_error_type") == "rate_limit"
-        )
-        parse_errors = sum(
-            1 for a in ai_assessments if a and a.get("ai_error_type") == "parse_error"
-        )
-        timed_out = sum(
-            1 for a in ai_assessments if a and a.get("ai_error_type") == "timeout"
-        )
+        rate_limited = sum(1 for a in ai_assessments if a and a.get("ai_error_type") == "rate_limit")
+        parse_errors = sum(1 for a in ai_assessments if a and a.get("ai_error_type") == "parse_error")
+        timed_out = sum(1 for a in ai_assessments if a and a.get("ai_error_type") == "timeout")
         if failed:
             logger.warning(
                 "Gemini batch: %d/%d items failed AI assessment.",
@@ -277,7 +261,7 @@ def search():
                 parse_errors,
                 len(ai_assessments),
             )
-            for i, (deal, a) in enumerate(zip(deals_filtered, ai_assessments)):
+            for i, (deal, a) in enumerate(zip(deals_filtered, ai_assessments, strict=False)):
                 if a and a.get("ai_error_type") == "parse_error":
                     logger.warning(
                         "Gemini parse error – item[%d]: %r",
@@ -290,7 +274,7 @@ def search():
                 timed_out,
                 len(ai_assessments),
             )
-            for i, (deal, a) in enumerate(zip(deals_filtered, ai_assessments)):
+            for i, (deal, a) in enumerate(zip(deals_filtered, ai_assessments, strict=False)):
                 if a and a.get("ai_error_type") == "timeout":
                     logger.info(
                         "Gemini timeout – item[%d]: %r",
@@ -327,162 +311,166 @@ def search():
     # Compute how many seconds remain in any rate-limit back-off window.
     paused_seconds = max(0.0, assessor.rate_limited_until - time.monotonic())
 
-    saved_urls = set(d['url'] for d in database.get_saved_deals())
+    saved_urls = set(d["url"] for d in database.get_saved_deals())
     for deal in assessed:
-        deal['is_saved'] = deal.get('url') in saved_urls
+        deal["is_saved"] = deal.get("url") in saved_urls
 
-    return jsonify({
-        'query': query,
-        'deal_count': len(assessed),
-        'deals': assessed,
-        'errors': search_errors,
-        'ai_enabled': assessor.enabled and _user_enabled,
-        'ai_rate_limited': assessor.is_rate_limited,
-        'ai_paused_seconds': round(paused_seconds),
-        'ai_timeout_count': timed_out,
-        'data_source': active_source,
-        'germany_only': germany_only,
-    })
+    return jsonify(
+        {
+            "query": query,
+            "deal_count": len(assessed),
+            "deals": assessed,
+            "errors": search_errors,
+            "ai_enabled": assessor.enabled and _user_enabled,
+            "ai_rate_limited": assessor.is_rate_limited,
+            "ai_paused_seconds": round(paused_seconds),
+            "ai_timeout_count": timed_out,
+            "data_source": active_source,
+            "germany_only": germany_only,
+        }
+    )
 
 
-@app.route('/api/history')
+@app.route("/api/history")
 def history():
-    limit = int(request.args.get('limit', 20))
+    limit = int(request.args.get("limit", 20))
     return jsonify(database.get_history(limit))
 
 
-@app.route('/api/deals/<int:search_id>')
+@app.route("/api/deals/<int:search_id>")
 def deals(search_id):
     return jsonify(database.get_deals_by_search(search_id))
 
 
-@app.route('/api/export')
+@app.route("/api/export")
 def export():
     csv_data = database.export_csv()
     return Response(
         csv_data,
-        mimetype='text/csv',
-        headers={'Content-Disposition': 'attachment; filename=ebay_deals.csv'},
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=ebay_deals.csv"},
     )
 
 
-@app.route('/api/stats')
+@app.route("/api/stats")
 def stats():
     return jsonify(database.get_stats())
 
 
-@app.route('/api/health')
+@app.route("/api/health")
 def health():
     paused_seconds = max(0.0, assessor.rate_limited_until - time.monotonic())
     data_source_setting = _db_data_source()
     _, active_source = _resolve_engine(data_source_setting)
-    return jsonify({
-        'status': 'healthy',
-        'ai_enabled': assessor.enabled and _db_ai_user_enabled(),
-        'ai_rate_limited': assessor.is_rate_limited,
-        'ai_paused_seconds': round(paused_seconds),
-        'ai_model': assessor.model_name,
-        'data_source': active_source,
-        'data_source_setting': data_source_setting,
-        'ebay_api_configured': ebay_api.is_configured,
-        'ebay_marketplace_id': ebay_api.marketplace_id,
-        'ebay_language': ebay_api.accept_language,
-        'ebay_locale': ebay_api.locale,
-        'ebay_delivery_country': ebay_api.delivery_country,
-        'germany_only': _db_germany_only(),
-    })
+    return jsonify(
+        {
+            "status": "healthy",
+            "ai_enabled": assessor.enabled and _db_ai_user_enabled(),
+            "ai_rate_limited": assessor.is_rate_limited,
+            "ai_paused_seconds": round(paused_seconds),
+            "ai_model": assessor.model_name,
+            "data_source": active_source,
+            "data_source_setting": data_source_setting,
+            "ebay_api_configured": ebay_api.is_configured,
+            "ebay_marketplace_id": ebay_api.marketplace_id,
+            "ebay_language": ebay_api.accept_language,
+            "ebay_locale": ebay_api.locale,
+            "ebay_delivery_country": ebay_api.delivery_country,
+            "germany_only": _db_germany_only(),
+        }
+    )
 
 
-@app.route('/api/settings', methods=['GET'])
+@app.route("/api/settings", methods=["GET"])
 def get_settings():
     data_source_setting = _db_data_source()
     _, active_source = _resolve_engine(data_source_setting)
-    return jsonify({
-        'gemini_model': assessor.model_name,
-        'ai_enabled': _db_ai_user_enabled(),
-        'data_source': data_source_setting,
-        'active_data_source': active_source,
-        'ebay_api_configured': ebay_api.is_configured,
-        'ebay_marketplace_id': ebay_api.marketplace_id,
-        'ebay_language': ebay_api.accept_language,
-        'ebay_locale': ebay_api.locale,
-        'ebay_delivery_country': ebay_api.delivery_country,
-        'germany_only': _db_germany_only(),
-    })
+    return jsonify(
+        {
+            "gemini_model": assessor.model_name,
+            "ai_enabled": _db_ai_user_enabled(),
+            "data_source": data_source_setting,
+            "active_data_source": active_source,
+            "ebay_api_configured": ebay_api.is_configured,
+            "ebay_marketplace_id": ebay_api.marketplace_id,
+            "ebay_language": ebay_api.accept_language,
+            "ebay_locale": ebay_api.locale,
+            "ebay_delivery_country": ebay_api.delivery_country,
+            "germany_only": _db_germany_only(),
+        }
+    )
 
 
-@app.route('/api/settings', methods=['POST'])
+@app.route("/api/settings", methods=["POST"])
 def update_settings():
     global assessor
     data = request.get_json(silent=True)
     if data is None:
-        return jsonify({
-        'error': 'Request body must be valid JSON with Content-Type: application/json'
-    }), 400
+        return jsonify({"error": "Request body must be valid JSON with Content-Type: application/json"}), 400
 
     # Gemini model names: alphanumeric, hyphens, underscores, and dots only.
-    _MODEL_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_\-.]{0,99}$')
+    _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,99}$")
 
     errors = {}
     updated = {}
 
-    if 'gemini_model' in data:
-        model = str(data['gemini_model']).strip()
+    if "gemini_model" in data:
+        model = str(data["gemini_model"]).strip()
         if not model:
-            errors['gemini_model'] = 'gemini_model must not be empty (e.g., gemini-2.0-flash-lite)'
+            errors["gemini_model"] = "gemini_model must not be empty (e.g., gemini-2.0-flash-lite)"
         elif not _MODEL_NAME_RE.match(model):
-            errors['gemini_model'] = (
-                'gemini_model contains invalid characters; use only letters, '
-                'digits, hyphens, underscores, and dots (e.g., gemini-2.0-flash-lite)'
+            errors["gemini_model"] = (
+                "gemini_model contains invalid characters; use only letters, "
+                "digits, hyphens, underscores, and dots (e.g., gemini-2.0-flash-lite)"
             )
         else:
             try:
                 assessor.model_name = model
-                database.set_setting('gemini_model', model)
-                updated['gemini_model'] = model
+                database.set_setting("gemini_model", model)
+                updated["gemini_model"] = model
                 logger.info("Settings: gemini_model updated to %r", model)
             except ValueError as exc:
-                errors['gemini_model'] = str(exc)
+                errors["gemini_model"] = str(exc)
 
-    if 'ai_enabled' in data:
-        ai_enabled = data['ai_enabled']
+    if "ai_enabled" in data:
+        ai_enabled = data["ai_enabled"]
         if not isinstance(ai_enabled, bool):
-            errors['ai_enabled'] = 'ai_enabled must be a boolean (true or false)'
+            errors["ai_enabled"] = "ai_enabled must be a boolean (true or false)"
         else:
             assessor.user_enabled = ai_enabled
-            database.set_setting('ai_enabled', str(ai_enabled).lower())
-            updated['ai_enabled'] = ai_enabled
+            database.set_setting("ai_enabled", str(ai_enabled).lower())
+            updated["ai_enabled"] = ai_enabled
             logger.info("Settings: ai_enabled updated to %r", ai_enabled)
 
-    if 'data_source' in data:
-        ds = str(data['data_source']).strip().lower()
+    if "data_source" in data:
+        ds = str(data["data_source"]).strip().lower()
         if ds not in _VALID_DATA_SOURCES:
-            errors['data_source'] = (
-                f"data_source must be one of: {', '.join(sorted(_VALID_DATA_SOURCES))}"
-            )
+            errors["data_source"] = f"data_source must be one of: {', '.join(sorted(_VALID_DATA_SOURCES))}"
         else:
-            database.set_setting('data_source', ds)
-            updated['data_source'] = ds
+            database.set_setting("data_source", ds)
+            updated["data_source"] = ds
             logger.info("Settings: data_source updated to %r", ds)
 
     if errors:
-        return jsonify({'errors': errors}), 400
+        return jsonify({"errors": errors}), 400
 
     data_source_setting = _db_data_source()
     _, active_source = _resolve_engine(data_source_setting)
-    return jsonify({
-        'updated': updated,
-        'gemini_model': assessor.model_name,
-        'ai_enabled': assessor.user_enabled,
-        'data_source': data_source_setting,
-        'active_data_source': active_source,
-        'ebay_api_configured': ebay_api.is_configured,
-        'ebay_marketplace_id': ebay_api.marketplace_id,
-        'ebay_language': ebay_api.accept_language,
-        'ebay_locale': ebay_api.locale,
-        'ebay_delivery_country': ebay_api.delivery_country,
-        'germany_only': _db_germany_only(),
-    })
+    return jsonify(
+        {
+            "updated": updated,
+            "gemini_model": assessor.model_name,
+            "ai_enabled": assessor.user_enabled,
+            "data_source": data_source_setting,
+            "active_data_source": active_source,
+            "ebay_api_configured": ebay_api.is_configured,
+            "ebay_marketplace_id": ebay_api.marketplace_id,
+            "ebay_language": ebay_api.accept_language,
+            "ebay_locale": ebay_api.locale,
+            "ebay_delivery_country": ebay_api.delivery_country,
+            "germany_only": _db_germany_only(),
+        }
+    )
 
 
 # ── Save / Skip deal endpoints ────────────────────────────────────────────────
@@ -491,84 +479,87 @@ def update_settings():
 _MAX_TITLE_LENGTH = 500
 
 
-@app.route('/api/deals/save', methods=['POST'])
+@app.route("/api/deals/save", methods=["POST"])
 def deal_save():
     """Save (favourite) a deal by URL."""
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({'error': 'Request body must be valid JSON'}), 400
-    url = (data.get('url') or '').strip()
+        return jsonify({"error": "Request body must be valid JSON"}), 400
+    url = (data.get("url") or "").strip()
     if not url:
-        return jsonify({'error': 'url is required'}), 400
-    title = str(data.get('title') or '')[:_MAX_TITLE_LENGTH]
+        return jsonify({"error": "url is required"}), 400
+    title = str(data.get("title") or "")[:_MAX_TITLE_LENGTH]
     try:
-        price = float(data.get('price') or 0)
+        price = float(data.get("price") or 0)
     except (TypeError, ValueError):
         price = 0.0
     database.save_deal(url, title, price)
-    return jsonify({'saved': True, 'url': url})
+    return jsonify({"saved": True, "url": url})
 
 
-@app.route('/api/deals/unsave', methods=['POST'])
+@app.route("/api/deals/unsave", methods=["POST"])
 def deal_unsave():
     """Remove a deal from the saved list."""
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({'error': 'Request body must be valid JSON'}), 400
-    url = (data.get('url') or '').strip()
+        return jsonify({"error": "Request body must be valid JSON"}), 400
+    url = (data.get("url") or "").strip()
     if not url:
-        return jsonify({'error': 'url is required'}), 400
+        return jsonify({"error": "url is required"}), 400
     database.unsave_deal(url)
-    return jsonify({'saved': False, 'url': url})
+    return jsonify({"saved": False, "url": url})
 
 
-@app.route('/api/deals/saved', methods=['GET'])
+@app.route("/api/deals/saved", methods=["GET"])
 def deal_saved_list():
     """Return all saved deals."""
     return jsonify(database.get_saved_deals())
 
 
-@app.route('/api/deals/skip', methods=['POST'])
+@app.route("/api/deals/skip", methods=["POST"])
 def deal_skip():
     """Skip (hide) a deal so it is excluded from future search results."""
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({'error': 'Request body must be valid JSON'}), 400
-    url = (data.get('url') or '').strip()
+        return jsonify({"error": "Request body must be valid JSON"}), 400
+    url = (data.get("url") or "").strip()
     if not url:
-        return jsonify({'error': 'url is required'}), 400
-    title = str(data.get('title') or '')[:_MAX_TITLE_LENGTH]
+        return jsonify({"error": "url is required"}), 400
+    title = str(data.get("title") or "")[:_MAX_TITLE_LENGTH]
     try:
-        price = float(data.get('price') or 0)
+        price = float(data.get("price") or 0)
     except (TypeError, ValueError):
         price = 0.0
     database.skip_deal(url, title, price)
-    return jsonify({'skipped': True, 'url': url})
+    return jsonify({"skipped": True, "url": url})
 
 
-@app.route('/api/deals/unskip', methods=['POST'])
+@app.route("/api/deals/unskip", methods=["POST"])
 def deal_unskip():
     """Remove a deal from the skipped list."""
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({'error': 'Request body must be valid JSON'}), 400
-    url = (data.get('url') or '').strip()
+        return jsonify({"error": "Request body must be valid JSON"}), 400
+    url = (data.get("url") or "").strip()
     if not url:
-        return jsonify({'error': 'url is required'}), 400
+        return jsonify({"error": "url is required"}), 400
     database.unskip_deal(url)
-    return jsonify({'skipped': False, 'url': url})
+    return jsonify({"skipped": False, "url": url})
 
 
-@app.route('/api/deals/skipped', methods=['GET'])
+@app.route("/api/deals/skipped", methods=["GET"])
 def deal_skipped_list():
     """Return all skipped deals with full metadata."""
     return jsonify(database.get_skipped_deals())
 
 
-if __name__ == '__main__':
-    host = os.environ.get('FLASK_HOST', '0.0.0.0')
-    port = int(os.environ.get('FLASK_PORT', 5000))
-    debug = os.environ.get('FLASK_ENV', 'production') != 'production'
+if __name__ == "__main__":
+    host = os.environ.get("FLASK_HOST", "0.0.0.0")
+    port = int(os.environ.get("FLASK_PORT", 5000))
+    debug = os.environ.get("FLASK_DEBUG", "").lower() in ("1", "true", "yes")
+    if not debug:
+        # Backward-compatible: FLASK_ENV=development still enables debug.
+        debug = os.environ.get("FLASK_ENV", "production").lower() == "development"
     app.run(host=host, port=port, debug=debug)
 
 # ── Startup validation ──────────────────────────────────────────────────────
@@ -586,9 +577,7 @@ elif not ebay_api.is_configured:
         "Set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET to use the official Browse API."
     )
 else:
-    logger.info(
-        "eBay API credentials found — Browse API will be used when data_source is 'api' or 'auto'."
-    )
+    logger.info("eBay API credentials found — Browse API will be used when data_source is 'api' or 'auto'.")
 
 if not os.environ.get("GEMINI_API_KEY", "").strip():
     logger.info(

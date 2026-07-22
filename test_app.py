@@ -14,18 +14,16 @@ import database
 
 
 @pytest.fixture
-def client():
+def client(tmp_path):
     """Flask test client with a temporary database."""
-    import tempfile
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    db_file = tmp_path / "test.db"
     old_path = database.DB_PATH
-    database.DB_PATH = tmp.name
+    database.DB_PATH = str(db_file)
     database.init_db()
     app.app.config["TESTING"] = True
     with app.app.test_client() as c:
         yield c
     database.DB_PATH = old_path
-    os.unlink(tmp.name)
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +37,7 @@ def _reset_globals():
 
 # ── Index ──────────────────────────────────────────────────────────────────
 
+
 class TestIndex:
     def test_index_returns_html(self, client):
         resp = client.get("/")
@@ -47,6 +46,7 @@ class TestIndex:
 
 
 # ── Health ──────────────────────────────────────────────────────────────────
+
 
 class TestHealth:
     def test_health_returns_healthy(self, client):
@@ -58,6 +58,7 @@ class TestHealth:
 
 
 # ── Search ──────────────────────────────────────────────────────────────────
+
 
 class TestSearch:
     def test_search_requires_json(self, client):
@@ -108,17 +109,29 @@ class TestSearch:
         fake_deals = [
             {
                 "title": "German Item",
-                "price": 10.0, "condition": "Used", "seller_rating": 95.0,
-                "url": "http://ebay.de/itm/de", "shipping": "Free",
-                "is_trending": False, "item_location": "Berlin, DE",
-                "image_urls": [], "image_issues": [], "listing_date": None,
+                "price": 10.0,
+                "condition": "Used",
+                "seller_rating": 95.0,
+                "url": "http://ebay.de/itm/de",
+                "shipping": "Free",
+                "is_trending": False,
+                "item_location": "Berlin, DE",
+                "image_urls": [],
+                "image_issues": [],
+                "listing_date": None,
             },
             {
                 "title": "US Item",
-                "price": 5.0, "condition": "Used", "seller_rating": 90.0,
-                "url": "http://ebay.de/itm/us", "shipping": "$5",
-                "is_trending": False, "item_location": "New York, US",
-                "image_urls": [], "image_issues": [], "listing_date": None,
+                "price": 5.0,
+                "condition": "Used",
+                "seller_rating": 90.0,
+                "url": "http://ebay.de/itm/us",
+                "shipping": "$5",
+                "is_trending": False,
+                "item_location": "New York, US",
+                "image_urls": [],
+                "image_issues": [],
+                "listing_date": None,
             },
         ]
         with patch.object(app.scraper, "search", return_value=(fake_deals, [])):
@@ -132,17 +145,29 @@ class TestSearch:
         fake_deals = [
             {
                 "title": "FIFA 22 PS4 Bundle",
-                "price": 10.0, "condition": "Used", "seller_rating": 95.0,
-                "url": "http://ebay.de/itm/fifa", "shipping": "Free",
-                "is_trending": False, "item_location": "DE",
-                "image_urls": [], "image_issues": [], "listing_date": None,
+                "price": 10.0,
+                "condition": "Used",
+                "seller_rating": 95.0,
+                "url": "http://ebay.de/itm/fifa",
+                "shipping": "Free",
+                "is_trending": False,
+                "item_location": "DE",
+                "image_urls": [],
+                "image_issues": [],
+                "listing_date": None,
             },
             {
                 "title": "Zelda Switch",
-                "price": 30.0, "condition": "New", "seller_rating": 99.0,
-                "url": "http://ebay.de/itm/zelda", "shipping": "Free",
-                "is_trending": False, "item_location": "DE",
-                "image_urls": [], "image_issues": [], "listing_date": None,
+                "price": 30.0,
+                "condition": "New",
+                "seller_rating": 99.0,
+                "url": "http://ebay.de/itm/zelda",
+                "shipping": "Free",
+                "is_trending": False,
+                "item_location": "DE",
+                "image_urls": [],
+                "image_issues": [],
+                "listing_date": None,
             },
         ]
         with patch.object(app.scraper, "search", return_value=(fake_deals, [])):
@@ -153,6 +178,7 @@ class TestSearch:
 
 
 # ── Settings ────────────────────────────────────────────────────────────────
+
 
 class TestSettings:
     def test_get_settings(self, client):
@@ -199,17 +225,21 @@ class TestSettings:
 
 # ── Save / Skip / Saved / Skipped ──────────────────────────────────────────
 
+
 class TestSaveDeal:
     def test_save_requires_url(self, client):
         resp = client.post("/api/deals/save", json={})
         assert resp.status_code == 400
 
     def test_save_deal(self, client):
-        resp = client.post("/api/deals/save", json={
-            "url": "http://ebay.de/itm/save1",
-            "title": "Save Me",
-            "price": 15.0,
-        })
+        resp = client.post(
+            "/api/deals/save",
+            json={
+                "url": "http://ebay.de/itm/save1",
+                "title": "Save Me",
+                "price": 15.0,
+            },
+        )
         assert resp.status_code == 200
         assert resp.get_json()["saved"] is True
         saved = database.get_saved_deals()
@@ -232,11 +262,14 @@ class TestSaveDeal:
 
 class TestSkipDeal:
     def test_skip_deal(self, client):
-        resp = client.post("/api/deals/skip", json={
-            "url": "http://ebay.de/itm/skip1",
-            "title": "Skip Me",
-            "price": 99.0,
-        })
+        resp = client.post(
+            "/api/deals/skip",
+            json={
+                "url": "http://ebay.de/itm/skip1",
+                "title": "Skip Me",
+                "price": 99.0,
+            },
+        )
         assert resp.status_code == 200
         assert resp.get_json()["skipped"] is True
         assert len(database.get_skipped_deals()) == 1
@@ -246,16 +279,30 @@ class TestSkipDeal:
         database.skip_deal("http://ebay.de/itm/skipped-url", "Skipped", 10.0)
         fake_deals = [
             {
-                "title": "Skipped Deal", "price": 10.0, "condition": "U",
-                "seller_rating": 90.0, "url": "http://ebay.de/itm/skipped-url",
-                "shipping": "F", "is_trending": False, "item_location": "DE",
-                "image_urls": [], "image_issues": [], "listing_date": None,
+                "title": "Skipped Deal",
+                "price": 10.0,
+                "condition": "U",
+                "seller_rating": 90.0,
+                "url": "http://ebay.de/itm/skipped-url",
+                "shipping": "F",
+                "is_trending": False,
+                "item_location": "DE",
+                "image_urls": [],
+                "image_issues": [],
+                "listing_date": None,
             },
             {
-                "title": "Good Deal", "price": 5.0, "condition": "N",
-                "seller_rating": 99.0, "url": "http://ebay.de/itm/good",
-                "shipping": "F", "is_trending": False, "item_location": "DE",
-                "image_urls": [], "image_issues": [], "listing_date": None,
+                "title": "Good Deal",
+                "price": 5.0,
+                "condition": "N",
+                "seller_rating": 99.0,
+                "url": "http://ebay.de/itm/good",
+                "shipping": "F",
+                "is_trending": False,
+                "item_location": "DE",
+                "image_urls": [],
+                "image_issues": [],
+                "listing_date": None,
             },
         ]
         with patch.object(app.scraper, "search", return_value=(fake_deals, [])):
@@ -279,6 +326,7 @@ class TestSkipDeal:
 
 # ── History ─────────────────────────────────────────────────────────────────
 
+
 class TestHistory:
     def test_history_empty(self, client):
         resp = client.get("/api/history")
@@ -295,6 +343,7 @@ class TestHistory:
 
 # ── Export ──────────────────────────────────────────────────────────────────
 
+
 class TestExport:
     def test_export_csv(self, client):
         resp = client.get("/api/export")
@@ -304,6 +353,7 @@ class TestExport:
 
 
 # ── Stats ───────────────────────────────────────────────────────────────────
+
 
 class TestStats:
     def test_stats(self, client):

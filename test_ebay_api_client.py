@@ -113,9 +113,7 @@ class TestSearch:
                     "condition": "Used",
                     "conditionId": "3000",
                     "seller": {"feedbackPercentage": "98.5"},
-                    "shippingOptions": [
-                        {"shippingCostType": "FREE", "shippingCost": {"value": "0.00"}}
-                    ],
+                    "shippingOptions": [{"shippingCostType": "FREE", "shippingCost": {"value": "0.00"}}],
                     "itemLocation": {"country": "DE", "city": "Berlin"},
                     "itemWebUrl": "http://ebay.de/itm/123",
                     "image": {"imageUrl": "http://i.ebayimg.com/test.jpg"},
@@ -184,9 +182,7 @@ class TestGetMedianSoldPrice:
         }
 
         with patch.object(client, "_get_access_token", mock_token):
-            with patch.object(
-                client.session, "get", side_effect=[mock_fail, mock_ok]
-            ):
+            with patch.object(client.session, "get", side_effect=[mock_fail, mock_ok]):
                 price, source, errors = client.get_median_sold_price("Test Game Xbox 360")
         assert price == 15.0
         assert source == "active_listings"

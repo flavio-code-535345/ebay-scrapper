@@ -7,7 +7,7 @@ import os
 import sqlite3
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 
 DB_PATH = os.environ.get("DB_PATH", "ebay_deals.db")
 
@@ -21,9 +21,10 @@ def get_db():
     must call ``conn.commit()`` themselves or rely on the default
     autocommit from the context manager (no-op for reads).
     """
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("PRAGMA busy_timeout=30000")
         yield conn
         conn.commit()
     finally:
@@ -37,9 +38,11 @@ def _ensure_wal_mode():
     WAL is an optimization, not required for database functionality.
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30.0)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA synchronous=NORMAL")
         finally:
             conn.close()
     except sqlite3.OperationalError as e:
@@ -128,12 +131,25 @@ def init_db():
 def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> None:
     _ALLOWED_TABLES = {"deals", "searches", "user_skipped_deals"}
     _ALLOWED_COLUMNS = {
-        "ai_deal_rating", "ai_confidence_score", "ai_visual_findings",
-        "ai_red_flags", "ai_fair_market_estimate", "ai_verdict_summary",
-        "ai_assessed", "ai_potential_scam", "ai_scam_warning",
-        "image_issues", "image_urls", "item_location", "description",
-        "seller_count", "listing_date", "title", "price",
-        "ai_itemized_resale_estimates", "ai_estimated_total_cost",
+        "ai_deal_rating",
+        "ai_confidence_score",
+        "ai_visual_findings",
+        "ai_red_flags",
+        "ai_fair_market_estimate",
+        "ai_verdict_summary",
+        "ai_assessed",
+        "ai_potential_scam",
+        "ai_scam_warning",
+        "image_issues",
+        "image_urls",
+        "item_location",
+        "description",
+        "seller_count",
+        "listing_date",
+        "title",
+        "price",
+        "ai_itemized_resale_estimates",
+        "ai_estimated_total_cost",
         "ai_estimated_gross_profit",
     }
     _ALLOWED_TYPES = {"TEXT", "REAL", "INTEGER", "INTEGER DEFAULT 0"}
@@ -143,10 +159,9 @@ def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> No
         raise ValueError(f"_add_column_if_missing: disallowed column name: {column!r}")
     if col_type not in _ALLOWED_TYPES:
         raise ValueError(f"_add_column_if_missing: disallowed column type: {col_type!r}")
-    try:
+    with suppress(sqlite3.OperationalError):
+        # Column already exists (or table is locked); safe to ignore.
         cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
-    except Exception:
-        pass
 
 
 def save_search(query: str, deals: list[dict]) -> int:
@@ -176,27 +191,41 @@ def save_search(query: str, deals: list[dict]) -> int:
                    ai_estimated_gross_profit, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (search_id, deal.get("title"), deal.get("price"),
-                 deal.get("condition"), deal.get("seller_rating"), deal.get("url"),
-                 deal.get("shipping"), int(bool(deal.get("is_trending"))),
-                 deal.get("overall_score"), deal.get("price_score"),
-                 deal.get("seller_score"), deal.get("condition_score"),
-                 deal.get("trend_score"), deal.get("recommendation"),
-                 deal.get("ai_deal_rating"), deal.get("ai_confidence_score"),
-                 json.dumps(visual_findings)
-                if isinstance(visual_findings, list) else visual_findings,
-                 json.dumps(red_flags) if isinstance(red_flags, list) else red_flags,
-                 deal.get("ai_fair_market_estimate"), deal.get("ai_verdict_summary"),
-                 int(bool(deal.get("ai_assessed"))),
-                 int(bool(deal.get("ai_potential_scam"))),
-                 deal.get("ai_scam_warning"),
-                 json.dumps(image_issues) if isinstance(image_issues, list) else image_issues,
-                 json.dumps(image_urls) if isinstance(image_urls, list) else image_urls,
-                 deal.get("item_location"), deal.get("description"),
-                 deal.get("seller_count"), deal.get("listing_date"),
-                 json.dumps(itemized) if isinstance(itemized, list) else itemized,
-                 deal.get("ai_estimated_total_cost"),
-                 deal.get("ai_estimated_gross_profit"), now),
+                (
+                    search_id,
+                    deal.get("title"),
+                    deal.get("price"),
+                    deal.get("condition"),
+                    deal.get("seller_rating"),
+                    deal.get("url"),
+                    deal.get("shipping"),
+                    int(bool(deal.get("is_trending"))),
+                    deal.get("overall_score"),
+                    deal.get("price_score"),
+                    deal.get("seller_score"),
+                    deal.get("condition_score"),
+                    deal.get("trend_score"),
+                    deal.get("recommendation"),
+                    deal.get("ai_deal_rating"),
+                    deal.get("ai_confidence_score"),
+                    json.dumps(visual_findings) if isinstance(visual_findings, list) else visual_findings,
+                    json.dumps(red_flags) if isinstance(red_flags, list) else red_flags,
+                    deal.get("ai_fair_market_estimate"),
+                    deal.get("ai_verdict_summary"),
+                    int(bool(deal.get("ai_assessed"))),
+                    int(bool(deal.get("ai_potential_scam"))),
+                    deal.get("ai_scam_warning"),
+                    json.dumps(image_issues) if isinstance(image_issues, list) else image_issues,
+                    json.dumps(image_urls) if isinstance(image_urls, list) else image_urls,
+                    deal.get("item_location"),
+                    deal.get("description"),
+                    deal.get("seller_count"),
+                    deal.get("listing_date"),
+                    json.dumps(itemized) if isinstance(itemized, list) else itemized,
+                    deal.get("ai_estimated_total_cost"),
+                    deal.get("ai_estimated_gross_profit"),
+                    now,
+                ),
             )
     return search_id
 
@@ -204,9 +233,7 @@ def save_search(query: str, deals: list[dict]) -> int:
 def get_history(limit: int = 20) -> list[dict]:
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM searches ORDER BY created_at DESC LIMIT ?", (limit,)
-        )
+        cursor.execute("SELECT * FROM searches ORDER BY created_at DESC LIMIT ?", (limit,))
         return [dict(row) for row in cursor.fetchall()]
 
 
@@ -216,17 +243,18 @@ def get_deals_by_search(search_id: int) -> list[dict]:
         cursor.execute("SELECT * FROM deals WHERE search_id = ?", (search_id,))
         rows = [dict(row) for row in cursor.fetchall()]
     _JSON_LIST_FIELDS = (
-        "ai_visual_findings", "ai_red_flags", "image_issues",
-        "image_urls", "ai_itemized_resale_estimates",
+        "ai_visual_findings",
+        "ai_red_flags",
+        "image_issues",
+        "image_urls",
+        "ai_itemized_resale_estimates",
     )
     for row in rows:
         for field in _JSON_LIST_FIELDS:
             raw = row.get(field)
             if isinstance(raw, str):
-                try:
+                with suppress(json.JSONDecodeError, ValueError):
                     row[field] = json.loads(raw)
-                except (json.JSONDecodeError, ValueError):
-                    pass
     return rows
 
 
@@ -270,8 +298,7 @@ def set_setting(key: str, value: str) -> None:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO settings (key, value) VALUES (?, ?)"
-            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
         )
 
@@ -296,9 +323,7 @@ def unsave_deal(url: str) -> None:
 def get_saved_deals() -> list[dict]:
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT url, title, price, saved_at FROM user_saved_deals ORDER BY saved_at DESC"
-        )
+        cursor.execute("SELECT url, title, price, saved_at FROM user_saved_deals ORDER BY saved_at DESC")
         return [dict(row) for row in cursor.fetchall()]
 
 
@@ -336,7 +361,5 @@ def get_skipped_deal_urls() -> list[str]:
 def get_skipped_deals() -> list[dict]:
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT url, title, price, skipped_at FROM user_skipped_deals ORDER BY skipped_at DESC"
-        )
+        cursor.execute("SELECT url, title, price, skipped_at FROM user_skipped_deals ORDER BY skipped_at DESC")
         return [dict(row) for row in cursor.fetchall()]

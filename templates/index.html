@@ -106,6 +106,7 @@
                     <option value="good">Good</option>
                     <option value="okay">Okay</option>
                     <option value="avoid">Avoid</option>
+                    <option value="garbage">Garbage</option>
                 </select>
                 <select id="sortOrderSelect" class="filter-select" title="Sort deals by listing date">
                     <option value="newest">Newest first</option>
@@ -146,7 +147,11 @@
                     <span class="ai-badge badge-avoid">Avoid</span>
                     <span class="rating-legend-desc">Unprofitable — not worth buying for resale.</span>
                 </div>
-                <p class="rating-legend-note">Ratings are calculated by AI based on current eBay market data.</p>
+                <div class="rating-legend-item">
+                    <span class="ai-badge badge-garbage">Garbage</span>
+                    <span class="rating-legend-desc">Worthless — broken, untested, empty cases, demos, or shovelware.</span>
+                </div>
+                <p class="rating-legend-note">Ratings combine Gemini AI analysis with deterministic anti-scam / junk rules and live eBay market data.</p>
             </div>
         </details>
 
