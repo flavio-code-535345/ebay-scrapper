@@ -29,9 +29,15 @@ def client(tmp_path):
 @pytest.fixture(autouse=True)
 def _reset_globals():
     """Reset module-level state between tests."""
-    app.assessor.enabled = False
-    app.assessor.user_enabled = True
-    app.assessor._ebay_client = None
+    from ai_providers import apply_user_enabled, get_assessor, reset_assessors
+
+    reset_assessors()
+    # Re-bind default assessor after cache clear
+    a = get_assessor("gemini")
+    a.enabled = False
+    apply_user_enabled(True)
+    a._ebay_client = None
+    app.assessor = a
     yield
 
 
@@ -188,6 +194,9 @@ class TestSettings:
         assert "gemini_model" in data
         assert "ai_enabled" in data
         assert "data_source" in data
+        assert "ai_provider" in data
+        assert "providers" in data
+        assert data["ai_provider"] in ("gemini", "opencode-go")
 
     def test_update_data_source(self, client):
         resp = client.post("/api/settings", json={"data_source": "scraper"})
@@ -221,6 +230,36 @@ class TestSettings:
     def test_update_gemini_model_empty(self, client):
         resp = client.post("/api/settings", json={"gemini_model": ""})
         assert resp.status_code == 400
+
+    def test_switch_ai_provider_persists(self, client):
+        resp = client.post("/api/settings", json={"ai_provider": "opencode-go"})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ai_provider"] == "opencode-go"
+        assert database.get_setting("ai_provider") == "opencode-go"
+        # Survives reload via GET
+        again = client.get("/api/settings").get_json()
+        assert again["ai_provider"] == "opencode-go"
+
+    def test_switch_provider_and_model(self, client):
+        resp = client.post(
+            "/api/settings",
+            json={"ai_provider": "opencode-go", "ai_model": "grok-4.5"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ai_provider"] == "opencode-go"
+        assert data["ai_model"] == "grok-4.5"
+        assert database.get_setting("opencode_go_model") == "grok-4.5"
+
+    def test_provider_models_are_independent(self, client):
+        client.post("/api/settings", json={"ai_provider": "gemini", "ai_model": "gemini-2.0-flash"})
+        client.post("/api/settings", json={"ai_provider": "opencode-go", "ai_model": "deepseek-v4-flash"})
+        # Gemini model still stored separately
+        assert database.get_setting("gemini_model") == "gemini-2.0-flash"
+        assert database.get_setting("opencode_go_model") == "deepseek-v4-flash"
+        gem = client.post("/api/settings", json={"ai_provider": "gemini"}).get_json()
+        assert gem["ai_model"] == "gemini-2.0-flash"
 
 
 # ── Save / Skip / Saved / Skipped ──────────────────────────────────────────

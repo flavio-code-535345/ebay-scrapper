@@ -125,42 +125,129 @@ a:hover { text-decoration: underline; }
 .btn-search:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .quick-searches {
+    margin-top: 0.85rem;
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
+    flex-direction: column;
     gap: 0.45rem;
-    margin-top: 0.65rem;
 }
 
 .quick-searches-label {
     color: var(--muted);
-    font-size: 0.78rem;
+    font-size: 0.72rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.06em;
 }
 
-.btn-quick-search {
-    background: var(--surface2);
-    color: var(--text);
+.quick-searches-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.55rem;
+}
+
+.quick-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    width: 100%;
+    text-align: left;
+    padding: 0.7rem 0.85rem;
+    background: linear-gradient(180deg, var(--surface2) 0%, var(--surface) 100%);
     border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 0.3rem 0.85rem;
-    font-size: 0.82rem;
-    font-weight: 600;
+    border-radius: var(--radius-lg);
+    color: var(--text);
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+    transition: border-color 0.18s ease, background 0.18s ease, transform 0.15s ease, box-shadow 0.18s ease;
 }
 
-.btn-quick-search:hover {
-    background: var(--accent-dim);
-    border-color: var(--accent);
-    color: var(--accent);
+.quick-chip:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
 }
 
-.btn-quick-search:disabled {
-    opacity: 0.5;
+.quick-chip:active {
+    transform: translateY(0);
+}
+
+.quick-chip:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.quick-chip:disabled {
+    opacity: 0.45;
     cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.quick-chip-icon {
+    flex-shrink: 0;
+    width: 2.1rem;
+    height: 2.1rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    font-size: 1rem;
+    line-height: 1;
+}
+
+.quick-chip-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.08rem;
+    min-width: 0;
+}
+
+.quick-chip-title {
+    font-size: 0.92rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+}
+
+.quick-chip-sub {
+    font-size: 0.72rem;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Xbox — soft green accent (matches theme greens) */
+.quick-chip--xbox {
+    border-color: rgba(63, 185, 80, 0.28);
+}
+.quick-chip--xbox .quick-chip-icon {
+    background: rgba(63, 185, 80, 0.14);
+    border: 1px solid rgba(63, 185, 80, 0.35);
+}
+.quick-chip--xbox:hover {
+    border-color: rgba(63, 185, 80, 0.65);
+    background: linear-gradient(180deg, rgba(25, 108, 46, 0.35) 0%, var(--surface) 100%);
+}
+.quick-chip--xbox:hover .quick-chip-title { color: var(--green); }
+
+/* PlayStation — soft blue accent (matches theme accent) */
+.quick-chip--ps {
+    border-color: rgba(88, 166, 255, 0.28);
+}
+.quick-chip--ps .quick-chip-icon {
+    background: rgba(88, 166, 255, 0.12);
+    border: 1px solid rgba(88, 166, 255, 0.35);
+}
+.quick-chip--ps:hover {
+    border-color: rgba(88, 166, 255, 0.65);
+    background: linear-gradient(180deg, rgba(31, 111, 235, 0.28) 0%, var(--surface) 100%);
+}
+.quick-chip--ps:hover .quick-chip-title { color: var(--accent); }
+
+@media (max-width: 520px) {
+    .quick-searches-row {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* ── Settings details/summary ───────────────────────────────────────────── */
