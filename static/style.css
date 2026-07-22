@@ -124,6 +124,45 @@ a:hover { text-decoration: underline; }
 .btn-search:hover { background: #79b8ff; }
 .btn-search:disabled { opacity: 0.55; cursor: not-allowed; }
 
+.quick-searches {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+    margin-top: 0.65rem;
+}
+
+.quick-searches-label {
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.btn-quick-search {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.3rem 0.85rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.btn-quick-search:hover {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.btn-quick-search:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 /* ── Settings details/summary ───────────────────────────────────────────── */
 .settings-details {
     margin-top: 1rem;
