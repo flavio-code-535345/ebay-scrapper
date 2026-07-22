@@ -101,15 +101,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (searchForm) searchForm.addEventListener('submit', handleSearch);
 
     // Quick-search chips (Xbox 360 / PS4 bundle presets)
-    document.querySelectorAll('.btn-quick-search').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const query = (btn.dataset.query || '').trim();
-            if (!query) return;
-            const input = document.getElementById('searchQuery');
-            if (input) input.value = query;
-            handleSearch(new Event('submit'));
+    const quickSearches = document.getElementById('quickSearches');
+    if (quickSearches) {
+        quickSearches.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-query]');
+            if (!btn || btn.disabled) return;
+            e.preventDefault();
+            runQuickSearch(btn.getAttribute('data-query') || '');
         });
-    });
+    }
 
     // Cancel search
     const cancelBtn = document.getElementById('cancelSearchBtn');
@@ -186,6 +186,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const aiToggleBtn = document.getElementById('aiToggleBtn');
     if (aiToggleBtn) aiToggleBtn.addEventListener('click', toggleAiEnabled);
 
+    const aiProviderSelect = document.getElementById('aiProviderSelect');
+    if (aiProviderSelect) aiProviderSelect.addEventListener('change', saveAiProvider);
+
     const dataSourceSelect = document.getElementById('dataSourceSelect');
     if (dataSourceSelect) dataSourceSelect.addEventListener('change', saveDataSource);
 
@@ -200,8 +203,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const params = new URLSearchParams(window.location.search);
     const autoSearch = params.get('search');
     if (autoSearch) {
-        document.getElementById('searchQuery').value = autoSearch;
-        handleSearch(new Event('submit'));
+        runQuickSearch(autoSearch);
     }
 
     // Init
@@ -214,13 +216,40 @@ document.addEventListener('DOMContentLoaded', () => {
 // Search
 // ---------------------------------------------------------------------------
 
-async function handleSearch(e) {
-    e.preventDefault();
+/** Fill the search box and start a search (used by quick-search chips). */
+function runQuickSearch(query) {
+    const q = (query || '').trim();
+    if (!q) return;
+    const input = document.getElementById('searchQuery');
+    if (input) {
+        input.value = q;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    // Prefer native form submit so the same path as the Search button is used.
+    const form = document.getElementById('searchForm');
+    if (form && typeof form.requestSubmit === 'function') {
+        form.requestSubmit();
+        return;
+    }
+    handleSearch({ preventDefault() {} });
+}
 
-    const query    = document.getElementById('searchQuery').value.trim();
+function setSearchControlsDisabled(disabled) {
     const searchBtn = document.getElementById('searchBtn');
-    const spinner   = searchBtn.querySelector('.spinner-border');
-    const btnText   = searchBtn.querySelector('.btn-text');
+    if (searchBtn) searchBtn.disabled = disabled;
+    document.querySelectorAll('#quickSearches [data-query]').forEach(btn => {
+        btn.disabled = disabled;
+    });
+}
+
+async function handleSearch(e) {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+
+    const query = document.getElementById('searchQuery').value.trim();
+    const searchBtn = document.getElementById('searchBtn');
+    if (!searchBtn) return;
+    const spinner = searchBtn.querySelector('.spinner-border');
+    const btnText = searchBtn.querySelector('.btn-text');
 
     if (!query) {
         showError('Please enter a search term');
@@ -232,10 +261,9 @@ async function handleSearch(e) {
     _abortController = new AbortController();
 
     // UI – loading state
-    searchBtn.disabled = true;
-    document.querySelectorAll('.btn-quick-search').forEach(btn => { btn.disabled = true; });
-    spinner.classList.remove('d-none');
-    btnText.textContent = 'Searching…';
+    setSearchControlsDisabled(true);
+    if (spinner) spinner.classList.remove('d-none');
+    if (btnText) btnText.textContent = 'Searching…';
 
     document.getElementById('activePipelineBar').classList.remove('d-none');
     document.getElementById('errorContainer').classList.add('d-none');
@@ -286,10 +314,9 @@ async function handleSearch(e) {
             );
         }
     } finally {
-        searchBtn.disabled = false;
-        document.querySelectorAll('.btn-quick-search').forEach(btn => { btn.disabled = false; });
-        spinner.classList.add('d-none');
-        btnText.textContent = 'Search';
+        setSearchControlsDisabled(false);
+        if (spinner) spinner.classList.add('d-none');
+        if (btnText) btnText.textContent = 'Search';
         document.getElementById('activePipelineBar').classList.add('d-none');
         _abortController = null;
     }
@@ -1120,25 +1147,105 @@ function filterHistoryList(term) {
 }
 
 // ---------------------------------------------------------------------------
-// Settings: Gemini model, AI toggle, data source
+// Settings: AI provider, model, toggle, data source
 // ---------------------------------------------------------------------------
+
+const _PROVIDER_DEFAULTS = {
+    gemini: 'gemini-2.0-flash-lite',
+    'opencode-go': 'grok-4.5',
+};
 
 async function loadModelSettings() {
     try {
         const response = await fetch('/api/settings');
         if (!response.ok) return;
         const data = await response.json();
-        const input  = document.getElementById('geminiModelInput');
-        const status = document.getElementById('modelStatus');
-        if (input && data.gemini_model) input.value = data.gemini_model;
-        if (status && data.gemini_model) {
-            status.textContent = `Active model: ${data.gemini_model}`;
-            status.className   = 'model-status model-status--active';
-        }
-        if (typeof data.ai_enabled === 'boolean') _setAiToggleState(data.ai_enabled);
-        _setDataSourceState(data.data_source, data.active_data_source, data.ebay_api_configured);
+        _applySettingsUi(data);
     } catch (err) {
         console.warn('Failed to load model settings:', err);
+    }
+}
+
+function _applySettingsUi(data) {
+    const provider = data.ai_provider || 'gemini';
+    const model = data.ai_model
+        || (provider === 'opencode-go' ? data.opencode_go_model : data.gemini_model)
+        || _PROVIDER_DEFAULTS[provider]
+        || '';
+
+    const providerSel = document.getElementById('aiProviderSelect');
+    if (providerSel && provider) providerSel.value = provider;
+
+    const input = document.getElementById('aiModelInput');
+    if (input) {
+        input.value = model;
+        input.placeholder = provider === 'opencode-go'
+            ? 'e.g. grok-4.5, deepseek-v4-flash'
+            : 'e.g. gemini-2.0-flash-lite';
+    }
+
+    const status = document.getElementById('modelStatus');
+    if (status && model) {
+        const label = data.ai_provider_label || provider;
+        const imgNote = data.ai_supports_images === false ? ' · text-only' : '';
+        status.textContent = `Active: ${label} · ${model}${imgNote}`;
+        status.className = 'model-status model-status--active';
+    }
+
+    _setProviderStatus(data);
+    if (typeof data.ai_enabled === 'boolean') _setAiToggleState(data.ai_enabled);
+    _setDataSourceState(data.data_source, data.active_data_source, data.ebay_api_configured);
+}
+
+function _setProviderStatus(data) {
+    const statusEl = document.getElementById('aiProviderStatus');
+    if (!statusEl) return;
+    const providers = Array.isArray(data.providers) ? data.providers : [];
+    const active = providers.find(p => p.id === (data.ai_provider || 'gemini'));
+    if (!active) {
+        statusEl.textContent = '';
+        statusEl.className = 'data-source-status';
+        return;
+    }
+    if (active.configured) {
+        statusEl.textContent = '🟢 key configured';
+        statusEl.className = 'data-source-status data-source-status--api';
+    } else {
+        statusEl.textContent = '⚠️ API key missing';
+        statusEl.className = 'data-source-status data-source-status--error';
+    }
+}
+
+async function saveAiProvider() {
+    const sel = document.getElementById('aiProviderSelect');
+    const status = document.getElementById('modelStatus');
+    if (!sel) return;
+    const provider = sel.value;
+    if (status) {
+        status.textContent = '⏳ Switching provider…';
+        status.className = 'model-status';
+    }
+    try {
+        const response = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ai_provider: provider }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            const msg = (data.errors && data.errors.ai_provider) || data.error || 'Failed to save.';
+            if (status) {
+                status.textContent = `⚠️ ${msg}`;
+                status.className = 'model-status model-status--error';
+            }
+            return;
+        }
+        _applySettingsUi(data);
+    } catch (err) {
+        if (status) {
+            status.textContent = `⚠️ Error: ${err.message}`;
+            status.className = 'model-status model-status--error';
+        }
     }
 }
 
@@ -1226,7 +1333,7 @@ async function saveDataSource() {
 }
 
 async function saveModelSettings() {
-    const input  = document.getElementById('geminiModelInput');
+    const input  = document.getElementById('aiModelInput');
     const status = document.getElementById('modelStatus');
     const btn    = document.getElementById('saveModelBtn');
     if (!input || !status || !btn) return;
@@ -1247,15 +1354,17 @@ async function saveModelSettings() {
         const response = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ gemini_model: model }),
+            body: JSON.stringify({ ai_model: model }),
         });
         const data = await response.json();
         if (!response.ok) {
-            const msg = (data.errors && data.errors.gemini_model) || data.error || 'Failed to save.';
+            const msg = (data.errors && (data.errors.ai_model || data.errors.gemini_model))
+                || data.error || 'Failed to save.';
             status.textContent = `⚠️ ${msg}`;
             status.className   = 'model-status model-status--error';
         } else {
-            status.textContent = `✅ Active model: ${data.gemini_model}`;
+            _applySettingsUi(data);
+            status.textContent = `✅ Active: ${data.ai_provider_label || data.ai_provider} · ${data.ai_model}`;
             status.className   = 'model-status model-status--active';
         }
     } catch (err) {

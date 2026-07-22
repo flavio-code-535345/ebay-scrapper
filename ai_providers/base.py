@@ -1021,3 +1021,107 @@ class BaseAssessor:
             price_str = f"€{price:.2f}" if price is not None else "N/A"
             lines.append(f"  - {game}: {price_str} ({src})")
         return "\n".join(lines) + "\n"
+
+    def _try_deterministic_assessment(self, deal: dict) -> dict | None:
+        """Return a full assessment when deterministic rules fire; else None."""
+        broken = _detect_broken_deal(deal)
+        if broken:
+            return _build_deterministic_garbage("Garbage", 100, broken)
+        trash = _detect_trash_title(deal)
+        if trash:
+            return _build_deterministic_garbage("Garbage", 100, trash)
+        sports = _detect_sports_kinect_deal(deal)
+        if sports:
+            return {
+                "ai_deal_rating": "Avoid",
+                "ai_confidence_score": 100,
+                "ai_visual_findings": [],
+                "ai_red_flags": ["Automatically flagged — sports/Kinect content"],
+                "ai_fair_market_estimate": "",
+                "ai_itemized_resale_estimates": [],
+                "ai_estimated_total_cost": deal.get("price", 0) or 0,
+                "ai_estimated_gross_profit": 0,
+                "ai_verdict_summary": sports,
+                "ai_assessed": True,
+                "ai_potential_scam": False,
+                "ai_scam_warning": "",
+            }
+        scam = _detect_bundle_individual_sale_scam(deal)
+        if scam:
+            return {
+                "ai_deal_rating": "Avoid",
+                "ai_confidence_score": 100,
+                "ai_visual_findings": [],
+                "ai_red_flags": [],
+                "ai_fair_market_estimate": "",
+                "ai_itemized_resale_estimates": [],
+                "ai_estimated_total_cost": deal.get("price", 0) or 0,
+                "ai_estimated_gross_profit": 0,
+                "ai_verdict_summary": scam,
+                "ai_assessed": True,
+                "ai_potential_scam": True,
+                "ai_scam_warning": scam,
+            }
+        return None
+
+    def _build_deal_text_prompt(self, deal: dict, *, description_limit: int = 1500, include_header: bool = True) -> str:
+        """Build a plain-text listing prompt shared by text-only AI providers."""
+        title = deal.get("title", "Unknown")
+        price = deal.get("price", "?")
+        condition = deal.get("condition", "?")
+        seller_rating = deal.get("seller_rating", "?")
+        shipping = deal.get("shipping", "?")
+        description = deal.get("description", "")
+        seller_count = deal.get("seller_count", "")
+        item_location = deal.get("item_location", "")
+        listing_date = deal.get("listing_date", "")
+        lines: list[str] = []
+        if include_header:
+            lines.append("Analyze this eBay listing:\n")
+        lines.extend(
+            [
+                f"Title: {title}",
+                f"Price: €{price}",
+                f"Shipping: {shipping}",
+                f"Condition: {condition}",
+                f"Seller rating: {seller_rating}%",
+                f"Seller Count: {seller_count}",
+                f"Item Location: {item_location}",
+                f"Listing Date: {listing_date}",
+            ]
+        )
+        ebay_prices = self._fetch_ebay_prices_for_bundle(deal)
+        if not ebay_prices:
+            single_price = self._fetch_ebay_price_for_single_listing(deal)
+            if single_price is not None:
+                lines.append(f"\nFetched eBay Market Price: €{single_price:.2f}")
+        else:
+            lines.append("\n" + self._format_ebay_prices_section(ebay_prices).rstrip())
+        image_issues_line = self._format_image_issues_line(deal)
+        if image_issues_line:
+            lines.append(image_issues_line.rstrip())
+        if description:
+            lines.append(f"\nDescription:\n{description[:description_limit]}")
+        return "\n".join(lines)
+
+    def _build_batch_text_prompt(self, deals: list[dict]) -> str:
+        """Build a plain-text multi-listing prompt for batch assessment."""
+        parts = [
+            f"Below are {len(deals)} eBay listings to analyze. "
+            "Return a JSON array of analysis objects, one per listing in order.\n"
+        ]
+        for idx, deal in enumerate(deals, 1):
+            body = self._build_deal_text_prompt(deal, description_limit=800, include_header=False)
+            parts.append(f"\n--- ITEM {idx} ---\n{body}\n")
+        parts.append(
+            f"\nNow return a JSON array of exactly {len(deals)} analysis "
+            "objects, one per item in order, with no other text."
+        )
+        return "".join(parts)
+
+    def _finalize_assessment(self, deal: dict, assessment: dict) -> dict:
+        """Apply shared post-AI deterministic overrides."""
+        assessment = _apply_garbage_overrides(deal, assessment)
+        assessment = _apply_sports_kinect_override(deal, assessment)
+        assessment = _apply_scam_override(deal, assessment)
+        return assessment

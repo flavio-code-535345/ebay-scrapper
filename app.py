@@ -14,7 +14,16 @@ from datetime import UTC, datetime
 from flask import Flask, Response, jsonify, render_template, request
 
 import database
-from ai_providers import create_assessor
+from ai_providers import (
+    PROVIDER_META,
+    VALID_PROVIDERS,
+    apply_user_enabled,
+    create_assessor,
+    get_assessor,
+    list_providers,
+    normalize_provider,
+    set_ebay_client_for_all,
+)
 from ai_providers.base import _detect_sports_kinect_deal
 from ebay_api_client import EbayApiClient
 from scraper import EbayScraper
@@ -52,24 +61,35 @@ ebay_api = EbayApiClient()
 
 database.init_db()
 
-assessor = create_assessor()
+# Register eBay client with all AI providers (present and future).
+set_ebay_client_for_all(ebay_api)
 
-# Register eBay client with the assessor so it can fetch real per-game prices.
-assessor.set_ebay_client(ebay_api)
+# Eager-load default assessor; additional providers load on first use.
+assessor = create_assessor(os.environ.get("AI_PROVIDER", "gemini"))
 
-# Load persisted Gemini model (if any) so it takes effect without a restart.
-_saved_model = database.get_setting("gemini_model")
-if _saved_model:
-    assessor.model_name = _saved_model
+
+def _load_provider_models_from_db() -> None:
+    """Apply persisted model names onto each provider assessor."""
+    for pid, meta in PROVIDER_META.items():
+        saved = database.get_setting(meta["model_setting_key"])
+        if saved:
+            try:
+                get_assessor(pid).model_name = saved
+            except ValueError:
+                logger.warning("Ignoring invalid saved model for %s: %r", pid, saved)
+
+
+_load_provider_models_from_db()
 
 # Load persisted AI-enabled toggle (default: True; stored as "true"/"false" string).
 _saved_ai_enabled = database.get_setting("ai_enabled")
 if _saved_ai_enabled is not None:
-    assessor.user_enabled = str(_saved_ai_enabled).lower() == "true"
+    apply_user_enabled(str(_saved_ai_enabled).lower() == "true")
 
 # ── Data source helpers ────────────────────────────────────────────────────
 
 _VALID_DATA_SOURCES = {"auto", "api", "scraper"}
+_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,99}$")
 
 
 def _db_data_source() -> str:
@@ -126,6 +146,52 @@ def _db_ai_user_enabled() -> bool:
     """
     val = database.get_setting("ai_enabled")
     return str(val).lower() == "true" if val is not None else True
+
+
+def _db_ai_provider() -> str:
+    """Active AI provider id from DB, then AI_PROVIDER env, else gemini."""
+    val = database.get_setting("ai_provider")
+    if val:
+        return normalize_provider(val)
+    return normalize_provider(os.environ.get("AI_PROVIDER", "gemini"))
+
+
+def _current_assessor():
+    """Resolve the active assessor for this request (multi-worker safe)."""
+    global assessor
+    provider = _db_ai_provider()
+    a = get_assessor(provider)
+    a.user_enabled = _db_ai_user_enabled()
+    # Keep module-level alias in sync for tests / external imports.
+    assessor = a
+    return a
+
+
+def _settings_payload() -> dict:
+    """Shared settings/health fields for GET/POST /api/settings."""
+    a = _current_assessor()
+    provider = _db_ai_provider()
+    meta = PROVIDER_META[provider]
+    data_source_setting = _db_data_source()
+    _, active_source = _resolve_engine(data_source_setting)
+    return {
+        "ai_provider": provider,
+        "ai_provider_label": meta["label"],
+        "ai_model": a.model_name,
+        "gemini_model": get_assessor("gemini").model_name,
+        "opencode_go_model": get_assessor("opencode-go").model_name,
+        "ai_enabled": _db_ai_user_enabled(),
+        "ai_supports_images": bool(getattr(a, "supports_images", provider == "gemini")),
+        "providers": list_providers(),
+        "data_source": data_source_setting,
+        "active_data_source": active_source,
+        "ebay_api_configured": ebay_api.is_configured,
+        "ebay_marketplace_id": ebay_api.marketplace_id,
+        "ebay_language": ebay_api.accept_language,
+        "ebay_locale": ebay_api.locale,
+        "ebay_delivery_country": ebay_api.delivery_country,
+        "germany_only": _db_germany_only(),
+    }
 
 
 def _is_german_location(location: str) -> bool:
@@ -222,62 +288,66 @@ def search():
             filtered_sports,
         )
 
-    # Cap deals before sending to Gemini — no score-based pre-filtering.
-    # All deals that pass the post-filters above are eligible for AI assessment.
+    # Cap deals before AI — no score-based pre-filtering.
     _MAX_DISPLAY = 30
     deals_filtered = deals[:_MAX_DISPLAY]
 
-    # AI assessment via Gemini: send only the top filtered deals in a single
-    # request to minimise quota consumption rather than calling once per deal.
-    # Skip entirely when the user has disabled AI evaluation via the toggle.
-    # Re-read ai_enabled from the database on every request so that the toggle
-    # is respected in multi-worker (Gunicorn) deployments where in-memory state
-    # is not shared across processes.
+    # Active AI provider (Gemini or OpenCode Go). Re-read from DB each request
+    # so multi-worker Gunicorn processes stay consistent.
+    active = _current_assessor()
+    provider_id = _db_ai_provider()
     _user_enabled = _db_ai_user_enabled()
-    ai_active = assessor.enabled and _user_enabled
-    ai_assessments = assessor.assess_deals_batch(deals_filtered) if (deals_filtered and ai_active) else []
+    ai_active = active.enabled and _user_enabled
+    ai_assessments = active.assess_deals_batch(deals_filtered) if (deals_filtered and ai_active) else []
 
     timed_out = 0
-    if assessor.enabled and ai_assessments:
+    if active.enabled and ai_assessments:
         failed = sum(1 for a in ai_assessments if a is None)
         rate_limited = sum(1 for a in ai_assessments if a and a.get("ai_error_type") == "rate_limit")
         parse_errors = sum(1 for a in ai_assessments if a and a.get("ai_error_type") == "parse_error")
         timed_out = sum(1 for a in ai_assessments if a and a.get("ai_error_type") == "timeout")
+        label = PROVIDER_META.get(provider_id, {}).get("label", provider_id)
         if failed:
             logger.warning(
-                "Gemini batch: %d/%d items failed AI assessment.",
+                "%s batch: %d/%d items failed AI assessment.",
+                label,
                 failed,
                 len(ai_assessments),
             )
         if rate_limited:
             logger.warning(
-                "Gemini batch: %d/%d items rate-limited; skipping AI assessment.",
+                "%s batch: %d/%d items rate-limited; skipping AI assessment.",
+                label,
                 rate_limited,
                 len(ai_assessments),
             )
         if parse_errors:
             logger.warning(
-                "Gemini batch: %d/%d items had parse errors; AI fields set to defaults.",
+                "%s batch: %d/%d items had parse errors; AI fields set to defaults.",
+                label,
                 parse_errors,
                 len(ai_assessments),
             )
             for i, (deal, a) in enumerate(zip(deals_filtered, ai_assessments, strict=False)):
                 if a and a.get("ai_error_type") == "parse_error":
                     logger.warning(
-                        "Gemini parse error – item[%d]: %r",
+                        "%s parse error – item[%d]: %r",
+                        label,
                         i,
                         (deal.get("title") or "")[:80],
                     )
         if timed_out:
             logger.warning(
-                "Gemini batch: %d/%d items timed out; AI assessment skipped.",
+                "%s batch: %d/%d items timed out; AI assessment skipped.",
+                label,
                 timed_out,
                 len(ai_assessments),
             )
             for i, (deal, a) in enumerate(zip(deals_filtered, ai_assessments, strict=False)):
                 if a and a.get("ai_error_type") == "timeout":
                     logger.info(
-                        "Gemini timeout – item[%d]: %r",
+                        "%s timeout – item[%d]: %r",
+                        label,
                         i,
                         (deal.get("title") or "")[:80],
                     )
@@ -309,7 +379,7 @@ def search():
     database.save_search(query, assessed)
 
     # Compute how many seconds remain in any rate-limit back-off window.
-    paused_seconds = max(0.0, assessor.rate_limited_until - time.monotonic())
+    paused_seconds = max(0.0, active.rate_limited_until - time.monotonic())
 
     saved_urls = set(d["url"] for d in database.get_saved_deals())
     for deal in assessed:
@@ -321,8 +391,10 @@ def search():
             "deal_count": len(assessed),
             "deals": assessed,
             "errors": search_errors,
-            "ai_enabled": assessor.enabled and _user_enabled,
-            "ai_rate_limited": assessor.is_rate_limited,
+            "ai_enabled": active.enabled and _user_enabled,
+            "ai_provider": provider_id,
+            "ai_model": active.model_name,
+            "ai_rate_limited": active.is_rate_limited,
             "ai_paused_seconds": round(paused_seconds),
             "ai_timeout_count": timed_out,
             "data_source": active_source,
@@ -359,16 +431,20 @@ def stats():
 
 @app.route("/api/health")
 def health():
-    paused_seconds = max(0.0, assessor.rate_limited_until - time.monotonic())
+    active = _current_assessor()
+    paused_seconds = max(0.0, active.rate_limited_until - time.monotonic())
     data_source_setting = _db_data_source()
     _, active_source = _resolve_engine(data_source_setting)
+    provider = _db_ai_provider()
     return jsonify(
         {
             "status": "healthy",
-            "ai_enabled": assessor.enabled and _db_ai_user_enabled(),
-            "ai_rate_limited": assessor.is_rate_limited,
+            "ai_enabled": active.enabled and _db_ai_user_enabled(),
+            "ai_provider": provider,
+            "ai_rate_limited": active.is_rate_limited,
             "ai_paused_seconds": round(paused_seconds),
-            "ai_model": assessor.model_name,
+            "ai_model": active.model_name,
+            "providers": list_providers(),
             "data_source": active_source,
             "data_source_setting": data_source_setting,
             "ebay_api_configured": ebay_api.is_configured,
@@ -383,22 +459,7 @@ def health():
 
 @app.route("/api/settings", methods=["GET"])
 def get_settings():
-    data_source_setting = _db_data_source()
-    _, active_source = _resolve_engine(data_source_setting)
-    return jsonify(
-        {
-            "gemini_model": assessor.model_name,
-            "ai_enabled": _db_ai_user_enabled(),
-            "data_source": data_source_setting,
-            "active_data_source": active_source,
-            "ebay_api_configured": ebay_api.is_configured,
-            "ebay_marketplace_id": ebay_api.marketplace_id,
-            "ebay_language": ebay_api.accept_language,
-            "ebay_locale": ebay_api.locale,
-            "ebay_delivery_country": ebay_api.delivery_country,
-            "germany_only": _db_germany_only(),
-        }
-    )
+    return jsonify(_settings_payload())
 
 
 @app.route("/api/settings", methods=["POST"])
@@ -408,36 +469,57 @@ def update_settings():
     if data is None:
         return jsonify({"error": "Request body must be valid JSON with Content-Type: application/json"}), 400
 
-    # Gemini model names: alphanumeric, hyphens, underscores, and dots only.
-    _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,99}$")
-
     errors = {}
     updated = {}
 
-    if "gemini_model" in data:
-        model = str(data["gemini_model"]).strip()
-        if not model:
-            errors["gemini_model"] = "gemini_model must not be empty (e.g., gemini-2.0-flash-lite)"
-        elif not _MODEL_NAME_RE.match(model):
-            errors["gemini_model"] = (
-                "gemini_model contains invalid characters; use only letters, "
-                "digits, hyphens, underscores, and dots (e.g., gemini-2.0-flash-lite)"
-            )
+    # ── AI provider switch (persisted) ────────────────────────────────────
+    if "ai_provider" in data:
+        pid = normalize_provider(str(data["ai_provider"]))
+        if pid not in VALID_PROVIDERS:
+            errors["ai_provider"] = f"ai_provider must be one of: {', '.join(VALID_PROVIDERS)}"
         else:
-            try:
-                assessor.model_name = model
-                database.set_setting("gemini_model", model)
-                updated["gemini_model"] = model
-                logger.info("Settings: gemini_model updated to %r", model)
-            except ValueError as exc:
-                errors["gemini_model"] = str(exc)
+            database.set_setting("ai_provider", pid)
+            assessor = get_assessor(pid)
+            assessor.user_enabled = _db_ai_user_enabled()
+            updated["ai_provider"] = pid
+            logger.info("Settings: ai_provider updated to %r", pid)
+
+    def _save_model_for(provider_id: str, model: str, field_name: str) -> None:
+        if not model:
+            errors[field_name] = f"{field_name} must not be empty"
+            return
+        if not _MODEL_NAME_RE.match(model):
+            errors[field_name] = (
+                f"{field_name} contains invalid characters; use only letters, digits, hyphens, underscores, and dots"
+            )
+            return
+        try:
+            target = get_assessor(provider_id)
+            target.model_name = model
+            key = PROVIDER_META[provider_id]["model_setting_key"]
+            database.set_setting(key, model)
+            updated[field_name] = model
+            logger.info("Settings: %s updated to %r", field_name, model)
+        except ValueError as exc:
+            errors[field_name] = str(exc)
+
+    # Generic model for the *active* provider
+    if "ai_model" in data:
+        model = str(data["ai_model"]).strip()
+        _save_model_for(_db_ai_provider(), model, "ai_model")
+
+    if "gemini_model" in data:
+        _save_model_for("gemini", str(data["gemini_model"]).strip(), "gemini_model")
+
+    if "opencode_go_model" in data:
+        _save_model_for("opencode-go", str(data["opencode_go_model"]).strip(), "opencode_go_model")
 
     if "ai_enabled" in data:
         ai_enabled = data["ai_enabled"]
         if not isinstance(ai_enabled, bool):
             errors["ai_enabled"] = "ai_enabled must be a boolean (true or false)"
         else:
-            assessor.user_enabled = ai_enabled
+            apply_user_enabled(ai_enabled)
             database.set_setting("ai_enabled", str(ai_enabled).lower())
             updated["ai_enabled"] = ai_enabled
             logger.info("Settings: ai_enabled updated to %r", ai_enabled)
@@ -454,23 +536,9 @@ def update_settings():
     if errors:
         return jsonify({"errors": errors}), 400
 
-    data_source_setting = _db_data_source()
-    _, active_source = _resolve_engine(data_source_setting)
-    return jsonify(
-        {
-            "updated": updated,
-            "gemini_model": assessor.model_name,
-            "ai_enabled": assessor.user_enabled,
-            "data_source": data_source_setting,
-            "active_data_source": active_source,
-            "ebay_api_configured": ebay_api.is_configured,
-            "ebay_marketplace_id": ebay_api.marketplace_id,
-            "ebay_language": ebay_api.accept_language,
-            "ebay_locale": ebay_api.locale,
-            "ebay_delivery_country": ebay_api.delivery_country,
-            "germany_only": _db_germany_only(),
-        }
-    )
+    payload = _settings_payload()
+    payload["updated"] = updated
+    return jsonify(payload)
 
 
 # ── Save / Skip deal endpoints ────────────────────────────────────────────────
@@ -579,11 +647,17 @@ elif not ebay_api.is_configured:
 else:
     logger.info("eBay API credentials found — Browse API will be used when data_source is 'api' or 'auto'.")
 
-if not os.environ.get("GEMINI_API_KEY", "").strip():
-    logger.info(
-        "GEMINI_API_KEY not set — AI deal assessment is disabled. "
-        "Deals will be returned without Gemini ratings. "
-        "Set GEMINI_API_KEY in your environment to enable AI assessment."
-    )
+if os.environ.get("GEMINI_API_KEY", "").strip():
+    logger.info("GEMINI_API_KEY found — Gemini AI assessment available.")
 else:
-    logger.info("GEMINI_API_KEY found — Gemini AI assessment is enabled.")
+    logger.info("GEMINI_API_KEY not set — Gemini provider unavailable.")
+
+if os.environ.get("OPENCODE_GO_API_KEY", "").strip() or os.environ.get("OPENCODE_API_KEY", "").strip():
+    logger.info("OpenCode Go API key found — OpenCode Go / Grok assessment available.")
+else:
+    logger.info(
+        "OPENCODE_GO_API_KEY not set — OpenCode Go provider unavailable. "
+        "Subscribe at https://opencode.ai/auth and set OPENCODE_GO_API_KEY."
+    )
+
+logger.info("Active AI provider at startup: %s", _db_ai_provider())

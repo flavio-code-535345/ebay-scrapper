@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>eBay Deal Finder</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=3">
 </head>
 <body>
     <!-- Hero / Search bar -->
@@ -19,10 +19,30 @@
                         <span class="btn-text">Search</span>
                     </button>
                 </form>
-                <div class="quick-searches" id="quickSearches" role="group" aria-label="Quick searches">
-                    <span class="quick-searches-label">Quick:</span>
-                    <button type="button" class="btn-quick-search" data-query="Xbox 360 Spiele Sammlung Konvolut">Xbox 360</button>
-                    <button type="button" class="btn-quick-search" data-query="PS4 Spiele Sammlung Konvolut">PS4</button>
+                <div class="quick-searches" id="quickSearches" role="group" aria-label="Popular bundle searches">
+                    <span class="quick-searches-label">Popular bundles</span>
+                    <div class="quick-searches-row">
+                        <button type="button"
+                                class="quick-chip quick-chip--xbox"
+                                data-query="Xbox 360 Spiele Sammlung Konvolut"
+                                title="Search: Xbox 360 Spiele Sammlung Konvolut">
+                            <span class="quick-chip-icon" aria-hidden="true">🟩</span>
+                            <span class="quick-chip-text">
+                                <span class="quick-chip-title">Xbox 360</span>
+                                <span class="quick-chip-sub">Spiele Sammlung · Konvolut</span>
+                            </span>
+                        </button>
+                        <button type="button"
+                                class="quick-chip quick-chip--ps"
+                                data-query="PS4 Spiele Sammlung Konvolut"
+                                title="Search: PS4 Spiele Sammlung Konvolut">
+                            <span class="quick-chip-icon" aria-hidden="true">🟦</span>
+                            <span class="quick-chip-text">
+                                <span class="quick-chip-title">PS4</span>
+                                <span class="quick-chip-sub">Spiele Sammlung · Konvolut</span>
+                            </span>
+                        </button>
+                    </div>
                 </div>
             </div>
             <!-- Settings panel (collapsible) -->
@@ -35,9 +55,28 @@
                             <span class="ai-toggle-label">AI: ON</span>
                         </button>
                     </div>
+                    <div class="settings-row" id="providerRow">
+                        <label for="aiProviderSelect" class="settings-label">🧠 AI Provider</label>
+                        <select id="aiProviderSelect" class="settings-select" title="Choose Gemini or OpenCode Go (Grok and more)">
+                            <option value="gemini">Google Gemini</option>
+                            <option value="opencode-go">OpenCode Go (Grok &amp; more)</option>
+                        </select>
+                        <span id="aiProviderStatus" class="data-source-status"></span>
+                    </div>
                     <div class="settings-row" id="modelRow">
-                        <label for="geminiModelInput" class="settings-label">🤖 Model</label>
-                        <input type="text" id="geminiModelInput" class="settings-input" placeholder="e.g. gemini-2.0-flash-lite" autocomplete="off" spellcheck="false" />
+                        <label for="aiModelInput" class="settings-label">🤖 Model</label>
+                        <input type="text" id="aiModelInput" class="settings-input" placeholder="e.g. gemini-2.0-flash-lite or grok-4.5" autocomplete="off" spellcheck="false" list="aiModelSuggestions" />
+                        <datalist id="aiModelSuggestions">
+                            <option value="gemini-2.0-flash-lite"></option>
+                            <option value="gemini-2.0-flash"></option>
+                            <option value="gemini-2.5-flash"></option>
+                            <option value="grok-4.5"></option>
+                            <option value="deepseek-v4-flash"></option>
+                            <option value="deepseek-v4-pro"></option>
+                            <option value="kimi-k2.6"></option>
+                            <option value="glm-5.1"></option>
+                            <option value="mimo-v2.5"></option>
+                        </datalist>
                         <button id="saveModelBtn" class="btn-save-model">Save</button>
                     </div>
                     <div class="settings-row">
@@ -179,6 +218,6 @@
 
     </main>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=3"></script>
 </body>
 </html>
