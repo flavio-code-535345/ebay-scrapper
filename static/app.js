@@ -100,6 +100,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const searchForm = document.getElementById('searchForm');
     if (searchForm) searchForm.addEventListener('submit', handleSearch);
 
+    // Quick-search chips (Xbox 360 / PS4 bundle presets)
+    document.querySelectorAll('.btn-quick-search').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const query = (btn.dataset.query || '').trim();
+            if (!query) return;
+            const input = document.getElementById('searchQuery');
+            if (input) input.value = query;
+            handleSearch(new Event('submit'));
+        });
+    });
+
     // Cancel search
     const cancelBtn = document.getElementById('cancelSearchBtn');
     if (cancelBtn) cancelBtn.addEventListener('click', cancelSearch);
@@ -222,6 +233,7 @@ async function handleSearch(e) {
 
     // UI – loading state
     searchBtn.disabled = true;
+    document.querySelectorAll('.btn-quick-search').forEach(btn => { btn.disabled = true; });
     spinner.classList.remove('d-none');
     btnText.textContent = 'Searching…';
 
@@ -275,6 +287,7 @@ async function handleSearch(e) {
         }
     } finally {
         searchBtn.disabled = false;
+        document.querySelectorAll('.btn-quick-search').forEach(btn => { btn.disabled = false; });
         spinner.classList.add('d-none');
         btnText.textContent = 'Search';
         document.getElementById('activePipelineBar').classList.add('d-none');
