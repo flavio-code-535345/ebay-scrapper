@@ -6,11 +6,10 @@ Find resale-worthy secondhand gaming deals on **eBay Germany** (`EBAY_DE`). Dual
 
 - Web UI for search, filters, save/skip, history, and CSV export
 - Official **eBay Browse API** with automatic HTML scraper fallback
-- **Multi-provider AI** deal ratings: **Gemini** or **OpenCode Go** (Grok 4.5, DeepSeek, Kimi, …)
-- Ratings: Must Have / Good / Okay / Avoid / Garbage
+- **Gemini AI** deal ratings: Must Have / Good / Okay / Avoid / Garbage
 - Deterministic overrides for scams, sports/Kinect lots, broken/untested junk
 - Per-game resale estimates from live eBay market data
-- Runtime settings (provider, model, AI on/off, data source) **persisted in SQLite**
+- Runtime settings (AI on/off, model, data source) persisted in SQLite
 - Docker multi-arch images (`linux/amd64`, `linux/arm64`) for Portainer
 
 ---
@@ -19,7 +18,7 @@ Find resale-worthy secondhand gaming deals on **eBay Germany** (`EBAY_DE`). Dual
 
 - **Python 3.11+**
 - Optional: eBay developer credentials (Browse API)
-- Optional: `GEMINI_API_KEY` and/or `OPENCODE_GO_API_KEY` (AI assessment)
+- Optional: Gemini API key (AI assessment)
 
 ---
 
@@ -98,7 +97,7 @@ ruff format --check .
 | GET | `/` | Web UI |
 | POST | `/api/search` | Search + assess deals |
 | GET | `/api/health` | Health + AI/API status |
-| GET/POST | `/api/settings` | AI provider, model, AI toggle, data source |
+| GET/POST | `/api/settings` | Model, AI toggle, data source |
 | GET | `/api/history` | Search history |
 | GET | `/api/deals/<id>` | Deals for a search |
 | GET | `/api/export` | CSV export |
@@ -121,10 +120,9 @@ ebay-scrapper/
 ├── scraper.py             # Legacy HTML scraper (ebay.de)
 ├── ebay_api_client.py     # Browse API client (OAuth + search)
 ├── ai_providers/
-│   ├── __init__.py        # Multi-provider factory (gemini | opencode-go)
+│   ├── __init__.py        # create_assessor() factory
 │   ├── base.py            # Shared rules, JSON parse, price helpers
-│   ├── gemini.py          # Google Gemini multimodal assessor
-│   └── opencode_go.py     # OpenCode Go (Grok etc.) text assessor
+│   └── gemini.py          # Google Gemini multimodal assessor
 ├── prompts/               # System prompts for single + batch AI
 ├── templates/index.html
 ├── static/                # app.js + style.css
