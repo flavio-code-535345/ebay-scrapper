@@ -299,6 +299,11 @@ def search():
     _user_enabled = _db_ai_user_enabled()
     ai_active = active.enabled and _user_enabled
     ai_assessments = active.assess_deals_batch(deals_filtered) if (deals_filtered and ai_active) else []
+    _ai_disabled_reason = ""
+    if not _user_enabled:
+        _ai_disabled_reason = "user_toggled_off"
+    elif not active.enabled:
+        _ai_disabled_reason = f"no_api_key_{provider_id}"
 
     timed_out = 0
     if active.enabled and ai_assessments:
@@ -308,18 +313,10 @@ def search():
         timed_out = sum(1 for a in ai_assessments if a and a.get("ai_error_type") == "timeout")
         label = PROVIDER_META.get(provider_id, {}).get("label", provider_id)
         if failed:
-            logger.warning(
-                "%s batch: %d/%d items failed AI assessment.",
-                label,
-                failed,
-                len(ai_assessments),
-            )
+            logger.warning("%s batch: %d/%d items failed AI assessment.", label, failed, len(ai_assessments))
         if rate_limited:
             logger.warning(
-                "%s batch: %d/%d items rate-limited; skipping AI assessment.",
-                label,
-                rate_limited,
-                len(ai_assessments),
+                "%s batch: %d/%d items rate-limited; skipping AI assessment.", label, rate_limited, len(ai_assessments)
             )
         if parse_errors:
             logger.warning(
@@ -330,35 +327,20 @@ def search():
             )
             for i, (deal, a) in enumerate(zip(deals_filtered, ai_assessments, strict=False)):
                 if a and a.get("ai_error_type") == "parse_error":
-                    logger.warning(
-                        "%s parse error – item[%d]: %r",
-                        label,
-                        i,
-                        (deal.get("title") or "")[:80],
-                    )
+                    logger.warning("%s parse error – item[%d]: %r", label, i, (deal.get("title") or "")[:80])
         if timed_out:
             logger.warning(
-                "%s batch: %d/%d items timed out; AI assessment skipped.",
-                label,
-                timed_out,
-                len(ai_assessments),
+                "%s batch: %d/%d items timed out; AI assessment skipped.", label, timed_out, len(ai_assessments)
             )
             for i, (deal, a) in enumerate(zip(deals_filtered, ai_assessments, strict=False)):
                 if a and a.get("ai_error_type") == "timeout":
-                    logger.info(
-                        "%s timeout – item[%d]: %r",
-                        label,
-                        i,
-                        (deal.get("title") or "")[:80],
-                    )
+                    logger.info("%s timeout – item[%d]: %r", label, i, (deal.get("title") or "")[:80])
 
     assessed = []
     for i, deal in enumerate(deals_filtered):
         ai_assessment = ai_assessments[i] if i < len(ai_assessments) else None
         assessed.append({**deal, **(ai_assessment or {})})
 
-    # Sort deals: "Must Have"/"Must Buy" first, then all others — both groups
-    # ordered newest → oldest by listing_date.
     def _parse_listing_date(d: dict) -> datetime:
         raw = d.get("listing_date") or ""
         if not raw:
@@ -370,12 +352,11 @@ def search():
 
     def _sort_key(d: dict):
         rating = (d.get("ai_deal_rating") or "").lower()
-        not_must_have = int(rating not in ("must have", "must buy"))  # 0 = must have first
+        not_must_have = int(rating not in ("must have", "must buy"))
         date = _parse_listing_date(d)
         return (not_must_have, -date.timestamp())
 
     assessed.sort(key=_sort_key)
-
     database.save_search(query, assessed)
 
     # Compute how many seconds remain in any rate-limit back-off window.
@@ -391,7 +372,8 @@ def search():
             "deal_count": len(assessed),
             "deals": assessed,
             "errors": search_errors,
-            "ai_enabled": active.enabled and _user_enabled,
+            "ai_enabled": ai_active,
+            "ai_disabled_reason": _ai_disabled_reason,
             "ai_provider": provider_id,
             "ai_model": active.model_name,
             "ai_rate_limited": active.is_rate_limited,

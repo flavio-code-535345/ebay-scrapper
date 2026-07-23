@@ -355,13 +355,23 @@ function _applySearchResults(data) {
     const aiWarning = document.getElementById('aiWarningContainer');
     if (aiWarning) {
         if (!data.ai_enabled) {
-            aiWarning.textContent = '⭕ AI evaluation is OFF — showing rules-based scores only. Toggle AI ON to enable Gemini scoring.';
+            const reason = data.ai_disabled_reason || '';
+            if (reason === 'user_toggled_off') {
+                aiWarning.textContent = '⭕ AI evaluation is OFF — Toggle AI ON in Settings to enable AI scoring.';
+            } else if (reason === 'no_api_key_gemini') {
+                aiWarning.textContent = '⭕ No GEMINI_API_KEY found — AI scoring disabled. Set a Gemini API key or switch to OpenCode Go in Settings.';
+            } else if (reason === 'no_api_key_opencode-go') {
+                aiWarning.textContent = '⭕ No OPENCODE_GO_API_KEY found — AI scoring disabled. Set a Go API key or switch to Gemini in Settings.';
+            } else {
+                aiWarning.textContent = '⭕ AI evaluation is OFF — check your API key and provider in Settings.';
+            }
             aiWarning.className   = 'alert alert-warning';
             aiWarning.classList.remove('d-none');
         } else if (data.ai_rate_limited) {
             const secs = data.ai_paused_seconds || 0;
+            const providerLabel = data.ai_provider === 'opencode-go' ? 'AI' : 'Gemini';
             aiWarning.textContent =
-                `⚠️ Gemini AI is temporarily paused due to quota exhaustion` +
+                `⚠️ ${providerLabel} AI is temporarily paused due to quota exhaustion` +
                 (secs > 0 ? ` (resumes in ~${secs}s)` : '') +
                 `. Showing deals without full AI assessment.`;
             aiWarning.className = 'alert alert-warning';
