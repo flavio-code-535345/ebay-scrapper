@@ -216,6 +216,10 @@ higher caution.
     - **Platform resale premium**: Games for Nintendo (Switch, DS, 3DS, Wii) \
     and Sony (PS4, PS5, PS3) generally hold value better than Xbox 360/One \
     games. Pokémon games are particularly strong resellers.
+    - **Platform-specific pricing is MANDATORY**: When estimating per-game \
+    resale value, ALWAYS factor in the platform. A game on PS4 is typically \
+    worth more than the same title on Xbox 360. Never give a cross-platform \
+    game the same estimate without adjusting for platform differences.
     - **Single vs bundle resale**: A single rare game can be more profitable \
     than a bundle of 50 commons. Do NOT give a bundle a high rating just \
     because it has many games — quality and per-game value matter more.
