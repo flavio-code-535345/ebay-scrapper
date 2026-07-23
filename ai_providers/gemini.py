@@ -124,11 +124,10 @@ class GeminiAssessor(BaseAssessor):
                 _set_rate_limited_until(time.monotonic() + delay)
                 logger.warning("GeminiAssessor: 429 RESOURCE_EXHAUSTED – backing off %.0f s.", delay)
             exc_msg = str(exc).lower()
-            if self._images_supported and ("does not support image" in exc_msg or "image input" in exc_msg):
-                logger.warning(
-                    "GeminiAssessor: model %r does not support images — disabling image input.",
-                    self._model_name,
-                )
+            if self._images_supported and (
+                "does not support image" in exc_msg or "image input" in exc_msg or "cannot read" in exc_msg
+            ):
+                logger.info("GeminiAssessor: model %r is text-only — disabling images.", self._model_name)
                 self._images_supported = False
                 return self.assess_deal(deal)
             logger.error("GeminiAssessor: assess_deal failed: %s", exc, exc_info=True)
@@ -319,10 +318,7 @@ class GeminiAssessor(BaseAssessor):
                 if self._images_supported and (
                     "does not support image" in exc_msg or "image input" in exc_msg or "cannot read" in exc_msg
                 ):
-                    logger.warning(
-                        "GeminiAssessor: model %r does not support images — disabling image input.",
-                        self._model_name,
-                    )
+                    logger.info("GeminiAssessor: model %r is text-only — disabling images.", self._model_name)
                     self._images_supported = False
                     return self._assess_batch_with_retry(deals)
                 if _is_rate_limit_error(exc):
