@@ -30,24 +30,22 @@ const _PROGRESS_STAGES = [
 
 function detectPlatform(title) {
     const t = (title || '').toLowerCase();
-    if (/\bxbox\s*(360|one|series)/.test(t)) return 'Xbox 360';
-    if (/\bxbox/.test(t)) return 'Xbox';
-    if (/\bps4\b|playstation\s*4/.test(t)) return 'PS4';
-    if (/\bps5\b|playstation\s*5/.test(t)) return 'PS5';
-    if (/\bps3\b|playstation\s*3/.test(t)) return 'PS3';
-    if (/\bps2\b|playstation\s*2/.test(t)) return 'PS2';
-    if (/\bpsp\b/.test(t)) return 'PSP';
-    if (/\bnintendo\s*(switch|sw)/.test(t)) return 'Switch';
-    if (/\bwii\s*u\b/.test(t)) return 'Wii U';
-    if (/\bwii\b/.test(t)) return 'Wii';
-    if (/\b3ds\b|nintendo\s*3ds/.test(t)) return '3DS';
-    if (/\bnds\b|nintendo\s*ds/.test(t)) return 'DS';
-    if (/\bgameboy|game\s*boy/.test(t)) return 'GameBoy';
-    if (/\bgamecube\b/.test(t)) return 'GameCube';
-    if (/\bgame\s*gear\b/.test(t)) return 'Game Gear';
-    if (/\bsega\b/.test(t)) return 'Sega';
-    if (/\batari\b/.test(t)) return 'Atari';
-    if (/\bpc\b|computer\b/.test(t)) return 'PC';
+    if (/xbox\s*(360|one|series)/.test(t)) return 'Xbox 360';
+    if (/xbox/.test(t)) return 'Xbox';
+    if (/ps4\b|playstation\s*4/.test(t)) return 'PS4';
+    if (/ps5\b|playstation\s*5/.test(t)) return 'PS5';
+    if (/ps3\b|playstation\s*3/.test(t)) return 'PS3';
+    if (/ps2\b|playstation\s*2/.test(t)) return 'PS2';
+    if (/psp\b/.test(t)) return 'PSP';
+    if (/nintendo\s*switch|\bswitch\b/.test(t)) return 'Switch';
+    if (/wii\s*u\b/.test(t)) return 'Wii U';
+    if (/wii\b/.test(t)) return 'Wii';
+    if (/3ds\b|nintendo\s*3ds/.test(t)) return '3DS';
+    if (/dsi\b|nds\b|nintendo\s*ds/.test(t)) return 'DS';
+    if (/gameboy|game\s*boy/.test(t)) return 'GameBoy';
+    if (/gamecube\b/.test(t)) return 'GameCube';
+    if (/sega/.test(t)) return 'Sega';
+    if (/atari/.test(t)) return 'Atari';
     return '';
 }
 
