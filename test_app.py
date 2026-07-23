@@ -69,7 +69,7 @@ class TestSearch:
     def test_search_requires_query(self, client):
         resp = client.post("/api/search", json={"query": ""})
         assert resp.status_code == 400
-        assert resp.get_json()["error"] == "query is required"
+        assert "query" in resp.get_json()["error"].lower()
 
     def test_search_empty_results(self, client):
         """When both engines return no results, search returns empty."""

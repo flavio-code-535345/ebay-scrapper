@@ -166,23 +166,54 @@ def search():
     data = request.get_json(silent=True)
     if data is None:
         return jsonify({"error": "Request body must be valid JSON with Content-Type: application/json"}), 400
-    query = data.get("query", "").strip()
+
+    # Accept a single "query" (backward-compat) or "queries" (array) for
+    # multi-phrase searches that catch more listing variations.
+    raw_query = data.get("query", "").strip()
+    raw_queries = data.get("queries")
+    if raw_queries and isinstance(raw_queries, list):
+        queries = [str(q).strip() for q in raw_queries if str(q).strip()]
+    elif raw_query:
+        queries = [raw_query]
+    else:
+        return jsonify({"error": "query or queries is required"}), 400
+    query = queries[0]  # canonical query ref for logging / response payload
+
     try:
         max_results = max(1, min(int(data.get("max_results", 50)), 200))
     except (TypeError, ValueError):
         return jsonify({"error": "max_results must be a positive integer"}), 400
 
-    if not query:
-        return jsonify({"error": "query is required"}), 400
-
-    # Select the appropriate search engine (API or scraper) based on settings.
     data_source_setting = _db_data_source()
     search_fn, active_source = _resolve_engine(data_source_setting)
 
-    deals, search_errors = search_fn(query, max_results=max_results)
+    # Run each query and merge results, deduplicating by URL.
+    all_deals: list[dict] = []
+    all_errors: list[str] = []
+    seen_urls: set[str] = set()
+    for q in queries:
+        deals, errs = search_fn(q, max_results=max_results)
+        all_errors.extend(errs)
+        added = 0
+        for d in deals:
+            url = d.get("url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                all_deals.append(d)
+                added += 1
+        logger.info(
+            "Search for %r via %s returned %d deals (%d new, %d errors)",
+            q,
+            active_source,
+            len(deals),
+            added,
+            len(errs),
+        )
+    deals = all_deals
+    search_errors = all_errors
     logger.info(
-        "Search for %r via %s returned %d deals, %d error(s)",
-        query,
+        "Multi-query search (%d phrases) via %s: %d unique deals, %d total errors",
+        len(queries),
         active_source,
         len(deals),
         len(search_errors),
