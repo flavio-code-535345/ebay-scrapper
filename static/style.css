@@ -137,6 +137,8 @@ a:hover { text-decoration: underline; }
     gap: 0.7rem;
     width: 100%;
     text-align: left;
+    font-family: inherit;
+    font-size: inherit;
     padding: 0.7rem 0.85rem;
     background: linear-gradient(180deg, var(--surface2) 0%, var(--surface) 100%);
     border: 1px solid var(--border);
@@ -145,6 +147,10 @@ a:hover { text-decoration: underline; }
     cursor: pointer;
     box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
     transition: border-color 0.18s ease, background 0.18s ease, transform 0.15s ease, box-shadow 0.18s ease;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    outline: none;
 }
 
 .quick-chip:hover {
