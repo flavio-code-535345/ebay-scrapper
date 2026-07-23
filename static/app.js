@@ -101,20 +101,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const searchForm = document.getElementById('searchForm');
     if (searchForm) searchForm.addEventListener('submit', handleSearch);
 
-    // Quick-search chips (event delegation — multiple query variations)
-    const quickSearches = document.getElementById('quickSearches');
-    if (quickSearches) {
-        quickSearches.addEventListener('click', (e) => {
-            const el = e.target.closest('[data-queries]');
-            if (!el || el.disabled || _abortController) return;
-            e.preventDefault();
-            const raw = (el.getAttribute('data-queries') || '').trim();
-            const queries = raw.split(',').map(s => s.trim()).filter(Boolean);
-            if (!queries.length) return;
-            const input = document.getElementById('searchQuery');
-            if (input) input.value = queries[0];
-            _multiQuery = queries;
-            handleSearch(new Event('submit'));
+    // Quick-search chips — direct click, multiple phrase variations
+    const quickBtns = document.querySelectorAll('#quickSearches button[data-queries]');
+    if (quickBtns.length) {
+        quickBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const raw = (btn.getAttribute('data-queries') || '').trim();
+                const queries = raw.split(',').map(s => s.trim()).filter(Boolean);
+                if (!queries.length) return;
+                const input = document.getElementById('searchQuery');
+                if (input) input.value = queries[0];
+                _multiQuery = queries;
+                handleSearch(new Event('submit'));
+            });
         });
     }
 
