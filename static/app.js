@@ -778,7 +778,7 @@ async function handleDealCardAction(e) {
     if (!card) return;
     const title = card.getAttribute('data-title') || '';
     if (!title) return;
-    window.open(`https://www.ebay.de/sch/i.html?_nkw=${encodeURIComponent(title)}&_sacat=0`, '_blank');
+    window.open(`https://www.ebay.de/sch/i.html?_nkw=${encodeURIComponent(title)}&_sacat=0&_sop=15&LH_BIN=1`, '_blank');
 }
 
 function handleDealCardCheckbox(e) {
