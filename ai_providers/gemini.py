@@ -325,6 +325,3 @@ class GeminiAssessor(BaseAssessor):
         except Exception as exc:
             logger.debug("GeminiAssessor: Failed to fetch image %r: %s", url, exc)
             return None
-
-
-
