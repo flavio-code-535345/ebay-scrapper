@@ -15,7 +15,7 @@ from flask import Flask, Response, jsonify, render_template, request
 
 import database
 from ai_providers import create_assessor
-from ai_providers.base import _detect_sports_kinect_deal
+from ai_providers.base import _SPORTS_KINECT_KEYWORDS_RE, _detect_sports_kinect_deal
 from ebay_api_client import EbayApiClient
 from scraper import EbayScraper
 
@@ -210,11 +210,32 @@ def search():
         if filtered_out:
             logger.info("Germany-only filter removed %d non-German deal(s)", filtered_out)
 
-    # Post-filter: drop sports/Kinect-themed deals — these have very low
+    # Post-filter: drop sports/Kinect-only deals — these have very low
     # resale value (FIFA, Forza, Kinect, TopSpin, etc.) and should never
-    # surface as desirable results.
+    # surface as desirable results.  HOWEVER, if the title also contains
+    # clearly non-sports games, keep it and let Gemini score it — the
+    # non-sports titles may still make the bundle profitable.
     before_sports = len(deals)
-    deals = [d for d in deals if not _detect_sports_kinect_deal(d)]
+    _filtered = []
+    for d in deals:
+        warning = _detect_sports_kinect_deal(d)
+        if not warning:
+            _filtered.append(d)
+            continue
+        # Check: does the title contain any bundle-indicating quantity of
+        # non-trivial content (≥2 game-like tokens that are NOT sports)?
+        title = (d.get("title") or "").lower()
+        # Strip sports keywords, see what's left.
+        cleaned = _SPORTS_KINECT_KEYWORDS_RE.sub(" ", title)
+        cleaned = re.sub(r"\b(je\s+stk|stk|pro|jede|und|mit|für|oder|stück|wahl|aus)\b", " ", cleaned)
+        cleaned = re.sub(r"\d+\s*[€x×]|\b\d+\b", " ", cleaned)
+        tokens = [t for t in cleaned.split() if len(t) > 2 and t not in ("die", "der", "das", "ein", "sie", "von")]
+        # A bundle likely has ≥3 remaining non-sports / non-noise tokens.
+        if len(tokens) >= 3:
+            _filtered.append(d)
+        else:
+            logger.debug("Sports-only deal removed: %r", (d.get("title") or "")[:80])
+    deals = _filtered
     filtered_sports = before_sports - len(deals)
     if filtered_sports:
         logger.info(

@@ -331,9 +331,10 @@ def _extract_potential_game_titles(title: str) -> list[str]:
 # These are common-sense rules that identify listings with near-zero or
 # negative resale value, overriding any AI-generated rating.
 #
-# Two tiers:
+# Three tiers:
+#   Tier 0 — Scam: bait-and-switch, per-piece pricing, fake bundles
 #   Tier 1 — Garbage: broken, untested, empty cases, demos, shovelware
-#   Tier 2 — Avoid:  sports/Kinect bundles, low-demand categories
+#   Tier 2 — Avoid:  sports/Kinect bundles, low-demand categories, suspicious pricing
 
 
 # ── Tier 1: Trash title keywords (zero-value garbage) ──────────────────────
@@ -555,6 +556,31 @@ def _apply_sports_kinect_override(deal: dict, assessment: dict) -> dict:
 
 # ── Bait-and-switch scam detection (deterministic) ────────────────────────
 
+# Description-level scam phrases — when the description matches these,
+# it's almost certainly a bait-and-switch even if seller_count is clean.
+_DESC_SCAM_RE = re.compile(
+    r"\b("
+    r"sie\s+wählen|bitte\s+(teilen|mitteilen|nennen|angeben|auswählen)"
+    r"|ein\s+spiel\s+ihrer\s+wahl|ihrer\s+wahl|nach\s+wahl"
+    r"|wunschspiel|nur\s+(ein|1)\s+spiel"
+    r"|bitte\s+im\s+nachrichtenfenster|bitte\s+per\s+nachricht"
+    r"|pro\s+stück|je\s+stück"
+    r"|spiel\s+aussuchen|spiel\s+auswählen"
+    r"|einzeln\s+(verkauf|verkauft|erhältlich|kaufbar)"
+    r"|auswahl\s+(aus|von|treffen)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Title-level scam patterns — these are definitive.
+_TITLE_SCAM_RE = re.compile(
+    r"\b("
+    r"you\s+pick|choose\s+1|auswahl|nur\s+1\s+spiel|1\s+spiel\s+nach\s+wahl"
+    r"|1\s+aus|1\s+stück\s+wählen|bitte\s+auswählen|ihre\s+wahl|nach\s+wahl"
+    r")\b",
+    re.IGNORECASE,
+)
+
 
 def _detect_bundle_individual_sale_scam(deal: dict) -> str | None:
     """Check for the 'bundle title + individual-unit sale' scam.
@@ -562,10 +588,33 @@ def _detect_bundle_individual_sale_scam(deal: dict) -> str | None:
     Returns a warning string, or ``None`` if no scam detected.
     """
     title = deal.get("title", "")
+    description = deal.get("description", "")
     seller_count = deal.get("seller_count", "")
-    if not title or not seller_count:
+
+    if not title:
         return None
-    if not _BUNDLE_TITLE_KEYWORDS_RE.search(title):
+
+    # Check 1: title-level scam keywords (deterministic — any match = scam).
+    if _BUNDLE_TITLE_KEYWORDS_RE.search(title) and _TITLE_SCAM_RE.search(title):
+        short_title = title[:80] + ("..." if len(title) > 80 else "")
+        return (
+            f"BAIT-AND-SWITCH DETECTED (title keyword): '{short_title}' "
+            f"contains bundle terms AND 'you pick' / 'Auswahl' / 'choose' "
+            f"wording — the listing shows a collection but sells only one game. AVOID."
+        )
+
+    # Check 2: description scam phrases — any match = scam.
+    if description and _BUNDLE_TITLE_KEYWORDS_RE.search(title) and _DESC_SCAM_RE.search(description):
+        match = _DESC_SCAM_RE.search(description)
+        short_title = title[:80] + ("..." if len(title) > 80 else "")
+        return (
+            f"BAIT-AND-SWITCH DETECTED (description): Title advertises a bundle "
+            f"('{short_title}') but description contains '{match.group(0)}' which "
+            f"indicates buyer selects/chooses individual items. AVOID."
+        )
+
+    # Check 3: seller_count > 1 + bundle title = canonical scam.
+    if not seller_count or not _BUNDLE_TITLE_KEYWORDS_RE.search(title):
         return None
     numbers = [int(n) for n in re.findall(r"\d+", seller_count)]
     if not numbers or max(numbers) <= 1:
