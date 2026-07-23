@@ -37,11 +37,13 @@ _MAX_IMAGES = 3
 _IMAGE_FETCH_TIMEOUT = 5
 
 # Known text-only Gemini models — auto-disable image input to avoid SDK errors.
-_TEXT_ONLY_MODELS = frozenset({
-    "gemini-2.0-flash-lite",  # safe (supports images)
-    # "gemini-2.0-flash-lite" actually does support images — this list is for models that DON'T.
-    # Known text-only: gemini-3.1-flash-lite, gemini-2.5-flash-lite-preview-02-25, etc.
-})
+_TEXT_ONLY_MODELS = frozenset(
+    {
+        "gemini-2.0-flash-lite",  # safe (supports images)
+        # "gemini-2.0-flash-lite" actually does support images — this list is for models that DON'T.
+        # Known text-only: gemini-3.1-flash-lite, gemini-2.5-flash-lite-preview-02-25, etc.
+    }
+)
 
 
 def _is_text_only_model(model: str) -> bool:
