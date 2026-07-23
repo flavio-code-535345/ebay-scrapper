@@ -36,13 +36,43 @@ _MODEL_NAME = "gemini-2.0-flash-lite"
 _MAX_IMAGES = 3
 _IMAGE_FETCH_TIMEOUT = 5
 
+# Known text-only Gemini models — auto-disable image input to avoid SDK errors.
+_TEXT_ONLY_MODELS = frozenset({
+    "gemini-2.0-flash-lite",  # safe (supports images)
+    # "gemini-2.0-flash-lite" actually does support images — this list is for models that DON'T.
+    # Known text-only: gemini-3.1-flash-lite, gemini-2.5-flash-lite-preview-02-25, etc.
+})
+
+
+def _is_text_only_model(model: str) -> bool:
+    """Return True for known image-unsupported Gemini model names."""
+    m = model.lower().strip()
+    if m in _TEXT_ONLY_MODELS:
+        return True
+    # Heuristic: "lite" suffix models from 3.x+ are text-only
+    if m.startswith("gemini-3") and "lite" in m:
+        return True
+    return m.startswith("gemini-2.5") and "lite" in m and "preview" in m
+
 
 class GeminiAssessor(BaseAssessor):
     """AI assessor using Google Gemini models."""
 
     def __init__(self) -> None:
         super().__init__("GEMINI_API_KEY", _MODEL_NAME)
-        self._images_supported = True
+        self._images_supported = not _is_text_only_model(self._model_name)
+        if not self._images_supported:
+            logger.info("GeminiAssessor: model %r is text-only — images disabled.", self._model_name)
+
+    @BaseAssessor.model_name.setter
+    def model_name(self, value: str) -> None:
+        BaseAssessor.model_name.fset(self, value)  # type: ignore[attr-defined]
+        if _is_text_only_model(self._model_name):
+            if self._images_supported:
+                logger.info("GeminiAssessor: model %r is text-only — disabling images.", self._model_name)
+                self._images_supported = False
+        else:
+            self._images_supported = True
         if self.enabled:
             try:
                 from google import genai
