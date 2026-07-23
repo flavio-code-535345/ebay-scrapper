@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import concurrent.futures
 import os
 import time
 
@@ -10,7 +9,6 @@ import requests
 
 from ai_providers.base import (
     _ASSESS_TOTAL_BUDGET_S,
-    _BATCH_SIZE,
     _BATCH_SYSTEM_PROMPT,
     _DEFAULT_BACKOFF_SECONDS,
     _MAX_RETRIES,
@@ -24,7 +22,8 @@ from ai_providers.base import (
     logger,
 )
 
-_REQUEST_TIMEOUT = 45
+_REQUEST_TIMEOUT = 120
+_GO_BATCH_SIZE = 3
 _DEFAULT_MODEL = "grok-4.5"
 
 _OP_BASE_URL = "https://opencode.ai/zen/go/v1"
@@ -124,8 +123,8 @@ class OpenCodeGoAssessor(BaseAssessor):
         self._prefetch_ebay_prices_parallel(deals)
         results: list[dict | None] = []
         t_start = time.monotonic()
-        for batch_idx, batch_start in enumerate(range(0, len(deals), _BATCH_SIZE)):
-            batch = deals[batch_start : batch_start + _BATCH_SIZE]
+        for batch_idx, batch_start in enumerate(range(0, len(deals), _GO_BATCH_SIZE)):
+            batch = deals[batch_start : batch_start + _GO_BATCH_SIZE]
             elapsed = time.monotonic() - t_start
             if elapsed >= _ASSESS_TOTAL_BUDGET_S:
                 logger.warning(
@@ -148,26 +147,7 @@ class OpenCodeGoAssessor(BaseAssessor):
             try:
                 user_prompt = self._build_batch_text_prompt(deals)
                 t0 = time.monotonic()
-                if self._timeout_executor is None:
-                    self._timeout_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                future = self._timeout_executor.submit(
-                    self._chat,
-                    system=_BATCH_SYSTEM_PROMPT,
-                    user=user_prompt,
-                )
-                try:
-                    text = future.result(timeout=_REQUEST_TIMEOUT)
-                except concurrent.futures.TimeoutError:
-                    elapsed = time.monotonic() - t0
-                    logger.error(
-                        "OpenCodeGoAssessor: batch of %d timed out after %.1f s (attempt %d/%d).",
-                        len(deals),
-                        elapsed,
-                        attempt + 1,
-                        _MAX_RETRIES,
-                    )
-                    future.cancel()
-                    return [{"ai_error_type": "timeout", "ai_assessed": False}] * len(deals)
+                text = self._chat(system=_BATCH_SYSTEM_PROMPT, user=user_prompt)
                 elapsed = time.monotonic() - t0
                 logger.info(
                     "OpenCodeGoAssessor: batch of %d assessed in %.1f s (attempt %d/%d, model=%s)",
