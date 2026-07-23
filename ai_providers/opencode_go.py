@@ -1,4 +1,4 @@
-"""OpenCode Go AI provider — OpenAI-compatible chat API (Grok, DeepSeek, etc.)."""
+"""OpenAI-compatible chat provider — OpenCode Go + DeepSeek + OpenRouter."""
 
 from __future__ import annotations
 
@@ -26,40 +26,72 @@ from ai_providers.base import (
 
 _REQUEST_TIMEOUT = 45
 _DEFAULT_MODEL = "grok-4.5"
-_DEFAULT_BASE_URL = "https://opencode.ai/zen/go/v1"
+
+_OP_BASE_URL = "https://opencode.ai/zen/go/v1"
+_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+# Maps env-var names to (base_url, default_model, label) for auto-routing.
+_COMPAT_PROVIDERS: dict[str, tuple[str, str, str]] = {
+    "DEEPSEEK_API_KEY": (_DEEPSEEK_BASE_URL, "deepseek-chat", "DeepSeek"),
+    "OPENROUTER_API_KEY": (_OPENROUTER_BASE_URL, "grok-4.5", "OpenRouter"),
+}
+_GO_KEY_ENVS = ("OPENCODE_GO_API_KEY", "OPENCODE_API_KEY")
+
+
+def _resolve_credentials_and_base() -> tuple[str, str, str, str]:
+    """Return (api_key, base_url, model, key_source).
+
+    Priority: OPENCODE_GO_API_KEY → OPENCODE_API_KEY → DEEPSEEK_API_KEY →
+    OPENROUTER_API_KEY.  When a known provider var is detected the base URL
+    is auto-switched unless OPENCODE_GO_BASE_URL is explicitly set.
+    """
+    # 1. Explicit Go key(s) — always use OpenCode Go endpoint.
+    for env_name in _GO_KEY_ENVS:
+        key = os.environ.get(env_name, "").strip()
+        if key:
+            return key, _OP_BASE_URL, "", env_name
+
+    # 2. Known-compat provider keys (DeepSeek, OpenRouter).
+    for env_name, (url, def_model, _label) in _COMPAT_PROVIDERS.items():
+        key = os.environ.get(env_name, "").strip()
+        if not key:
+            continue
+        # Use override if set, otherwise the provider's own endpoint.
+        explicit = os.environ.get("OPENCODE_GO_BASE_URL", "").strip()
+        base = explicit if explicit else url
+        return key, base.rstrip("/") or url, def_model, env_name
+
+    return "", _OP_BASE_URL, "", ""
 
 
 class OpenCodeGoAssessor(BaseAssessor):
-    """AI assessor using OpenCode Go (Grok 4.5 and other curated models)."""
+    """AI assessor via OpenAI-compatible chat (OpenCode Go, DeepSeek, OpenRouter)."""
 
     provider_id = "opencode-go"
     provider_label = "OpenCode Go"
     supports_images = False
 
     def __init__(self) -> None:
-        # Accept OPENCODE_GO_API_KEY, OPENCODE_API_KEY, or DEEPSEEK_API_KEY (backward compat).
-        api_key = (
-            os.environ.get("OPENCODE_GO_API_KEY", "").strip()
-            or os.environ.get("OPENCODE_API_KEY", "").strip()
-            or os.environ.get("DEEPSEEK_API_KEY", "").strip()
-        )
-        default_model = os.environ.get("OPENCODE_GO_MODEL", _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
-        # BaseAssessor reads a single env var; seed enabled from resolved key.
-        super().__init__("OPENCODE_GO_API_KEY", default_model)
+        api_key, base_url, auto_model, key_source = _resolve_credentials_and_base()
+        model = os.environ.get("OPENCODE_GO_MODEL", "").strip() or auto_model or _DEFAULT_MODEL
+
+        super().__init__("OPENCODE_GO_API_KEY", model)
         self._api_key = api_key
         self.enabled = bool(api_key)
-        self._base_url = (
-            os.environ.get("OPENCODE_GO_BASE_URL", _DEFAULT_BASE_URL).strip().rstrip("/") or _DEFAULT_BASE_URL
-        )
+        self._base_url = base_url
         self._session = requests.Session()
         if self.enabled:
             logger.info(
-                "OpenCodeGoAssessor: initialised (model=%s, base=%s)",
+                "OpenCodeGoAssessor: initialised (model=%s, base=%s, key=%s)",
                 self._model_name,
                 self._base_url,
+                key_source,
             )
         else:
-            logger.info("OpenCodeGoAssessor: OPENCODE_GO_API_KEY not set — provider disabled.")
+            logger.info(
+                "OpenCodeGoAssessor: no API key found — provider disabled. Set OPENCODE_GO_API_KEY or DEEPSEEK_API_KEY."
+            )
 
     # ── Single-deal ───────────────────────────────────────────────────────
 
@@ -205,13 +237,12 @@ class OpenCodeGoAssessor(BaseAssessor):
         data = resp.json()
         choices = data.get("choices") or []
         if not choices:
-            raise RuntimeError(f"Empty choices in OpenCode Go response: {data!r}"[:400])
+            raise RuntimeError(f"Empty choices in response: {data!r}"[:400])
         message = choices[0].get("message") or {}
         content = message.get("content")
         if not content:
-            raise RuntimeError("OpenCode Go response missing message content")
+            raise RuntimeError("Response missing message content")
         if isinstance(content, list):
-            # Some APIs return content parts; join text segments.
             parts = []
             for part in content:
                 if isinstance(part, str):
