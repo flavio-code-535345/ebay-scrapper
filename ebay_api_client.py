@@ -201,7 +201,18 @@ class EbayApiClient:
         #   deliveryCountry     — additionally restricts to items that ship to the
         #                         target country, preventing cross-border listings
         #                         that technically deliver to DE but originate abroad.
-        api_filter = f"itemLocationCountry:{self.delivery_country},deliveryCountry:{self.delivery_country}"
+        #   buyingOptions       — only "FIXED_PRICE" (BIN/Sofort-Kauf) listings;
+        #                         auction listings are irrelevant for resellers.
+        #   conditionIds         — "3000" (Used/Gebraucht) + "1500" (New/Neu:OVP);
+        #                         exclude "For parts / Not working" listings at API
+        #                         level. "7000" (New/Neu) is excluded — we want
+        #                         secondhand bargains, not retail new items.
+        api_filter = (
+            f"itemLocationCountry:{self.delivery_country},"
+            f"deliveryCountry:{self.delivery_country},"
+            f"buyingOptions:{{FIXED_PRICE}},"
+            f"conditionIds:{{3000|1500}}"
+        )
         params = {
             "q": query,
             "limit": min(max(1, max_results), 200),

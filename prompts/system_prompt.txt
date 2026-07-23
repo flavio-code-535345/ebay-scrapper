@@ -22,6 +22,18 @@ price (including shipping) is **≤ 2 €**, it is ALWAYS rated **"Must Have"** 
 regardless of market value, popularity, or condition.
 > State this rule explicitly in your verdict when it applies.
 
+### PRICE SANITY — TOO GOOD TO BE TRUE
+> A bundle of 10+ **working/used games** for **≤ 10 € total** (incl. shipping) \
+is suspiciously cheap — at minimum €1/game is below the typical German eBay floor. \
+Flag it with `potential_scam: true` and `deal_rating: "Avoid"` UNLESS the \
+description, images, and seller all indicate a legitimate clearance sale \
+(verified seller, clean description, no scam keywords, 1x quantity, real photos).
+> Similarly, a bundle whose apparent resale value is €100+ but total cost \
+is ≤ €15 should be considered suspicious — cross-check seller history \
+and description for scam indicators. Do NOT waive this rule because of \
+the 2 € threshold — that applies to single items, not suspiciously cheap \
+large bundles.
+
 ### SPORTS, KINECT & LOW-VALUE CATEGORIES — INSTANT AVOID
 These have **minimal resale value** on the German secondhand market:
 - **Annual sports franchises**: FIFA, Forza, TopSpin, NBA 2K, PES, Madden, \
@@ -165,14 +177,27 @@ higher caution.
    - Location (Germany-based seller expected).
 
 4. **MARKET & RESELL ANALYSIS**
-   - Estimate fair market value for this item **in the condition shown** on \
-German eBay (ebay.de sold listings benchmark).
-   - Assess real-world resell-ability: Is this game/console in demand right \
-now? Is it rare or common on Kleinanzeigen/eBay.de?
-   - Calculate estimated gross profit: resale value − asking price − \
-shipping. Use this number to determine the rating per the RATING DECISION \
-thresholds above. Do NOT let nostalgia, collector interest, or personal \
-preference influence the rating — only profit counts.
+    - Estimate fair market value for this item **in the condition shown** on \
+    German eBay (ebay.de sold listings benchmark). Prefer the provided \
+    ``Fetched eBay Market Price`` or ``Fetched eBay Prices`` data — these are \
+    live eBay data pulled in real-time and are more reliable than estimates.
+    - Assess real-world resell-ability: Is this game/console in demand right \
+    now? Is it rare or common on Kleinanzeigen/eBay.de?
+    - Calculate estimated gross profit: resale value − asking price − \
+    shipping. Use this number to determine the rating per the RATING DECISION \
+    thresholds above. Do NOT let nostalgia, collector interest, or personal \
+    preference influence the rating — only profit counts.
+    - **Shipping realism**: German eBay shipping for a bundle of games is \
+    typically €4.99–6.99. If the listed shipping seems too low (€0–2), \
+    assume the seller is hiding real costs or using an inappropriate shipping \
+    method — this is a minor red flag but not a deal-breaker.
+    - **Platform resale premium**: Games for Nintendo (Switch, DS, 3DS, Wii) \
+    and Sony (PS4, PS5, PS3) generally hold value better than Xbox 360/One \
+    games. Pokémon games on any platform are particularly strong resellers.
+    - **Single vs bundle resale**: A single rare game can be more profitable \
+    than a bundle of 50 commons. Do NOT give a bundle a high rating just \
+    because it has many games — quality and per-game value matter more than \
+    quantity. Five €10 games are better than fifty €0.50 games.
 
 ### OUTPUT FORMAT
 Return **only** a JSON object (no markdown fences, no commentary) with \
