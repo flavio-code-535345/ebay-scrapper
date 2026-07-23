@@ -16,6 +16,8 @@ from flask import Flask, Response, jsonify, render_template, request
 import database
 from ai_providers import create_assessor
 from ai_providers.base import _SPORTS_KINECT_KEYWORDS_RE, _detect_sports_kinect_deal
+from ai_providers.gemini import _MODEL_NAME as _GEMINI_DEFAULT_MODEL
+from ai_providers.gemini import _is_text_only_model
 from ebay_api_client import EbayApiClient
 from scraper import EbayScraper
 
@@ -60,7 +62,15 @@ assessor.set_ebay_client(ebay_api)
 # Load persisted Gemini model (if any) so it takes effect without a restart.
 _saved_model = database.get_setting("gemini_model")
 if _saved_model:
-    assessor.model_name = _saved_model
+    if _is_text_only_model(_saved_model):
+        logger.warning(
+            "Saved model %r is text-only — resetting to default %r.",
+            _saved_model,
+            _GEMINI_DEFAULT_MODEL,
+        )
+        database.set_setting("gemini_model", _GEMINI_DEFAULT_MODEL)
+    else:
+        assessor.model_name = _saved_model
 
 # Load persisted AI-enabled toggle (default: True; stored as "true"/"false" string).
 _saved_ai_enabled = database.get_setting("ai_enabled")
@@ -191,16 +201,33 @@ def search():
     all_deals: list[dict] = []
     all_errors: list[str] = []
     seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
     for q in queries:
         deals, errs = search_fn(q, max_results=max_results)
         all_errors.extend(errs)
         added = 0
         for d in deals:
             url = d.get("url", "")
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                all_deals.append(d)
-                added += 1
+            title = (d.get("title") or "").strip().lower()
+            # Normalise: strip eBay tracking params so the same listing
+            # across different queries deduplicates correctly.
+            if "?" in url:
+                url = url.split("?")[0]
+            if not url:
+                continue
+            if url in seen_urls:
+                continue
+            # Also skip near-duplicates: same title + same price (likely same listing
+            # with a slightly different eBay item-id url — common with multi-variant listings).
+            price = d.get("price")
+            title_price_key = f"{title}|{price}"
+            if title_price_key in seen_titles and price is not None:
+                continue
+            seen_urls.add(url)
+            if price is not None:
+                seen_titles.add(title_price_key)
+            all_deals.append(d)
+            added += 1
         logger.info(
             "Search for %r via %s returned %d deals (%d new, %d errors)",
             q,
