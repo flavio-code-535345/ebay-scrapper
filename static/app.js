@@ -1456,7 +1456,8 @@ function buildAiSection(deal) {
                     const medal  = medals[idx] || '🎮';
                     return `<div class="top-value-row">
                         <span class="top-value-medal">${medal}</span>
-                        <span class="top-value-name">${escapeHtml(item.game || '?')}</span>
+                        <a href="https://www.ebay.de/sch/i.html?_nkw=${encodeURIComponent(item.game || '')}&_sacat=0&_sop=15&LH_BIN=1"
+                           target="_blank" rel="noopener noreferrer" class="top-value-name">${escapeHtml(item.game || '?')}</a>
                         <span class="top-value-price">€${Number(item.price_eur).toFixed(2)}</span>
                         <span class="top-value-source">${sourceLabel(item.price_source)}</span>
                     </div>`;
@@ -1487,8 +1488,9 @@ function buildAiSection(deal) {
             const exceptional = isTopGame && !highlightedGames.has(item.game);
             if (exceptional) highlightedGames.add(item.game);
             const rowClass = exceptional ? ' class="row-exceptional"' : '';
-            const gameLabel = exceptional ? `⭐ ${escapeHtml(item.game || '?')}` : escapeHtml(item.game || '?');
-            return `<tr${rowClass}><td>${gameLabel}</td><td class="price-cell">${escapeHtml(priceStr)}</td><td>${sourceLabel(item.price_source)}</td></tr>`;
+            const gameName = escapeHtml(item.game || '?');
+            const gameLink = `<a href="https://www.ebay.de/sch/i.html?_nkw=${encodeURIComponent(item.game || '')}&_sacat=0&_sop=15&LH_BIN=1" target="_blank" rel="noopener noreferrer">${exceptional ? '⭐ ' + gameName : gameName}</a>`;
+            return `<tr${rowClass}><td>${gameLink}</td><td class="price-cell">${escapeHtml(priceStr)}</td><td>${sourceLabel(item.price_source)}</td></tr>`;
         }).join('');
         const totalResale = itemized.reduce((s, i) => s + (i.price_eur || 0), 0);
         const profitSign = grossProfit >= 0 ? '+' : '';
