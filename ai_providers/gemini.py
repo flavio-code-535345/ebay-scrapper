@@ -317,9 +317,7 @@ class GeminiAssessor(BaseAssessor):
             except Exception as exc:
                 exc_msg = str(exc).lower()
                 if self._images_supported and (
-                    "does not support image" in exc_msg
-                    or "image input" in exc_msg
-                    or "cannot read" in exc_msg
+                    "does not support image" in exc_msg or "image input" in exc_msg or "cannot read" in exc_msg
                 ):
                     logger.warning(
                         "GeminiAssessor: model %r does not support images — disabling image input.",
