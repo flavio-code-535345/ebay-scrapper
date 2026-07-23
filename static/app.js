@@ -20,6 +20,7 @@ let _savedUrls       = new Set();
 let _selectedUrls    = new Set();
 let _abortController = null;
 let _progressTimer   = null;
+let _multiQuery      = null;
 
 const _PROGRESS_STAGES = [
     { target: 35, label: '🔍 Searching eBay listings…', duration: 3500 },
@@ -100,16 +101,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const searchForm = document.getElementById('searchForm');
     if (searchForm) searchForm.addEventListener('submit', handleSearch);
 
-    // Quick-search chips (Xbox 360 / PS4 bundle presets)
-    document.querySelectorAll('.btn-quick-search').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const query = (btn.dataset.query || '').trim();
-            if (!query) return;
+    // Quick-search chips (event delegation — multiple query variations)
+    const quickSearches = document.getElementById('quickSearches');
+    if (quickSearches) {
+        quickSearches.addEventListener('click', (e) => {
+            const el = e.target.closest('[data-queries]');
+            if (!el || el.disabled || _abortController) return;
+            e.preventDefault();
+            const raw = (el.getAttribute('data-queries') || '').trim();
+            const queries = raw.split(',').map(s => s.trim()).filter(Boolean);
+            if (!queries.length) return;
             const input = document.getElementById('searchQuery');
-            if (input) input.value = query;
+            if (input) input.value = queries[0];
+            _multiQuery = queries;
             handleSearch(new Event('submit'));
         });
-    });
+    }
 
     // Cancel search
     const cancelBtn = document.getElementById('cancelSearchBtn');
@@ -222,7 +229,12 @@ async function handleSearch(e) {
     const spinner   = searchBtn.querySelector('.spinner-border');
     const btnText   = searchBtn.querySelector('.btn-text');
 
-    if (!query) {
+    if (_multiQuery) {
+        if (!_multiQuery.length) {
+            _multiQuery = null;
+            return;
+        }
+    } else if (!query) {
         showError('Please enter a search term');
         return;
     }
@@ -233,7 +245,7 @@ async function handleSearch(e) {
 
     // UI – loading state
     searchBtn.disabled = true;
-    document.querySelectorAll('.btn-quick-search').forEach(btn => { btn.disabled = true; });
+    document.querySelectorAll('#quickSearches [data-queries]').forEach(btn => { btn.disabled = true; });
     spinner.classList.remove('d-none');
     btnText.textContent = 'Searching…';
 
@@ -243,14 +255,23 @@ async function handleSearch(e) {
     document.getElementById('emptyState').classList.add('d-none');
     document.getElementById('dealsGrid').innerHTML = '';
 
+    const phaseLabel = document.getElementById('progressPhase');
+    if (phaseLabel && _multiQuery && _multiQuery.length > 1) {
+        phaseLabel.textContent = `🔍 Searching ${_multiQuery.length} phrase variations…`;
+    }
+
     startProgress();
     switchPipeline('ready', /* suppressLoad */ true);
+
+    const body = _multiQuery
+        ? { queries: _multiQuery, max_results: MAX_SEARCH_RESULTS }
+        : { query, max_results: MAX_SEARCH_RESULTS };
 
     try {
         const response = await fetch('/api/search', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query, max_results: MAX_SEARCH_RESULTS }),
+            body: JSON.stringify(body),
             signal: _abortController.signal,
         });
 
@@ -287,11 +308,12 @@ async function handleSearch(e) {
         }
     } finally {
         searchBtn.disabled = false;
-        document.querySelectorAll('.btn-quick-search').forEach(btn => { btn.disabled = false; });
+        document.querySelectorAll('#quickSearches [data-queries]').forEach(btn => { btn.disabled = false; });
         spinner.classList.add('d-none');
         btnText.textContent = 'Search';
         document.getElementById('activePipelineBar').classList.add('d-none');
         _abortController = null;
+        _multiQuery = null;
     }
 }
 
