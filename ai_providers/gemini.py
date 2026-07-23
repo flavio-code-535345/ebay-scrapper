@@ -17,6 +17,12 @@ from ai_providers.base import (
     _RETRY_BASE_DELAY,
     _SYSTEM_PROMPT,
     BaseAssessor,
+    _apply_garbage_overrides,
+    _apply_scam_override,
+    _apply_sports_kinect_override,
+    _build_deterministic_garbage,
+    _detect_broken_deal,
+    _detect_trash_title,
     _is_rate_limit_error,
     _is_transient_error,
     _parse_response,
@@ -33,10 +39,6 @@ _IMAGE_FETCH_TIMEOUT = 5
 
 class GeminiAssessor(BaseAssessor):
     """AI assessor using Google Gemini models."""
-
-    provider_id = "gemini"
-    provider_label = "Google Gemini"
-    supports_images = True
 
     def __init__(self) -> None:
         super().__init__("GEMINI_API_KEY", _MODEL_NAME)
@@ -62,9 +64,45 @@ class GeminiAssessor(BaseAssessor):
     def assess_deal(self, deal: dict) -> dict | None:
         if not self.enabled or not self.user_enabled or self.is_rate_limited:
             return None
-        early = self._try_deterministic_assessment(deal)
-        if early is not None:
-            return early
+        # 1. Check deterministic rules — garbage first, then sports/Kinect, then scam.
+        broken = _detect_broken_deal(deal)
+        if broken:
+            return _build_deterministic_garbage("Garbage", 100, broken)
+        trash = _detect_trash_title(deal)
+        if trash:
+            return _build_deterministic_garbage("Garbage", 100, trash)
+        sr = _detect_sports_kinect_deal(deal)
+        if sr:
+            return {
+                "ai_deal_rating": "Avoid",
+                "ai_confidence_score": 100,
+                "ai_visual_findings": [],
+                "ai_red_flags": ["Automatically flagged — sports/Kinect content"],
+                "ai_fair_market_estimate": "",
+                "ai_itemized_resale_estimates": [],
+                "ai_estimated_total_cost": deal.get("price", 0) or 0,
+                "ai_estimated_gross_profit": 0,
+                "ai_verdict_summary": sr,
+                "ai_assessed": True,
+                "ai_potential_scam": False,
+                "ai_scam_warning": "",
+            }
+        scam = _detect_bundle_individual_sale_scam(deal)
+        if scam:
+            return {
+                "ai_deal_rating": "Avoid",
+                "ai_confidence_score": 100,
+                "ai_visual_findings": [],
+                "ai_red_flags": [],
+                "ai_fair_market_estimate": "",
+                "ai_itemized_resale_estimates": [],
+                "ai_estimated_total_cost": deal.get("price", 0) or 0,
+                "ai_estimated_gross_profit": 0,
+                "ai_verdict_summary": scam,
+                "ai_assessed": True,
+                "ai_potential_scam": True,
+                "ai_scam_warning": scam,
+            }
         try:
             contents = self._build_contents(deal)
             response = self._client.models.generate_content(
@@ -76,7 +114,10 @@ class GeminiAssessor(BaseAssessor):
                 ),
             )
             assessment = _parse_response(response.text)
-            return self._finalize_assessment(deal, assessment)
+            assessment = _apply_garbage_overrides(deal, assessment)
+            assessment = _apply_sports_kinect_override(deal, assessment)
+            assessment = _apply_scam_override(deal, assessment)
+            return assessment
         except Exception as exc:
             if _is_rate_limit_error(exc):
                 delay = _parse_retry_delay(exc) or _DEFAULT_BACKOFF_SECONDS
@@ -114,8 +155,10 @@ class GeminiAssessor(BaseAssessor):
                 break
             batch_results = self._assess_batch_with_retry(batch)
             for deal, assessment in zip(batch, batch_results, strict=False):
-                if isinstance(assessment, dict) and not assessment.get("ai_error_type"):
-                    assessment = self._finalize_assessment(deal, assessment)
+                if isinstance(assessment, dict):
+                    assessment = _apply_garbage_overrides(deal, assessment)
+                    assessment = _apply_sports_kinect_override(deal, assessment)
+                    assessment = _apply_scam_override(deal, assessment)
                 results.append(assessment)
         return results
 
@@ -325,3 +368,10 @@ class GeminiAssessor(BaseAssessor):
         except Exception as exc:
             logger.debug("GeminiAssessor: Failed to fetch image %r: %s", url, exc)
             return None
+
+
+# Re-export for backward compatibility (used by gemini_assessor.py shim)
+from ai_providers.base import (  # noqa: E402, F811
+    _detect_bundle_individual_sale_scam,
+    _detect_sports_kinect_deal,
+)
