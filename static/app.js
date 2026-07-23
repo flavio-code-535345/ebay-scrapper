@@ -702,7 +702,7 @@ function createDealCard(deal, mode) {
         ? `<div class="deal-recommendation">${escapeHtml(recommendation)}</div>`
         : '';
 
-    return `<div class="deal-card${isSelected ? ' selected' : ''}" data-url="${encodedUrl}">
+    return `<div class="deal-card${isSelected ? ' selected' : ''}" data-url="${encodedUrl}" data-title="${escapeHtml(deal.title || '')}">
         <div class="deal-card-select">
             <input type="checkbox" class="deal-checkbox" data-url="${encodedUrl}" ${isChecked} aria-label="Select deal">
         </div>
@@ -760,16 +760,25 @@ function buildListingAgeBadge(listingDate) {
 
 async function handleDealCardAction(e) {
     const btn = e.target.closest('[data-action]');
-    if (!btn) return;
+    if (btn) {
+        const action = btn.dataset.action;
+        const url = btn.dataset.url;
+        if (!url) return;
+        if (action === 'save') await handleSaveDeal(btn, url);
+        if (action === 'unsave') await handleUnsaveDeal(btn, url);
+        if (action === 'skip') await handleSkipDeal(btn, url);
+        if (action === 'unskip') await handleUnskipDeal(btn, url);
+        return;
+    }
 
-    const action = btn.dataset.action;
-    const url    = btn.dataset.url;
-    if (!url) return;
+    // Don't intercept clicks on links, checkboxes, or the footer actions area.
+    if (e.target.closest('a') || e.target.closest('input') || e.target.closest('.deal-footer')) return;
 
-    if (action === 'save')   await handleSaveDeal(btn, url);
-    if (action === 'unsave') await handleUnsaveDeal(btn, url);
-    if (action === 'skip')   await handleSkipDeal(btn, url);
-    if (action === 'unskip') await handleUnskipDeal(btn, url);
+    const card = e.target.closest('.deal-card');
+    if (!card) return;
+    const title = card.getAttribute('data-title') || '';
+    if (!title) return;
+    window.open(`https://www.ebay.de/sch/i.html?_nkw=${encodeURIComponent(title)}&_sacat=0`, '_blank');
 }
 
 function handleDealCardCheckbox(e) {
