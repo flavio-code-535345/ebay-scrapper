@@ -37,8 +37,12 @@ class OpenCodeGoAssessor(BaseAssessor):
     supports_images = False
 
     def __init__(self) -> None:
-        # Accept either OPENCODE_GO_API_KEY or OPENCODE_API_KEY.
-        api_key = os.environ.get("OPENCODE_GO_API_KEY", "").strip() or os.environ.get("OPENCODE_API_KEY", "").strip()
+        # Accept OPENCODE_GO_API_KEY, OPENCODE_API_KEY, or DEEPSEEK_API_KEY (backward compat).
+        api_key = (
+            os.environ.get("OPENCODE_GO_API_KEY", "").strip()
+            or os.environ.get("OPENCODE_API_KEY", "").strip()
+            or os.environ.get("DEEPSEEK_API_KEY", "").strip()
+        )
         default_model = os.environ.get("OPENCODE_GO_MODEL", _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
         # BaseAssessor reads a single env var; seed enabled from resolved key.
         super().__init__("OPENCODE_GO_API_KEY", default_model)

@@ -50,22 +50,30 @@ def normalize_provider(value: str | None) -> str:
     return v if v in VALID_PROVIDERS else "gemini"
 
 
+def _provider_has_api_key(pid: str) -> bool:
+    """Check whether any known env var provides an API key for *pid*."""
+    meta = PROVIDER_META[pid]
+    if bool(os.environ.get(meta["api_key_env"], "").strip()):
+        return True
+    if pid == "opencode-go":
+        for alias in ("OPENCODE_API_KEY", "DEEPSEEK_API_KEY"):
+            if bool(os.environ.get(alias, "").strip()):
+                return True
+    return False
+
+
 def list_providers() -> list[dict]:
     """Metadata for settings UI / health."""
     out = []
     for pid in VALID_PROVIDERS:
         meta = PROVIDER_META[pid]
-        key_env = meta["api_key_env"]
-        configured = bool(os.environ.get(key_env, "").strip())
-        if pid == "opencode-go" and not configured:
-            configured = bool(os.environ.get("OPENCODE_API_KEY", "").strip())
         out.append(
             {
                 "id": pid,
                 "label": meta["label"],
                 "default_model": meta["default_model"],
                 "supports_images": meta["supports_images"],
-                "configured": configured,
+                "configured": _provider_has_api_key(pid),
             }
         )
     return out
