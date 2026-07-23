@@ -28,6 +28,29 @@ const _PROGRESS_STAGES = [
     { target: 96, label: '⚙️ Processing results…',      duration: 2500 },
 ];
 
+function detectPlatform(title) {
+    const t = (title || '').toLowerCase();
+    if (/\bxbox\s*(360|one|series)/.test(t)) return 'Xbox 360';
+    if (/\bxbox/.test(t)) return 'Xbox';
+    if (/\bps4\b|playstation\s*4/.test(t)) return 'PS4';
+    if (/\bps5\b|playstation\s*5/.test(t)) return 'PS5';
+    if (/\bps3\b|playstation\s*3/.test(t)) return 'PS3';
+    if (/\bps2\b|playstation\s*2/.test(t)) return 'PS2';
+    if (/\bpsp\b/.test(t)) return 'PSP';
+    if (/\bnintendo\s*(switch|sw)/.test(t)) return 'Switch';
+    if (/\bwii\s*u\b/.test(t)) return 'Wii U';
+    if (/\bwii\b/.test(t)) return 'Wii';
+    if (/\b3ds\b|nintendo\s*3ds/.test(t)) return '3DS';
+    if (/\bnds\b|nintendo\s*ds/.test(t)) return 'DS';
+    if (/\bgameboy|game\s*boy/.test(t)) return 'GameBoy';
+    if (/\bgamecube\b/.test(t)) return 'GameCube';
+    if (/\bgame\s*gear\b/.test(t)) return 'Game Gear';
+    if (/\bsega\b/.test(t)) return 'Sega';
+    if (/\batari\b/.test(t)) return 'Atari';
+    if (/\bpc\b|computer\b/.test(t)) return 'PC';
+    return '';
+}
+
 // ---------------------------------------------------------------------------
 // Progress helpers
 // ---------------------------------------------------------------------------
@@ -611,7 +634,7 @@ function createDealCard(deal, mode) {
     // AI section
     let aiSection = '';
     if (deal.ai_assessed) {
-        aiSection = buildAiSection(deal);
+        aiSection = buildAiSection(deal, dealPlatform);
     } else if (deal.ai_error_type === 'rate_limit') {
         aiSection = buildAiErrorSection('⏳ AI paused (quota limit reached)');
     } else if (deal.ai_error_type === 'parse_error') {
@@ -643,6 +666,9 @@ function createDealCard(deal, mode) {
     const encodedUrl = escapeHtml(deal.url);
     const isSelected = _selectedUrls.has(deal.url);
     const isChecked  = isSelected ? 'checked' : '';
+
+    // Detect platform for per-game search links and value context.
+    const dealPlatform = detectPlatform(deal.title || '');
 
     // Action buttons based on mode
     let actionsHtml = '';
@@ -1370,9 +1396,12 @@ function buildImageIssueSection(issues) {
     return `<div class="image-issues">${items}</div>`;
 }
 
-function buildAiSection(deal) {
+function buildAiSection(deal, platform = '') {
     const rating         = deal.ai_deal_rating || 'Unknown';
     const summary        = deal.ai_verdict_summary || '';
+
+    const _ebayLink = (game) =>
+        `https://www.ebay.de/sch/i.html?_nkw=${encodeURIComponent(platform ? game + ' ' + platform : game)}&_sacat=0&_sop=15&LH_BIN=1`;
     const estimate       = deal.ai_fair_market_estimate || '';
     const visualFindings = Array.isArray(deal.ai_visual_findings) ? deal.ai_visual_findings : [];
     const redFlags       = Array.isArray(deal.ai_red_flags) ? deal.ai_red_flags : [];
@@ -1456,7 +1485,7 @@ function buildAiSection(deal) {
                     const medal  = medals[idx] || '🎮';
                     return `<div class="top-value-row">
                         <span class="top-value-medal">${medal}</span>
-                        <a href="https://www.ebay.de/sch/i.html?_nkw=${encodeURIComponent(item.game || '')}&_sacat=0&_sop=15&LH_BIN=1"
+                        <a href="${_ebayLink(item.game || '')}"
                            target="_blank" rel="noopener noreferrer" class="top-value-name">${escapeHtml(item.game || '?')}</a>
                         <span class="top-value-price">€${Number(item.price_eur).toFixed(2)}</span>
                         <span class="top-value-source">${sourceLabel(item.price_source)}</span>
@@ -1489,7 +1518,7 @@ function buildAiSection(deal) {
             if (exceptional) highlightedGames.add(item.game);
             const rowClass = exceptional ? ' class="row-exceptional"' : '';
             const gameName = escapeHtml(item.game || '?');
-            const gameLink = `<a href="https://www.ebay.de/sch/i.html?_nkw=${encodeURIComponent(item.game || '')}&_sacat=0&_sop=15&LH_BIN=1" target="_blank" rel="noopener noreferrer">${exceptional ? '⭐ ' + gameName : gameName}</a>`;
+            const gameLink = `<a href="${_ebayLink(item.game || '')}" target="_blank" rel="noopener noreferrer">${exceptional ? '⭐ ' + gameName : gameName}</a>`;
             return `<tr${rowClass}><td>${gameLink}</td><td class="price-cell">${escapeHtml(priceStr)}</td><td>${sourceLabel(item.price_source)}</td></tr>`;
         }).join('');
         const totalResale = itemized.reduce((s, i) => s + (i.price_eur || 0), 0);
