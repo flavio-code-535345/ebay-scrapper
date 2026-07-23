@@ -629,6 +629,9 @@ function createDealCard(deal, mode) {
     const imageIssues       = Array.isArray(deal.image_issues) ? deal.image_issues : [];
     const imageWarningSection = buildImageIssueSection(imageIssues);
 
+    // Detect platform for per-game search links and value context.
+    const dealPlatform = detectPlatform(deal.title || '');
+
     // AI section
     let aiSection = '';
     if (deal.ai_assessed) {
@@ -664,9 +667,6 @@ function createDealCard(deal, mode) {
     const encodedUrl = escapeHtml(deal.url);
     const isSelected = _selectedUrls.has(deal.url);
     const isChecked  = isSelected ? 'checked' : '';
-
-    // Detect platform for per-game search links and value context.
-    const dealPlatform = detectPlatform(deal.title || '');
 
     // Action buttons based on mode
     let actionsHtml = '';
