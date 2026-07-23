@@ -56,7 +56,7 @@ def _provider_has_api_key(pid: str) -> bool:
     if bool(os.environ.get(meta["api_key_env"], "").strip()):
         return True
     if pid == "opencode-go":
-        for alias in ("OPENCODE_API_KEY", "DEEPSEEK_API_KEY"):
+        for alias in ("OPENCODE_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"):
             if bool(os.environ.get(alias, "").strip()):
                 return True
     return False
