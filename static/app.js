@@ -501,13 +501,15 @@ function _applyFilters(deals) {
 
         // Rating filter
         if (_ratingFilter) {
-            const rating = (deal.ai_deal_rating || '').toLowerCase();
-            // Treat legacy "fair" ratings as "okay" and "must buy" as "must have" for filter purposes
-            const normRating = rating === 'fair' ? 'okay' : rating === 'must buy' ? 'must have' : rating;
-            if (_ratingFilter === 'must_have_good') {
-                if (normRating !== 'must have' && normRating !== 'good') return false;
-            } else {
-                if (normRating !== _ratingFilter) return false;
+            // When AI didn't assess this deal (rate-limited, disabled), keep it visible.
+            if (deal.ai_assessed) {
+                const rating = (deal.ai_deal_rating || '').toLowerCase();
+                const normRating = rating === 'fair' ? 'okay' : rating === 'must buy' ? 'must have' : rating;
+                if (_ratingFilter === 'must_have_good') {
+                    if (normRating !== 'must have' && normRating !== 'good') return false;
+                } else {
+                    if (normRating !== _ratingFilter) return false;
+                }
             }
         }
 
