@@ -413,6 +413,11 @@ function _applySearchResults(data) {
     const ratingFilterEl = document.getElementById('ratingFilter');
     if (ratingFilterEl) ratingFilterEl.value = 'must_have_good';
 
+    // Reset profit filter to show all deals
+    _minProfit = 0;
+    const minProfitEl = document.getElementById('minProfitFilter');
+    if (minProfitEl) minProfitEl.value = '0';
+
     _lastDeals = data.deals || [];
     _renderDeals(_lastDeals);
 }
@@ -506,8 +511,9 @@ function _applyFilters(deals) {
             }
         }
 
-        // Min profit filter
+        // Min profit filter — only apply when deal was AI-assessed
         if (_minProfit > 0) {
+            if (!deal.ai_assessed) return true;  // unassessed: keep visible
             const profit = (deal.ai_estimated_gross_profit != null) ? Number(deal.ai_estimated_gross_profit) : 0;
             if (profit < _minProfit) return false;
         }
