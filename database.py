@@ -262,7 +262,13 @@ def export_csv() -> str:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            """SELECT d.*, s.query FROM deals d
+            """SELECT d.title, d.price, d.condition, d.seller_rating,
+                   d.shipping, d.url, d.item_location, d.listing_date,
+                   d.ai_deal_rating, d.ai_confidence_score, d.ai_verdict_summary,
+                   d.ai_fair_market_estimate, d.ai_estimated_total_cost,
+                   d.ai_estimated_gross_profit, d.ai_potential_scam, d.ai_scam_warning,
+                   s.query, d.created_at
+               FROM deals d
                JOIN searches s ON d.search_id = s.id
                ORDER BY d.created_at DESC"""
         )

@@ -18,7 +18,7 @@ from ai_providers import create_assessor
 from ai_providers.base import _SPORTS_KINECT_KEYWORDS_RE, _detect_sports_kinect_deal
 from ai_providers.gemini import _MODEL_NAME as _GEMINI_DEFAULT_MODEL
 from ai_providers.gemini import _is_text_only_model
-from ebay_api_client import EbayApiClient
+from ebay_api_client import _MARKETPLACE_LOCALE_MAP, EbayApiClient
 from scraper import EbayScraper
 
 
@@ -456,6 +456,7 @@ def health():
             "ebay_locale": ebay_api.locale,
             "ebay_delivery_country": ebay_api.delivery_country,
             "germany_only": _db_germany_only(),
+            "available_marketplaces": sorted(_MARKETPLACE_LOCALE_MAP.keys()),
         }
     )
 

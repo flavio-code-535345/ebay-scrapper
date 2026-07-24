@@ -16,6 +16,7 @@ let _maxAgeDays      = 0;
 let _keywordFilter   = '';
 let _ratingFilter    = 'must_have_good';
 let _sortOrder       = 'newest';
+let _minProfit       = 0;
 let _savedUrls       = new Set();
 let _selectedUrls    = new Set();
 let _abortController = null;
@@ -46,6 +47,18 @@ function detectPlatform(title) {
     if (/gamecube\b/.test(t)) return 'GameCube';
     if (/sega/.test(t)) return 'Sega';
     if (/atari/.test(t)) return 'Atari';
+    return '';
+}
+
+function detectGameCount(title) {
+    const t = (title || '');
+    const m = t.match(/\b(\d+)\s*(Spiele|Spiel|Games|Game|Titel|Stück|Stk|St\.?)\b/i);
+    return m ? parseInt(m[1], 10) : 0;
+}
+
+function buildGameCountBadge(title) {
+    const count = detectGameCount(title);
+    if (count >= 5) return ` <span class="game-count-badge" title="${count} games in this listing">🎮 ${count}</span>`;
     return '';
 }
 
@@ -179,6 +192,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sortOrderSelect) {
         sortOrderSelect.addEventListener('change', () => {
             _sortOrder = sortOrderSelect.value;
+            if (_currentPipeline === 'ready') _renderDeals(_lastDeals);
+        });
+    }
+
+    // Min profit filter
+    const minProfitEl = document.getElementById('minProfitFilter');
+    if (minProfitEl) {
+        minProfitEl.addEventListener('change', () => {
+            _minProfit = parseFloat(minProfitEl.value) || 0;
             if (_currentPipeline === 'ready') _renderDeals(_lastDeals);
         });
     }
@@ -484,6 +506,12 @@ function _applyFilters(deals) {
             }
         }
 
+        // Min profit filter
+        if (_minProfit > 0) {
+            const profit = (deal.ai_estimated_gross_profit != null) ? Number(deal.ai_estimated_gross_profit) : 0;
+            if (profit < _minProfit) return false;
+        }
+
         return true;
     });
 }
@@ -739,7 +767,7 @@ function createDealCard(deal, mode) {
         </div>
         ${imageSection}
         <div class="deal-body">
-            <div class="deal-title">${escapeHtml(deal.title || '(no title)')}</div>
+            <div class="deal-title">${escapeHtml(deal.title || '(no title)')}${buildGameCountBadge(deal.title)}</div>
             <div class="deal-price">€${(deal.price || 0).toFixed(2)}</div>
             <div class="deal-meta">${metaRows.join('')}</div>
             ${imageWarningSection}
