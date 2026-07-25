@@ -232,6 +232,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const saveModelBtn = document.getElementById('saveModelBtn');
     if (saveModelBtn) saveModelBtn.addEventListener('click', saveModelSettings);
 
+    const aiProviderSelect = document.getElementById('aiProviderSelect');
+    if (aiProviderSelect) aiProviderSelect.addEventListener('change', saveAiProvider);
+
     const aiToggleBtn = document.getElementById('aiToggleBtn');
     if (aiToggleBtn) aiToggleBtn.addEventListener('click', toggleAiEnabled);
 
@@ -1218,18 +1221,45 @@ async function loadModelSettings() {
         const response = await fetch('/api/settings');
         if (!response.ok) return;
         const data = await response.json();
-        const input  = document.getElementById('geminiModelInput');
-        const status = document.getElementById('modelStatus');
-        if (input && data.gemini_model) input.value = data.gemini_model;
-        if (status && data.gemini_model) {
-            status.textContent = `Active model: ${data.gemini_model}`;
-            status.className   = 'model-status model-status--active';
-        }
-        if (typeof data.ai_enabled === 'boolean') _setAiToggleState(data.ai_enabled);
-        _setDataSourceState(data.data_source, data.active_data_source, data.ebay_api_configured);
+        _applySettings(data);
     } catch (err) {
         console.warn('Failed to load model settings:', err);
     }
+}
+
+function _applySettings(data) {
+    const provider = data.ai_provider || 'gemini';
+    const model = provider === 'openai' ? data.ai_backend_model : data.gemini_model;
+
+    const provSel = document.getElementById('aiProviderSelect');
+    if (provSel) provSel.value = provider;
+
+    const input = document.getElementById('geminiModelInput');
+    if (input) {
+        input.value = model || '';
+        input.placeholder = provider === 'openai' ? 'e.g. openai/gpt-4o' : 'e.g. gemini-2.0-flash-lite';
+    }
+
+    const status = document.getElementById('modelStatus');
+    if (status && model) {
+        const label = provider === 'openai' ? 'OpenRouter' : 'Gemini';
+        status.textContent = `Active: ${label} · ${model}`;
+        status.className = 'model-status model-status--active';
+    }
+
+    _setProviderStatus(data);
+    if (typeof data.ai_enabled === 'boolean') _setAiToggleState(data.ai_enabled);
+    _setDataSourceState(data.data_source, data.active_data_source, data.ebay_api_configured);
+}
+
+function _setProviderStatus(data) {
+    const el = document.getElementById('aiProviderStatus');
+    if (!el) return;
+    const providers = Array.isArray(data.providers) ? data.providers : [];
+    const active = providers.find(p => p.id === (data.ai_provider || 'gemini'));
+    if (!active) { el.textContent = ''; return; }
+    el.textContent = active.configured ? '🟢 key set' : '⚠️ no key';
+    el.className = 'data-source-status' + (active.configured ? ' data-source-status--api' : ' data-source-status--error');
 }
 
 function _setAiToggleState(enabled) {
@@ -1333,19 +1363,24 @@ async function saveModelSettings() {
     status.textContent = '';
     status.className   = 'model-status';
 
+    const provider = document.getElementById('aiProviderSelect')?.value || 'gemini';
+    const body = provider === 'openai'
+        ? { ai_backend_model: model }
+        : { gemini_model: model };
+
     try {
         const response = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ gemini_model: model }),
+            body: JSON.stringify(body),
         });
         const data = await response.json();
         if (!response.ok) {
-            const msg = (data.errors && data.errors.gemini_model) || data.error || 'Failed to save.';
+            const msg = (data.errors && Object.values(data.errors)[0]) || data.error || 'Failed to save.';
             status.textContent = `⚠️ ${msg}`;
             status.className   = 'model-status model-status--error';
         } else {
-            status.textContent = `✅ Active model: ${data.gemini_model}`;
+            status.textContent = `✅ Active: ${data.gemini_model || data.ai_backend_model || model}`;
             status.className   = 'model-status model-status--active';
         }
     } catch (err) {
@@ -1354,6 +1389,29 @@ async function saveModelSettings() {
     } finally {
         btn.disabled    = false;
         btn.textContent = 'Save';
+    }
+}
+
+async function saveAiProvider() {
+    const sel = document.getElementById('aiProviderSelect');
+    const status = document.getElementById('modelStatus');
+    if (!sel) return;
+    const provider = sel.value;
+    if (status) { status.textContent = '⏳ Switching…'; status.className = 'model-status'; }
+    try {
+        const resp = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ai_provider: provider }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            if (status) { status.textContent = '⚠️ Failed to switch'; status.className = 'model-status model-status--error'; }
+            return;
+        }
+        _applySettings(data);
+    } catch (err) {
+        if (status) { status.textContent = `⚠️ ${err.message}`; status.className = 'model-status model-status--error'; }
     }
 }
 
