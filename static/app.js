@@ -17,6 +17,7 @@ let _keywordFilter   = '';
 let _ratingFilter    = 'must_have_good';
 let _sortOrder       = 'newest';
 let _minProfit       = 0;
+let _sourceFilter    = '';
 let _savedUrls       = new Set();
 let _selectedUrls    = new Set();
 let _abortController = null;
@@ -56,7 +57,11 @@ function detectGameCount(title) {
     return m ? parseInt(m[1], 10) : 0;
 }
 
-function buildGameCountBadge(title) {
+function buildSourceBadge(deal) {
+    const src = deal.source || '';
+    if (src === 'kleinanzeigen') return '<span class="source-badge source-badge--kdx" title="Kleinanzeigen.de">KA</span>';
+    return '';
+}
     const count = detectGameCount(title);
     if (count >= 5) return ` <span class="game-count-badge" title="${count} games in this listing">🎮 ${count}</span>`;
     return '';
@@ -201,6 +206,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (minProfitEl) {
         minProfitEl.addEventListener('change', () => {
             _minProfit = parseFloat(minProfitEl.value) || 0;
+            if (_currentPipeline === 'ready') _renderDeals(_lastDeals);
+        });
+    }
+
+    const sourceEl = document.getElementById('sourceFilter');
+    if (sourceEl) {
+        sourceEl.addEventListener('change', () => {
+            _sourceFilter = sourceEl.value;
             if (_currentPipeline === 'ready') _renderDeals(_lastDeals);
         });
     }
@@ -520,6 +533,9 @@ function _applyFilters(deals) {
             if (profit < _minProfit) return false;
         }
 
+        // Source filter
+        if (_sourceFilter && (deal.source || 'ebay') !== _sourceFilter) return false;
+
         return true;
     });
 }
@@ -775,7 +791,7 @@ function createDealCard(deal, mode) {
         </div>
         ${imageSection}
         <div class="deal-body">
-            <div class="deal-title">${escapeHtml(deal.title || '(no title)')}${buildGameCountBadge(deal.title)}</div>
+            <div class="deal-title">${buildSourceBadge(deal)} ${escapeHtml(deal.title || '(no title)')}${buildGameCountBadge(deal.title)}</div>
             <div class="deal-price">€${(deal.price || 0).toFixed(2)}</div>
             <div class="deal-meta">${metaRows.join('')}</div>
             ${imageWarningSection}
