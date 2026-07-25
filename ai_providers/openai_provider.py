@@ -8,12 +8,9 @@ import time
 import requests
 
 from ai_providers.base import (
-    _DEFAULT_BACKOFF_SECONDS,
     _SYSTEM_PROMPT,
     BaseAssessor,
     _is_rate_limit_error,
-    _parse_retry_delay,
-    _set_rate_limited_until,
     logger,
 )
 
@@ -53,10 +50,9 @@ class OpenAICompatAssessor(BaseAssessor):
             return self._finalize_assessment(deal, assessment)
         except Exception as exc:
             if _is_rate_limit_error(exc):
-                delay = _parse_retry_delay(exc) or _DEFAULT_BACKOFF_SECONDS
-                _set_rate_limited_until(time.monotonic() + delay)
-                logger.warning("OpenAICompatAssessor: rate limited – backing off %.0f s.", delay)
-                return {"ai_error_type": "rate_limit", "ai_assessed": False}
+                logger.warning("OpenAICompatAssessor: rate limited — sleeping 5s.")
+                time.sleep(5)
+                return None
             logger.error("OpenAICompatAssessor: assess_deal failed: %s", exc, exc_info=True)
             return None
 
@@ -72,9 +68,9 @@ class OpenAICompatAssessor(BaseAssessor):
                 logger.warning("OpenAICompatAssessor: budget exhausted after %d/%d deals.", idx, len(deals))
                 results.extend([None] * (len(deals) - len(results)))
                 break
-            # Small delay to avoid hitting free-tier rate limits (1 req/s).
+            # Delay to respect free-tier rate limits (~20 req/min for most models).
             if idx > 0:
-                time.sleep(0.8)
+                time.sleep(2.5)
             results.append(self.assess_deal(deal))
         return results
 
