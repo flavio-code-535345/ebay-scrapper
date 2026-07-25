@@ -32,7 +32,7 @@ from ai_providers.base import (
 )
 
 _GEMINI_REQUEST_TIMEOUT = 35
-_MODEL_NAME = "gemini-2.0-flash-lite"
+_MODEL_NAME = "gemini-3.1-flash-lite"
 _MAX_IMAGES = 3
 _IMAGE_FETCH_TIMEOUT = 5
 
