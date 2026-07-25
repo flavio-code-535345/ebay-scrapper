@@ -62,6 +62,8 @@ function buildSourceBadge(deal) {
     if (src === 'kleinanzeigen') return '<span class="source-badge source-badge--kdx" title="Kleinanzeigen.de">KA</span>';
     return '';
 }
+
+function buildGameCountBadge(title) {
     const count = detectGameCount(title);
     if (count >= 5) return ` <span class="game-count-badge" title="${count} games in this listing">🎮 ${count}</span>`;
     return '';
