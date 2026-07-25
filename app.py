@@ -14,7 +14,16 @@ from datetime import UTC, datetime
 from flask import Flask, Response, jsonify, render_template, request
 
 import database
-from ai_providers import create_assessor
+from ai_providers import (
+    PROVIDER_META,
+    VALID_PROVIDERS,
+    apply_user_enabled,
+    create_assessor,
+    get_assessor,
+    list_providers,
+    normalize_provider,
+    set_ebay_client_for_all,
+)
 from ai_providers.base import _SPORTS_KINECT_KEYWORDS_RE, _detect_sports_kinect_deal
 from ai_providers.gemini import _MODEL_NAME as _GEMINI_DEFAULT_MODEL
 from ai_providers.gemini import _is_text_only_model
@@ -54,28 +63,34 @@ ebay_api = EbayApiClient()
 
 database.init_db()
 
-assessor = create_assessor()
+# Register eBay client with all AI providers (present and future).
+set_ebay_client_for_all(ebay_api)
 
-# Register eBay client with the assessor so it can fetch real per-game prices.
-assessor.set_ebay_client(ebay_api)
+assessor = create_assessor(os.environ.get("AI_PROVIDER", "gemini"))
 
-# Load persisted Gemini model (if any) so it takes effect without a restart.
-_saved_model = database.get_setting("gemini_model")
-if _saved_model:
-    if _is_text_only_model(_saved_model):
-        logger.warning(
-            "Saved model %r is text-only — resetting to default %r.",
-            _saved_model,
-            _GEMINI_DEFAULT_MODEL,
-        )
-        database.set_setting("gemini_model", _GEMINI_DEFAULT_MODEL)
-    else:
-        assessor.model_name = _saved_model
+
+def _load_provider_models_from_db() -> None:
+    for pid in VALID_PROVIDERS:
+        meta = PROVIDER_META[pid]
+        saved = database.get_setting(meta["model_setting_key"])
+        if saved:
+            try:
+                get_assessor(pid).model_name = saved
+            except ValueError:
+                logger.warning("Ignoring invalid saved model for %s: %r", pid, saved)
+            # Auto-reset text-only models for gemini
+            if pid == "gemini" and _is_text_only_model(saved):
+                logger.warning("Saved model %r is text-only — resetting to default.", saved)
+                get_assessor(pid).model_name = _GEMINI_DEFAULT_MODEL
+                database.set_setting("gemini_model", _GEMINI_DEFAULT_MODEL)
+
+
+_load_provider_models_from_db()
 
 # Load persisted AI-enabled toggle (default: True; stored as "true"/"false" string).
 _saved_ai_enabled = database.get_setting("ai_enabled")
 if _saved_ai_enabled is not None:
-    assessor.user_enabled = str(_saved_ai_enabled).lower() == "true"
+    apply_user_enabled(str(_saved_ai_enabled).lower() == "true")
 
 # ── Data source helpers ────────────────────────────────────────────────────
 
@@ -125,17 +140,24 @@ def _resolve_engine(source: str):
 
 
 def _db_ai_user_enabled() -> bool:
-    """Read the user's AI-enabled toggle from the database.
-
-    Always reads from the shared SQLite database rather than the in-memory
-    ``assessor.user_enabled`` attribute so that multi-worker (Gunicorn)
-    deployments remain consistent: updating the setting in one worker is
-    immediately visible to all other workers on the next request.
-
-    Defaults to ``True`` when no setting has been persisted yet.
-    """
     val = database.get_setting("ai_enabled")
     return str(val).lower() == "true" if val is not None else True
+
+
+def _db_ai_provider() -> str:
+    val = database.get_setting("ai_provider")
+    if val:
+        return normalize_provider(val)
+    return normalize_provider(os.environ.get("AI_PROVIDER", "gemini"))
+
+
+def _current_assessor():
+    global assessor
+    provider = _db_ai_provider()
+    a = get_assessor(provider)
+    a.user_enabled = _db_ai_user_enabled()
+    assessor = a
+    return a
 
 
 def _is_german_location(location: str) -> bool:
@@ -313,11 +335,12 @@ def search():
     # is respected in multi-worker (Gunicorn) deployments where in-memory state
     # is not shared across processes.
     _user_enabled = _db_ai_user_enabled()
-    ai_active = assessor.enabled and _user_enabled
-    ai_assessments = assessor.assess_deals_batch(deals_filtered) if (deals_filtered and ai_active) else []
+    active = _current_assessor()
+    ai_active = active.enabled and _user_enabled
+    ai_assessments = active.assess_deals_batch(deals_filtered) if (deals_filtered and ai_active) else []
 
     timed_out = 0
-    if assessor.enabled and ai_assessments:
+    if active.enabled and ai_assessments:
         failed = sum(1 for a in ai_assessments if a is None)
         rate_limited = sum(1 for a in ai_assessments if a and a.get("ai_error_type") == "rate_limit")
         parse_errors = sum(1 for a in ai_assessments if a and a.get("ai_error_type") == "parse_error")
@@ -400,8 +423,8 @@ def search():
             "deal_count": len(assessed),
             "deals": assessed,
             "errors": search_errors,
-            "ai_enabled": assessor.enabled and _user_enabled,
-            "ai_rate_limited": assessor.is_rate_limited,
+            "ai_enabled": active.enabled and _user_enabled,
+            "ai_rate_limited": active.is_rate_limited,
             "ai_paused_seconds": round(paused_seconds),
             "ai_timeout_count": timed_out,
             "data_source": active_source,
@@ -438,16 +461,19 @@ def stats():
 
 @app.route("/api/health")
 def health():
-    paused_seconds = max(0.0, assessor.rate_limited_until - time.monotonic())
+    active = _current_assessor()
+    paused_seconds = max(0.0, active.rate_limited_until - time.monotonic())
     data_source_setting = _db_data_source()
     _, active_source = _resolve_engine(data_source_setting)
+    provider = _db_ai_provider()
     return jsonify(
         {
             "status": "healthy",
-            "ai_enabled": assessor.enabled and _db_ai_user_enabled(),
-            "ai_rate_limited": assessor.is_rate_limited,
+            "ai_provider": provider,
+            "ai_enabled": active.enabled and _db_ai_user_enabled(),
+            "ai_rate_limited": active.is_rate_limited,
             "ai_paused_seconds": round(paused_seconds),
-            "ai_model": assessor.model_name,
+            "ai_model": active.model_name,
             "data_source": active_source,
             "data_source_setting": data_source_setting,
             "ebay_api_configured": ebay_api.is_configured,
@@ -457,6 +483,7 @@ def health():
             "ebay_delivery_country": ebay_api.delivery_country,
             "germany_only": _db_germany_only(),
             "available_marketplaces": sorted(_MARKETPLACE_LOCALE_MAP.keys()),
+            "providers": list_providers(),
         }
     )
 
@@ -493,6 +520,17 @@ def update_settings():
 
     errors = {}
     updated = {}
+
+    if "ai_provider" in data:
+        pid = normalize_provider(str(data["ai_provider"]))
+        if pid not in VALID_PROVIDERS:
+            errors["ai_provider"] = f"ai_provider must be one of: {', '.join(VALID_PROVIDERS)}"
+        else:
+            database.set_setting("ai_provider", pid)
+            assessor = get_assessor(pid)
+            assessor.user_enabled = _db_ai_user_enabled()
+            updated["ai_provider"] = pid
+            logger.info("Settings: ai_provider updated to %r", pid)
 
     if "gemini_model" in data:
         model = str(data["gemini_model"]).strip()
