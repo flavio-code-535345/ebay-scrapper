@@ -163,7 +163,7 @@ class KleinanzeigenScraper:
                 "shipping": "VB" if is_vb else "",
                 "is_trending": False,
                 "item_location": location,
-                "description": description[:500],
+                "description": description[:2000],
                 "seller_count": "",
                 "listing_date": listing_date,
                 "image_urls": images[:3],
