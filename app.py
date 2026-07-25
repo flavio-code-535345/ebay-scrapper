@@ -494,7 +494,10 @@ def get_settings():
     _, active_source = _resolve_engine(data_source_setting)
     return jsonify(
         {
-            "gemini_model": assessor.model_name,
+            "ai_provider": _db_ai_provider(),
+            "providers": list_providers(),
+            "gemini_model": get_assessor("gemini").model_name,
+            "ai_backend_model": get_assessor("openai").model_name,
             "ai_enabled": _db_ai_user_enabled(),
             "data_source": data_source_setting,
             "active_data_source": active_source,
@@ -549,6 +552,21 @@ def update_settings():
                 logger.info("Settings: gemini_model updated to %r", model)
             except ValueError as exc:
                 errors["gemini_model"] = str(exc)
+
+    if "ai_backend_model" in data:
+        model = str(data["ai_backend_model"]).strip()
+        if not model:
+            errors["ai_backend_model"] = "ai_backend_model must not be empty"
+        elif not _MODEL_NAME_RE.match(model):
+            errors["ai_backend_model"] = "ai_backend_model contains invalid characters"
+        else:
+            try:
+                get_assessor("openai").model_name = model
+                database.set_setting("ai_backend_model", model)
+                updated["ai_backend_model"] = model
+                logger.info("Settings: ai_backend_model updated to %r", model)
+            except ValueError as exc:
+                errors["ai_backend_model"] = str(exc)
 
     if "ai_enabled" in data:
         ai_enabled = data["ai_enabled"]

@@ -48,7 +48,7 @@ class OpenAICompatAssessor(BaseAssessor):
         if early is not None:
             return early
         try:
-            text = self._chat(system=_SYSTEM_PROMPT, user=self._build_deal_text_prompt(deal))
+            text = self._chat(system=_SYSTEM_PROMPT, user=self._build_deal_text_prompt(deal, description_limit=400))
             assessment = self._parse_response(text)
             return self._finalize_assessment(deal, assessment)
         except Exception as exc:
@@ -84,6 +84,7 @@ class OpenAICompatAssessor(BaseAssessor):
                 {"role": "user", "content": user},
             ],
             "temperature": 0.2,
+            "max_tokens": 1024,
         }
         headers = {
             "Authorization": f"Bearer {self._api_key}",
