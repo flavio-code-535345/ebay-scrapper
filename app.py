@@ -64,9 +64,13 @@ assessor.set_ebay_client(ebay_api)
 
 _saved_model = database.get_setting("gemini_model")
 if _saved_model:
-    if _is_text_only_model(_saved_model):
-        logger.info("Saved model %r is text-only — images disabled for this model.", _saved_model)
-    assessor.model_name = _saved_model
+    if _saved_model == "gemini-2.0-flash-lite":
+        database.set_setting("gemini_model", "")
+        logger.info("Cleared old saved model, defaulting to gemini-3.1-flash-lite")
+    else:
+        if _is_text_only_model(_saved_model):
+            logger.info("Saved model %r is text-only — images disabled.", _saved_model)
+        assessor.model_name = _saved_model
 
 _saved_ai_enabled = database.get_setting("ai_enabled")
 if _saved_ai_enabled is not None:
@@ -263,7 +267,9 @@ def search():
     germany_only = _db_germany_only()
     if germany_only:
         before = len(deals)
-        deals = [d for d in deals if _is_german_location(d.get("item_location", ""))]
+        deals = [
+            d for d in deals if d.get("source") == "kleinanzeigen" or _is_german_location(d.get("item_location", ""))
+        ]
         filtered_out = before - len(deals)
         if filtered_out:
             logger.info("Germany-only filter removed %d non-German deal(s)", filtered_out)

@@ -73,6 +73,7 @@ class TestSearch:
 
     def test_search_empty_results(self, client):
         """When both engines return no results, search returns empty."""
+        app.kleinanzeigen = None
         with patch.object(app.scraper, "search", return_value=([], [])):
             resp = client.post("/api/search", json={"query": "nothing"})
         assert resp.status_code == 200
