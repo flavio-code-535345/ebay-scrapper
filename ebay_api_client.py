@@ -168,6 +168,10 @@ class EbayApiClient:
             )
             return [], errors
 
+        # Append negative keywords to filter out low-value junk.
+        _JUNK_KEYWORDS = "-skylanders -lego -amiibo -disney -singstar -guitar -rockband -djhero -singstar -justdance"
+        search_query = f"{query} {_JUNK_KEYWORDS}"
+
         # Obtain a valid access token.
         try:
             token = self._get_access_token()
@@ -214,7 +218,7 @@ class EbayApiClient:
             f"conditionIds:{{3000|1500}}"
         )
         params = {
-            "q": query,
+            "q": search_query,
             "limit": min(max(1, max_results), 200),
             "sort": "newlyListed",
             "filter": api_filter,
