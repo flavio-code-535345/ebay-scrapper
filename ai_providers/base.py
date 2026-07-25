@@ -358,6 +358,7 @@ _TRASH_TITLE_KEYWORDS_RE = re.compile(
     r"|disney\s+(channel|infinity|lions|princess|sing(it)?)"
     r"|hello\s+kitty|my\s+little\s+pony|spongebob"
     r"|dora\s+(the\s+)?explorer"
+    r"|skylanders|disney\s+infinity|amiibo"
     r"|lego\s+(movie|batman|pirates|rock\s+band|city|friends)(\s+game)?"
     r"|nintendogs|nintendocats"
     r"|big\s+game\s+hunter|cabela"
