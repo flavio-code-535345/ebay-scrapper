@@ -268,10 +268,7 @@ def search():
     if germany_only:
         before = len(deals)
         deals = [
-            d
-            for d in deals
-            if d.get("source") == "kleinanzeigen"
-            or _is_german_location(d.get("item_location", ""))
+            d for d in deals if d.get("source") == "kleinanzeigen" or _is_german_location(d.get("item_location", ""))
         ]
         filtered_out = before - len(deals)
         if filtered_out:
