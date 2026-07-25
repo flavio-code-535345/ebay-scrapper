@@ -16,7 +16,6 @@ from flask import Flask, Response, jsonify, render_template, request
 import database
 from ai_providers import create_assessor
 from ai_providers.base import _SPORTS_KINECT_KEYWORDS_RE, _detect_sports_kinect_deal
-from ai_providers.gemini import _is_text_only_model
 from ebay_api_client import _MARKETPLACE_LOCALE_MAP, EbayApiClient
 from scraper import EbayScraper
 
@@ -64,12 +63,10 @@ assessor.set_ebay_client(ebay_api)
 
 _saved_model = database.get_setting("gemini_model")
 if _saved_model:
-    if _saved_model == "gemini-2.0-flash-lite":
+    if _saved_model.startswith("gemini-3"):
         database.set_setting("gemini_model", "")
-        logger.info("Cleared old saved model, defaulting to gemini-3.1-flash-lite")
+        logger.info("Cleared text-only model %r, defaulting to gemini-2.0-flash-lite", _saved_model)
     else:
-        if _is_text_only_model(_saved_model):
-            logger.info("Saved model %r is text-only — images disabled.", _saved_model)
         assessor.model_name = _saved_model
 
 _saved_ai_enabled = database.get_setting("ai_enabled")
