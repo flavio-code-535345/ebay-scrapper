@@ -19,8 +19,12 @@ from ai_providers.base import _SPORTS_KINECT_KEYWORDS_RE, _detect_sports_kinect_
 from ai_providers.gemini import _MODEL_NAME as _GEMINI_DEFAULT_MODEL
 from ai_providers.gemini import _is_text_only_model
 from ebay_api_client import _MARKETPLACE_LOCALE_MAP, EbayApiClient
-from kleinanzeigen_scraper import KleinanzeigenScraper
 from scraper import EbayScraper
+
+try:
+    from kleinanzeigen_scraper import KleinanzeigenScraper
+except ImportError:
+    KleinanzeigenScraper = None  # type: ignore[assignment]
 
 
 class JsonFormatter(logging.Formatter):
@@ -52,7 +56,7 @@ app = Flask(__name__)
 
 scraper = EbayScraper()
 ebay_api = EbayApiClient()
-kleinanzeigen = KleinanzeigenScraper()
+kleinanzeigen = KleinanzeigenScraper() if KleinanzeigenScraper else None
 
 database.init_db()
 
@@ -209,28 +213,29 @@ def search():
             all_deals.append(d)
         logger.info("Search for %r via %s returned %d deals", q, active_source, len(deals))
         # ── Kleinanzeigen ───────────────────────────────────────────────
-        try:
-            kdx_deals, kdx_errs = kleinanzeigen.search(q, max_results=min(max_results, 30))
-            all_errors.extend(kdx_errs)
-            for d in kdx_deals:
-                url = d.get("url", "")
-                if "?" in url:
-                    url = url.split("?")[0]
-                if not url or url in seen_urls:
-                    continue
-                title = (d.get("title") or "").strip().lower()
-                price = d.get("price")
-                title_price_key = f"{title}|{price}"
-                if title_price_key in seen_titles and price is not None:
-                    continue
-                seen_urls.add(url)
-                if price is not None:
-                    seen_titles.add(title_price_key)
-                d["source"] = "kleinanzeigen"
-                all_deals.append(d)
-            logger.info("Kleinanzeigen %r returned %d deals", q, len(kdx_deals))
-        except Exception as exc:
-            logger.warning("Kleinanzeigen search failed for %r: %s", q, exc)
+        if kleinanzeigen:
+            try:
+                kdx_deals, kdx_errs = kleinanzeigen.search(q, max_results=min(max_results, 30))
+                all_errors.extend(kdx_errs)
+                for d in kdx_deals:
+                    url = d.get("url", "")
+                    if "?" in url:
+                        url = url.split("?")[0]
+                    if not url or url in seen_urls:
+                        continue
+                    title = (d.get("title") or "").strip().lower()
+                    price = d.get("price")
+                    title_price_key = f"{title}|{price}"
+                    if title_price_key in seen_titles and price is not None:
+                        continue
+                    seen_urls.add(url)
+                    if price is not None:
+                        seen_titles.add(title_price_key)
+                    d["source"] = "kleinanzeigen"
+                    all_deals.append(d)
+                logger.info("Kleinanzeigen %r returned %d deals", q, len(kdx_deals))
+            except Exception as exc:
+                logger.warning("Kleinanzeigen search failed for %r: %s", q, exc)
     deals = all_deals
     search_errors = all_errors
     ebay_n = sum(1 for d in deals if d.get("source") == "ebay")
