@@ -25,9 +25,7 @@ let _progressTimer   = null;
 let _multiQuery      = null;
 
 const _PROGRESS_STAGES = [
-    { target: 35, label: '🔍 Searching eBay listings…', duration: 3500 },
-    { target: 82, label: '🤖 Running AI scoring…',      duration: 9000 },
-    { target: 96, label: '⚙️ Processing results…',      duration: 2500 },
+    { target: 90, label: '...', duration: 25000 },
 ];
 
 function detectPlatform(title) {
@@ -319,6 +317,7 @@ async function handleSearch(e) {
 
     startProgress();
     switchPipeline('ready', /* suppressLoad */ true);
+    const startTime = performance.now();
 
     const body = _multiQuery
         ? { queries: _multiQuery, max_results: MAX_SEARCH_RESULTS }
@@ -338,8 +337,11 @@ async function handleSearch(e) {
             throw new Error(data.error || `HTTP ${response.status}: Search failed`);
         }
 
+        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
         stopProgress(true);
-        await new Promise(r => setTimeout(r, 300));
+        // Update progress label with real results
+        const label = document.getElementById('progressLabel');
+        if (label) label.textContent = `Found ${data.deal_count} deals in ${elapsed}s`;
 
         if (!data.deals || data.deals.length === 0) {
             const errorLines = (data.errors && data.errors.length)
@@ -348,7 +350,15 @@ async function handleSearch(e) {
             showDetailedError('No deals found. Try a different search term.', errorLines);
             document.getElementById('emptyState').classList.remove('d-none');
         } else {
-            _applySearchResults(data);
+            try {
+                _applySearchResults(data);
+            } catch (renderErr) {
+                console.error('Render failed:', renderErr);
+                showDetailedError(
+                    'Failed to display results',
+                    [renderErr.message || String(renderErr)]
+                );
+            }
         }
 
         updateTabBadges();
