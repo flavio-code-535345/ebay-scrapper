@@ -22,6 +22,8 @@ _ARTICLE_SELECTORS = [
     "li.ad-listitem",
     '[class*="aditem"]',
     '[class*="AdItem"]',
+    "ul[id*='srp'] > li",
+    "ul[class*='srp'] > li",
 ]
 
 _LINK_SELECTORS = [
@@ -29,30 +31,35 @@ _LINK_SELECTORS = [
     "article a[href]",
     "li a[href]",
     'a[href*="/s-anzeige/"]',
+    "a[href*='s-anzeige']",
 ]
 
 _PRICE_SELECTORS = [
     '[class*="aditem-main--middle--price"]',
-    "[class*='price']",
     '[class*="Price"]',
     "p[class*='metr']",
+    "span[class*='price']",
+    "p[class*='price']",
 ]
 
 _LOCATION_SELECTORS = [
     '[class*="aditem-main--top--left"]',
     "[class*='top']",
     '[class*="Top"]',
+    "span[class*='loc']",
 ]
 
 _DESCRIPTION_SELECTORS = [
     '[class*="aditem-main--middle--description"]',
-    "[class*='description']",
     '[class*="Description"]',
+    "p[class*='desc']",
+    "span[class*='desc']",
 ]
 
 _RATING_SELECTORS = [
-    '[class*="rating"], [class*="Rating"]',
+    'span[class*="rating"], span[class*="Rating"]',
     'span[class*="top"]',
+    '[class*="Bewertung"]',
 ]
 
 _VB_PATTERN = re.compile(r"\b(vb|verhandlungsbasis|verhandelbar|preis\s*vorschlag)\b", re.IGNORECASE)
@@ -138,6 +145,7 @@ class KleinanzeigenScraper:
             location = self._extract_text(article, _LOCATION_SELECTORS)
             description = self._extract_text(article, _DESCRIPTION_SELECTORS)
             rating = self._extract_rating(article)
+            condition = self._extract_condition(description, title)
             date_el = article.select_one('[class*="aditem-main--top--right"]') or article.select_one("[class*='date']")
             listing_date = date_el.get_text(strip=True) if date_el else ""
 
@@ -157,7 +165,7 @@ class KleinanzeigenScraper:
             return {
                 "title": title[:300],
                 "price": price,
-                "condition": "",
+                "condition": condition,
                 "seller_rating": rating,
                 "url": href,
                 "shipping": "VB" if is_vb else "",
@@ -200,18 +208,41 @@ class KleinanzeigenScraper:
         if not price_text:
             return 0.0, False
         is_vb = bool(_VB_PATTERN.search(price_text))
-        cleaned = price_text.replace("\xa0", " ").replace("€", "").replace(".", "").replace(",", ".").strip()
-        # Remove VB/negotiation text
-        cleaned = _VB_PATTERN.sub("", cleaned).strip()
-        # Try "1000 VB" → 1000 or "1.234 VB" → 1234
-        match = _PRICE_RE.search(cleaned)
-        if match:
-            try:
-                val = match.group(0).replace(" ", "").replace("\xa0", "")
-                return float(val), is_vb
-            except ValueError:
-                pass
-        return 0.0, is_vb
+        raw = price_text.replace("\xa0", " ").replace("€", "").strip()
+        raw = _VB_PATTERN.sub("", raw).strip()
+
+        # Find the numeric part: handle "1.234,56" (DE) or "1,234.56" (EN) or "1234,56" or "35"
+        m = re.search(r"[\d.,\s]+", raw)
+        if not m:
+            return 0.0, is_vb
+        num_str = m.group(0).strip().replace(" ", "")
+
+        # Determine format by looking at the last 3 characters
+        last_comma = num_str.rfind(",")
+        last_dot = num_str.rfind(".")
+        if last_comma > last_dot and last_comma == len(num_str) - 3:
+            # German: "1.234,56" → comma is decimal
+            num_str = num_str.replace(".", "").replace(",", ".")
+        elif last_dot > last_comma and last_dot == len(num_str) - 3:
+            # English: "1,234.56" → dot is decimal
+            num_str = num_str.replace(",", "")
+        elif last_comma > last_dot:
+            # "1234,56" → comma is decimal
+            num_str = num_str.replace(",", ".")
+        elif last_dot > last_comma:
+            # "1234.56" → dot is decimal
+            pass
+        else:
+            # No separators or ambiguous: remove all non-digits
+            num_str = re.sub(r"[^0-9]", "", num_str)
+
+        try:
+            val = float(num_str)
+            if val <= 0 or val > 500000:
+                return 0.0, is_vb
+            return val, is_vb
+        except ValueError:
+            return 0.0, is_vb
 
     def _extract_rating(self, article) -> float:
         for sel in _RATING_SELECTORS:
@@ -220,6 +251,24 @@ class KleinanzeigenScraper:
                 text = el.get_text(strip=True).lower()
                 if "top" in text:
                     return 100.0
-                if "ok" in text:
+                if "ok" in text or "okay" in text:
                     return 85.0
+                if "zuverlässig" in text:
+                    return 90.0
+        # Check for "TOP" badge images
+        top_img = article.select_one('img[alt*="TOP"], img[alt*="Bewertung"]')
+        if top_img:
+            return 100.0
         return 0.0
+
+    def _extract_condition(self, description: str, title: str) -> str:
+        combined = f"{title} {description}".lower()
+        if any(w in combined for w in ("neu", "ovp", "originalverpackt", "unbenutzt")):
+            return "Neu"
+        if any(w in combined for w in ("sehr gut", "top zustand", "einwandfrei")):
+            return "Sehr gut"
+        if any(w in combined for w in ("gut", "gebraucht")):
+            return "Gebraucht"
+        if any(w in combined for w in ("defekt", "kaputt", "bastler", "ersatzteile")):
+            return "Defekt"
+        return ""
