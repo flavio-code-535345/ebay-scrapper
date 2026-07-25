@@ -72,6 +72,9 @@ class OpenAICompatAssessor(BaseAssessor):
                 logger.warning("OpenAICompatAssessor: budget exhausted after %d/%d deals.", idx, len(deals))
                 results.extend([None] * (len(deals) - len(results)))
                 break
+            # Small delay to avoid hitting free-tier rate limits (1 req/s).
+            if idx > 0:
+                time.sleep(0.8)
             results.append(self.assess_deal(deal))
         return results
 
