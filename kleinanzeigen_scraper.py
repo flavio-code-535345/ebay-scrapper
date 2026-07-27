@@ -35,11 +35,11 @@ _LINK_SELECTORS = [
 ]
 
 _PRICE_SELECTORS = [
-    '[class*="aditem-main--middle--price"]',
-    '[class*="Price"]',
-    "p[class*='metr']",
-    "span[class*='price']",
-    "p[class*='price']",
+    '[class*="aditem-main--middle--price"]:not(s):not(del):not(strike)',
+    '[class*="Price"]:not(s):not(del):not(strike)',
+    "p[class*='metr']:not(s):not(del):not(strike)",
+    "span[class*='price']:not(s):not(del):not(strike)",
+    "p[class*='price']:not(s):not(del):not(strike)",
 ]
 
 _LOCATION_SELECTORS = [
