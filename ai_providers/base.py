@@ -1157,3 +1157,27 @@ class BaseAssessor:
             price_str = f"€{price:.2f}" if price is not None else "N/A"
             lines.append(f"  - {game}: {price_str} ({src})")
         return "\n".join(lines) + "\n"
+
+
+def extract_listed_game_prices(text: str) -> list[tuple[str, float]]:
+    """Parse 'Game Name – 15 €' or 'Game Name = 15 €' patterns from descriptions."""
+    if not text:
+        return []
+    results: list[tuple[str, float]] = []
+    for line in text.split("\n"):
+        line = line.strip()
+        m = re.match(r"(.+?)\s*[–\-–—=]\s*(\d+[\.,]?\d*)\s*€?\s*$", line)
+        if m:
+            name = m.group(1).strip()
+            if len(name) < 3 or len(name) > 80:
+                continue
+            skip = ("versand", "paket", "gesamt", "alle", "preis", "porto", "ab", "nur", "zahlung")
+            if any(kw in name.lower() for kw in skip):
+                continue
+            price_str = m.group(2).replace(",", ".")
+            try:
+                pr = float(price_str)
+            except ValueError:
+                pr = 0.0
+            results.append((name, pr))
+    return results[:20]

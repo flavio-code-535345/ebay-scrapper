@@ -28,6 +28,7 @@ from ai_providers.base import (
     _parse_response,
     _parse_retry_delay,
     _set_rate_limited_until,
+    extract_listed_game_prices,
     logger,
 )
 
@@ -229,6 +230,12 @@ class GeminiAssessor(BaseAssessor):
         image_issues_line = self._format_image_issues_line(deal)
         if image_issues_line:
             prompt_lines.append(image_issues_line)
+        # Extract individual game prices from description (Kleinanzeigen pattern)
+        listed_games = extract_listed_game_prices(description)
+        if listed_games:
+            prompt_lines.append("\nGames listed in description:")
+            for name, pr in listed_games:
+                prompt_lines.append(f"  - {name}: €{pr:.2f}")
         # Description (truncated)
         if description:
             prompt_lines.append(f"\nDescription:\n{description[:1500]}")
@@ -269,8 +276,13 @@ class GeminiAssessor(BaseAssessor):
                 f"Seller Count: {seller_count}\n"
                 f"Item Location: {item_location}\n"
                 f"Listing Date: {listing_date}\n"
-                f"Description:\n{description[:800]}\n"
             )
+            listed_games = extract_listed_game_prices(description)
+            if listed_games:
+                item_text += "Games listed in description:\n"
+                for name, pr in listed_games:
+                    item_text += f"  - {name}: €{pr:.2f}\n"
+            item_text += f"Description:\n{description[:800]}\n"
             ebay_prices = self._fetch_ebay_prices_for_bundle(deal)
             if ebay_prices:
 
