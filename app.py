@@ -63,11 +63,7 @@ assessor.set_ebay_client(ebay_api)
 
 _saved_model = database.get_setting("gemini_model")
 if _saved_model:
-    if _saved_model.startswith("gemini-3"):
-        database.set_setting("gemini_model", "")
-        logger.info("Cleared text-only model %r, defaulting to gemini-2.0-flash-lite", _saved_model)
-    else:
-        assessor.model_name = _saved_model
+    assessor.model_name = _saved_model
 
 _saved_ai_enabled = database.get_setting("ai_enabled")
 if _saved_ai_enabled is not None:
