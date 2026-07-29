@@ -36,6 +36,7 @@ _GEMINI_REQUEST_TIMEOUT = 35
 _MODEL_NAME = "gemini-3.1-flash-lite"
 _MAX_IMAGES = 3
 _IMAGE_FETCH_TIMEOUT = 5
+_BATCH_DELAY_SECONDS = 4.5  # respect 15 RPM free-tier limit
 
 # Known text-only Gemini models — auto-disable image input to avoid SDK errors.
 _TEXT_ONLY_MODELS: frozenset[str] = frozenset()
@@ -58,6 +59,7 @@ class GeminiAssessor(BaseAssessor):
     def __init__(self) -> None:
         super().__init__("GEMINI_API_KEY", _MODEL_NAME)
         self._images_supported = not _is_text_only_model(self._model_name)
+        self._result_cache: dict[str, dict] = {}
         if not self._images_supported:
             logger.info("GeminiAssessor: model %r is text-only — images disabled.", self._model_name)
 
@@ -91,6 +93,9 @@ class GeminiAssessor(BaseAssessor):
     def assess_deal(self, deal: dict) -> dict | None:
         if not self.enabled or not self.user_enabled or self.is_rate_limited:
             return None
+        url = deal.get("url", "")
+        if url and url in self._result_cache:
+            return dict(self._result_cache[url])
         # 1. Check deterministic rules — garbage first, then sports/Kinect, then scam.
         broken = _detect_broken_deal(deal)
         if broken:
@@ -144,6 +149,8 @@ class GeminiAssessor(BaseAssessor):
             assessment = _apply_garbage_overrides(deal, assessment)
             assessment = _apply_sports_kinect_override(deal, assessment)
             assessment = _apply_scam_override(deal, assessment)
+            if url:
+                self._result_cache[url] = dict(assessment)
             return assessment
         except Exception as exc:
             if _is_rate_limit_error(exc):
@@ -180,6 +187,9 @@ class GeminiAssessor(BaseAssessor):
                 results.extend([None] * (len(deals) - len(results)))
                 break
             batch_results = self._assess_batch_with_retry(batch)
+            # Stagger to stay within 15 RPM free-tier limit
+            if batch_idx > 0:
+                time.sleep(_BATCH_DELAY_SECONDS)
             for deal, assessment in zip(batch, batch_results, strict=False):
                 if isinstance(assessment, dict):
                     assessment = _apply_garbage_overrides(deal, assessment)

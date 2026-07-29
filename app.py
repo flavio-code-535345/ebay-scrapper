@@ -399,6 +399,8 @@ def search():
             "deal_count": len(assessed),
             "deals": assessed,
             "errors": search_errors,
+            "ebay_count": ebay_n,
+            "kleinanzeigen_count": kdx_n,
             "ai_enabled": assessor.enabled and _user_enabled,
             "ai_rate_limited": assessor.is_rate_limited,
             "ai_paused_seconds": round(paused_seconds),
