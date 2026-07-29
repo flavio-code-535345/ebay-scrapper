@@ -154,6 +154,37 @@ def index():
     return render_template("index.html")
 
 
+# German eBay synonym groups for query expansion.
+_QUERY_SYNONYMS: list[tuple[str, ...]] = [
+    ("Sammlung", "Konvolut", "Paket", "Bundle", "Lot", "Set", "Spielepaket"),
+    ("Spielesammlung", "Spiele Sammlung", "Games Sammlung"),
+    ("Spiele", "Games", "Titel", "Videospiele"),
+    ("Xbox 360", "XBox360", "X Box 360", "XBOX360"),
+    ("PS4", "PlayStation 4", "PS 4"),
+    ("PS5", "PlayStation 5", "PS 5"),
+    ("PS3", "PlayStation 3", "PS 3"),
+]
+
+
+def _expand_queries(queries: list[str]) -> list[str]:
+    expanded: list[str] = list(queries)
+    seen: set[str] = set(q.lower() for q in queries)
+    for q in queries:
+        q_lower = q.lower()
+        for group in _QUERY_SYNONYMS:
+            for term in group:
+                if term.lower() in q_lower:
+                    for alt in group:
+                        if alt.lower() != term.lower():
+                            new_q = re.sub(re.escape(term), alt, q, flags=re.IGNORECASE)
+                            nl = new_q.lower()
+                            if nl not in seen:
+                                seen.add(nl)
+                                expanded.append(new_q)
+                    break
+    return expanded[:8]
+
+
 @app.route("/api/search", methods=["POST"])
 def search():
     data = request.get_json(silent=True)
@@ -170,6 +201,9 @@ def search():
         queries = [raw_query]
     else:
         return jsonify({"error": "query or queries is required"}), 400
+
+    # Auto-expand queries with synonym variations for maximum eBay coverage.
+    queries = _expand_queries(queries)
     query = queries[0]  # canonical query ref for logging / response payload
 
     try:
