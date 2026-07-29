@@ -222,6 +222,7 @@ class EbayApiClient:
             "limit": min(max(1, max_results), 200),
             "sort": "newlyListed",
             "filter": api_filter,
+            "category_ids": "1249",  # Video Games & Consoles (eBay Germany)
         }
 
         headers = {
@@ -236,6 +237,8 @@ class EbayApiClient:
             # catalogue and returns localised pricing/shipping.
             "X-EBAY-C-ENDUSERCTX": f"contextualLocation=country%3D{self.delivery_country}",
             "Content-Type": "application/json",
+            # Ask eBay to return compact item summaries (fewer fields, faster).
+            "X-EBAY-C-MARKETPLACE-CAMPAIGN-ID": "eBayDealFinder",
         }
 
         logger.info(
