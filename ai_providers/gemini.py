@@ -62,6 +62,7 @@ class GeminiAssessor(BaseAssessor):
         self._result_cache: dict[str, dict] = {}
         if not self._images_supported:
             logger.info("GeminiAssessor: model %r is text-only — images disabled.", self._model_name)
+        self._init_client()
 
     @BaseAssessor.model_name.setter
     def model_name(self, value: str) -> None:
@@ -72,6 +73,9 @@ class GeminiAssessor(BaseAssessor):
                 self._images_supported = False
         else:
             self._images_supported = True
+        self._init_client()
+
+    def _init_client(self) -> None:
         if self.enabled:
             try:
                 from google import genai
