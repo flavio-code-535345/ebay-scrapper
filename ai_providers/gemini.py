@@ -33,7 +33,7 @@ from ai_providers.base import (
 )
 
 _GEMINI_REQUEST_TIMEOUT = 35
-_MODEL_NAME = "gemini-3.1-flash-lite"
+_MODEL_NAME = "gemini-3.5-flash-lite"
 _MAX_IMAGES = 3
 _IMAGE_FETCH_TIMEOUT = 5
 _BATCH_DELAY_SECONDS = 4.5  # respect 15 RPM free-tier limit
