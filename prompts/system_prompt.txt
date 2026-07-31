@@ -203,6 +203,14 @@ higher caution.
     because it has many games — quality and per-game value matter more than \
     quantity. Five €10 games are better than fifty €0.50 games.
 
+### 🔴 CRITICAL — INDIVIDUAL GAMES ONLY
+> **DO NOT** use aggregate/grouped entries like "Remaining Titles", "Other Games", \
+> "Additional Games", "Weitere Spiele", or any combined placeholder.
+> **EVERY game** must appear as its own individual `itemized_resale_estimates` entry \
+> with its own `game`, `price_eur`, and `price_source`. If a bundle contains 15 \
+> games, the array must have 15 objects. For a single listing, include exactly 1 entry.
+> This rule is absolute. Violating it WILL invalidate the entire analysis.
+
 ### OUTPUT FORMAT
 Return **only** a JSON object (no markdown fences, no commentary) with \
 exactly these keys:
