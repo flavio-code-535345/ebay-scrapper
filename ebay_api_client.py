@@ -154,6 +154,167 @@ class EbayApiClient:
         return bool(self.client_id and self.client_secret)
 
     def search(self, query: str, max_results: int = 50) -> tuple[list[dict], list[str]]:
+        """Search eBay via the Browse API for FIXED_PRICE listings, newest first."""
+        errors: list[str] = []
+
+        if not self.is_configured:
+            errors.append(
+                "eBay API credentials are not configured. "
+                "Set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in your environment."
+            )
+            return [], errors
+
+        _JUNK_KEYWORDS = "-skylanders -lego -amiibo -disney -singstar -guitar -rockband -djhero -justdance"
+        search_query = f"{query} {_JUNK_KEYWORDS}"
+
+        try:
+            token = self._get_access_token()
+        except requests.exceptions.HTTPError as exc:
+            msg = f"eBay API authentication failed: {exc}"
+            logger.error(msg)
+            errors.append(msg)
+            return [], errors
+        except requests.exceptions.Timeout:
+            msg = "eBay OAuth token request timed out"
+            logger.error(msg)
+            errors.append(msg)
+            return [], errors
+        except requests.exceptions.ConnectionError as exc:
+            msg = f"eBay OAuth connection error: {exc}"
+            logger.error(msg)
+            errors.append(msg)
+            return [], errors
+        except Exception as exc:
+            msg = f"eBay API authentication failed: {exc}"
+            logger.error(msg)
+            errors.append(msg)
+            return [], errors
+
+        url = self._base_url + self._SEARCH_PATH
+        api_filter = (
+            f"itemLocationCountry:{self.delivery_country},"
+            f"deliveryCountry:{self.delivery_country},"
+            f"buyingOptions:{{FIXED_PRICE}},"
+            f"conditionIds:{{3000|1500}}"
+        )
+        params = {
+            "q": search_query,
+            "limit": min(max(1, max_results), 200),
+            "sort": "newlyListed",
+            "filter": api_filter,
+            "category_ids": "1249",
+        }
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-EBAY-C-MARKETPLACE-ID": self.marketplace_id,
+            "Accept-Language": self.accept_language,
+            "X-EBAY-C-LOCALE": self.locale,
+            "X-EBAY-C-ENDUSERCTX": f"contextualLocation=country%3D{self.delivery_country}",
+            "Content-Type": "application/json",
+            "X-EBAY-C-MARKETPLACE-CAMPAIGN-ID": "eBayDealFinder",
+        }
+
+        logger.info(
+            "eBay Browse API search: q=%r limit=%d marketplace=%s locale=%s",
+            query,
+            params["limit"],
+            self.marketplace_id,
+            self.locale,
+        )
+        try:
+            response = self.session.get(url, headers=headers, params=params, timeout=15)
+        except requests.exceptions.Timeout:
+            return [], ["eBay Browse API timed out"]
+        except requests.exceptions.ConnectionError as exc:
+            return [], [f"eBay Browse API connection error: {exc}"]
+
+        logger.info("eBay Browse API HTTP %d %s", response.status_code, response.reason)
+        if not response.ok:
+            if response.status_code == 401:
+                self._token = None
+                self._token_expires_at = 0.0
+            try:
+                err_body = response.json()
+                api_msg = "; ".join(e.get("message", "") for e in err_body.get("errors", [])) or response.reason
+            except Exception:
+                api_msg = response.reason
+            msg = f"eBay Browse API error {response.status_code}: {api_msg}"
+            logger.error(msg)
+            errors.append(msg)
+            return [], errors
+
+        try:
+            body = response.json()
+        except Exception as exc:
+            return [], [f"Failed to parse eBay API response: {exc}"]
+
+        raw_items = body.get("itemSummaries", [])
+        total = body.get("total", 0)
+        logger.info("eBay Browse API returned %d/%d items", len(raw_items), total)
+        deals: list[dict] = []
+        for item in raw_items:
+            d = self._normalize_item(item)  # type: ignore[attr-defined]
+            if d:
+                deals.append(d)
+        logger.info("Returning %d normalised deals (%d errors)", len(deals), len(errors))
+        return deals, errors
+
+    def search_auctions(self, query: str, max_results: int = 30) -> tuple[list[dict], list[str]]:
+        """Search eBay for AUCTION listings ending soonest."""
+        errors: list[str] = []
+        if not self.is_configured:
+            return [], ["eBay API credentials not configured"]
+
+        try:
+            token = self._get_access_token()
+        except Exception as exc:
+            return [], [f"eBay auth failed: {exc}"]
+
+        _JUNK_KEYWORDS = "-skylanders -lego -amiibo -disney -singstar -guitar -rockband"
+        search_query = f"{query} {_JUNK_KEYWORDS}"
+
+        api_filter = (
+            f"itemLocationCountry:{self.delivery_country},"
+            f"deliveryCountry:{self.delivery_country},"
+            f"buyingOptions:{{AUCTION}}"
+        )
+        url = self._base_url + self._SEARCH_PATH
+        params = {
+            "q": search_query,
+            "limit": min(max(1, max_results), 200),
+            "sort": "endingSoonest",
+            "filter": api_filter,
+            "category_ids": "1249",
+        }
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-EBAY-C-MARKETPLACE-ID": self.marketplace_id,
+            "Accept-Language": self.accept_language,
+            "X-EBAY-C-LOCALE": self.locale,
+            "X-EBAY-C-ENDUSERCTX": f"contextualLocation=country%3D{self.delivery_country}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            resp = self.session.get(url, headers=headers, params=params, timeout=15)
+        except requests.RequestException as exc:
+            return [], [f"Auction search error: {exc}"]
+
+        if not resp.ok:
+            return [], [f"Auction search HTTP {resp.status_code}"]
+
+        try:
+            body = resp.json()
+        except Exception:
+            return [], ["Auction response not valid JSON"]
+
+        raw_items = body.get("itemSummaries", [])
+        deals = [self._normalize_item(item) for item in raw_items]  # type: ignore[attr-defined]
+        for d in deals:
+            d["source"] = "ebay"
+            d["listing_type"] = "auction"
+        return deals, errors
         """Search eBay via the Browse API.
 
         Returns a ``(deals, errors)`` tuple that matches the contract of

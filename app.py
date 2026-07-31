@@ -238,8 +238,34 @@ def search():
             if price is not None:
                 seen_titles.add(title_price_key)
             d["source"] = "ebay"
+            d["listing_type"] = "fixed"
             all_deals.append(d)
         logger.info("Search for %r via %s returned %d deals", q, active_source, len(deals))
+
+        # ── eBay Auctions ────────────────────────────────────────────────
+        if ebay_api.is_configured:
+            try:
+                auc_deals, auc_errs = ebay_api.search_auctions(q, max_results=min(max_results, 20))
+                all_errors.extend(auc_errs)
+                for d in auc_deals:
+                    url = d.get("url", "")
+                    if "?" in url:
+                        url = url.split("?")[0]
+                    if not url or url in seen_urls:
+                        continue
+                    title = (d.get("title") or "").strip().lower()
+                    price = d.get("price")
+                    title_price_key = f"{title}|{price}"
+                    if title_price_key in seen_titles and price is not None:
+                        continue
+                    seen_urls.add(url)
+                    if price is not None:
+                        seen_titles.add(title_price_key)
+                    d["listing_type"] = "auction"
+                    all_deals.append(d)
+                logger.info("Auction search for %r returned %d deals", q, len(auc_deals))
+            except Exception as exc:
+                logger.warning("Auction search failed for %r: %s", q, exc)
         # ── Kleinanzeigen ───────────────────────────────────────────────
         if kleinanzeigen:
             try:
