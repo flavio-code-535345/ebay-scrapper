@@ -8,7 +8,9 @@ and returns data in the same schema as the legacy EbayScraper.
 import base64
 import logging
 import os
+import re
 import time
+from contextlib import suppress
 
 import requests
 
@@ -673,6 +675,25 @@ class EbayApiClient:
             price = float(price_obj.get("value", 0))
         except (TypeError, ValueError):
             price = 0.0
+        # Auctions may have currentBidPrice instead of (or overriding) price.value
+        bid_price = item.get("currentBidPrice")
+        if bid_price:
+            with suppress(TypeError, ValueError):
+                price = float(bid_price.get("value", 0))
+        # If still 0 and it's an auction, show starting price from item.estimatedAvailabilities
+        if price == 0.0:
+            buying_opts = item.get("buyingOptions") or []
+            if "AUCTION" in buying_opts:
+                # Try to get starting price from marketingPrice or other fields
+                mp = item.get("marketingPrice") or {}
+                with suppress(TypeError, ValueError, AttributeError):
+                    price = float(mp.get("originalPrice", {}).get("value", 0))
+            if price == 0.0:
+                price_str = item.get("priceDisplayCondition") or ""
+                m = re.search(r"[\d.,]+", str(price_str))
+                if m:
+                    with suppress(ValueError):
+                        price = float(m.group(0).replace(",", "."))
 
         # ── Condition ──────────────────────────────────────────────────────
         condition_id = str(item.get("conditionId", ""))
