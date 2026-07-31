@@ -673,6 +673,31 @@ class EbayApiClient:
             price = float(price_obj.get("value", 0))
         except (TypeError, ValueError):
             price = 0.0
+        # Auctions may have currentBidPrice instead of (or overriding) price.value
+        bid_price = item.get("currentBidPrice")
+        if bid_price:
+            try:
+                price = float(bid_price.get("value", 0))
+            except (TypeError, ValueError):
+                pass
+        # If still 0 and it's an auction, show starting price from item.estimatedAvailabilities
+        if price == 0.0:
+            buying_opts = item.get("buyingOptions") or []
+            if "AUCTION" in buying_opts:
+                # Try to get starting price from marketingPrice or other fields
+                mp = item.get("marketingPrice") or {}
+                try:
+                    price = float(mp.get("originalPrice", {}).get("value", 0))
+                except (TypeError, ValueError, AttributeError):
+                    pass
+            if price == 0.0:
+                price_str = item.get("priceDisplayCondition") or ""
+                m = re.search(r"[\d.,]+", str(price_str))
+                if m:
+                    try:
+                        price = float(m.group(0).replace(",", "."))
+                    except ValueError:
+                        pass
 
         # ── Condition ──────────────────────────────────────────────────────
         condition_id = str(item.get("conditionId", ""))
