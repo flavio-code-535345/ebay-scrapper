@@ -58,6 +58,7 @@ function detectGameCount(title) {
 function buildSourceBadge(deal) {
     const src = deal.source || '';
     if (src === 'kleinanzeigen') return '<span class="source-badge source-badge--kdx" title="Kleinanzeigen.de">KA</span>';
+    if (deal.listing_type === 'auction') return '<span class="source-badge source-badge--auction" title="Auction">⚡AUK</span>';
     return '';
 }
 

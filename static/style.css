@@ -228,6 +228,12 @@ a:hover { text-decoration: underline; }
     border: 1px solid rgba(255, 165, 0, 0.3);
 }
 
+.source-badge--auction {
+    background: rgba(255, 215, 0, 0.15);
+    color: #ffd700;
+    border: 1px solid rgba(255, 215, 0, 0.3);
+}
+
 /* ── Settings details/summary ───────────────────────────────────────────── */
 .settings-details {
     margin-top: 1rem;
