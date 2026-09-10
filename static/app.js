@@ -1,4 +1,4 @@
-// eBay Deal Finder – Frontend Application (Dark JobOps Redesign)
+// eBay Deal Finder v4 – Frontend Application (Premium Redesign)
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -418,13 +418,13 @@ function _applySearchResults(data) {
     const aiWarning = document.getElementById('aiWarningContainer');
     if (aiWarning) {
         if (!data.ai_enabled) {
-            aiWarning.textContent = '⭕ AI evaluation is OFF — showing rules-based scores only. Toggle AI ON to enable Gemini scoring.';
+            aiWarning.textContent = '⭕ AI evaluation is OFF — showing rules-based scores only. Toggle AI ON to enable V4 AI scoring.';
             aiWarning.className   = 'alert alert-warning';
             aiWarning.classList.remove('d-none');
         } else if (data.ai_rate_limited) {
             const secs = data.ai_paused_seconds || 0;
             aiWarning.textContent =
-                `⚠️ Gemini AI is temporarily paused due to quota exhaustion` +
+                `⚠️ AI engine is temporarily paused due to quota exhaustion` +
                 (secs > 0 ? ` (resumes in ~${secs}s)` : '') +
                 `. Showing deals without full AI assessment.`;
             aiWarning.className = 'alert alert-warning';
@@ -433,6 +433,9 @@ function _applySearchResults(data) {
             aiWarning.classList.add('d-none');
         }
     }
+
+    // Premium v4 insights strip
+    renderInsights(data.insights, data.ai_enabled);
 
     // Reset rating filter to "Must Have + Good" after each new search
     _ratingFilter = 'must_have_good';
@@ -446,6 +449,36 @@ function _applySearchResults(data) {
 
     _lastDeals = data.deals || [];
     _renderDeals(_lastDeals);
+}
+
+// ---------------------------------------------------------------------------
+// Premium v4 insights strip
+// ---------------------------------------------------------------------------
+
+function renderInsights(insights, aiEnabled) {
+    const bar = document.getElementById('insightsBar');
+    if (!bar || !insights) {
+        if (bar) bar.classList.add('d-none');
+        return;
+    }
+    bar.classList.remove('d-none');
+
+    const setVal = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value;
+    };
+    setVal('insightTotal',    insights.total ?? 0);
+    setVal('insightAssessed', insights.ai_assessed ?? 0);
+    setVal('insightMustHave', insights.must_have ?? 0);
+    setVal('insightGood',     insights.good ?? 0);
+    const profit = Number(insights.est_profit || 0);
+    setVal('insightProfit', `${profit >= 0 ? '+' : '−'}€${Math.abs(profit).toFixed(0)}`);
+    setVal('insightEngine', aiEnabled ? 'AI v4' : 'Rules only');
+
+    // Re-trigger entrance animation
+    bar.style.animation = 'none';
+    void bar.offsetWidth;
+    bar.style.animation = '';
 }
 
 // ---------------------------------------------------------------------------
@@ -579,6 +612,10 @@ function _renderDeals(deals, mode) {
     } else {
         document.getElementById('emptyState').classList.add('d-none');
         dealsGrid.innerHTML = filtered.map(deal => createDealCard(deal, renderMode)).join('');
+        // Premium staggered reveal
+        dealsGrid.querySelectorAll('.deal-card').forEach((card, i) => {
+            card.style.animationDelay = `${Math.min(i, 12) * 45}ms`;
+        });
     }
 
     // Update badge
@@ -1254,6 +1291,13 @@ async function loadModelSettings() {
             status.textContent = `Active model: ${data.gemini_model}`;
             status.className   = 'model-status model-status--active';
         }
+
+        // Premium v4 hero chips
+        const versionChip = document.getElementById('heroVersionChip');
+        if (versionChip && data.app_version) versionChip.textContent = `v${data.app_version}`;
+        const modelChip = document.getElementById('heroModelChip');
+        if (modelChip && data.gemini_model) modelChip.textContent = data.gemini_model;
+
         if (typeof data.ai_enabled === 'boolean') _setAiToggleState(data.ai_enabled);
         _setDataSourceState(data.data_source, data.active_data_source, data.ebay_api_configured);
     } catch (err) {
@@ -1263,12 +1307,20 @@ async function loadModelSettings() {
 
 function _setAiToggleState(enabled) {
     const btn = document.getElementById('aiToggleBtn');
-    if (!btn) return;
-    btn.setAttribute('aria-pressed', String(enabled));
-    const label = btn.querySelector('.ai-toggle-label');
-    const icon  = btn.querySelector('.ai-toggle-icon');
-    if (label) label.textContent = enabled ? 'AI: ON' : 'AI: OFF';
-    if (icon)  icon.textContent  = enabled ? '✨' : '⭕';
+    if (btn) {
+        btn.setAttribute('aria-pressed', String(enabled));
+        const label = btn.querySelector('.ai-toggle-label');
+        const icon  = btn.querySelector('.ai-toggle-icon');
+        if (label) label.textContent = enabled ? 'AI: ON' : 'AI: OFF';
+        if (icon)  icon.textContent  = enabled ? '✨' : '⭕';
+    }
+    const chip = document.getElementById('aiEngineChip');
+    if (chip) {
+        chip.classList.toggle('is-off', !enabled);
+        chip.title = enabled ? 'AI assessment engine is active (V4)' : 'AI assessment engine is off';
+        const label = chip.querySelector('.hero-chip-label');
+        if (label) label.textContent = enabled ? 'AI Engine v4 · ON' : 'AI Engine · OFF';
+    }
 }
 
 async function toggleAiEnabled() {

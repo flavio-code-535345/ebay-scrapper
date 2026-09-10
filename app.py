@@ -50,6 +50,8 @@ else:
     )
 logger = logging.getLogger(__name__)
 
+APP_VERSION = "4.0.0"
+
 app = Flask(__name__)
 
 scraper = EbayScraper()
@@ -453,12 +455,28 @@ def search():
     for deal in assessed:
         deal["is_saved"] = deal.get("url") in saved_urls
 
+    # ── Premium v4 search insights ────────────────────────────────────────
+    # At-a-glance reselling metrics rendered in the UI's insights strip.
+    _must_have = {"must have", "must buy"}
+    insights = {
+        "total": len(assessed),
+        "ai_assessed": sum(1 for d in assessed if d.get("ai_assessed")),
+        "must_have": sum(1 for d in assessed if (d.get("ai_deal_rating") or "").lower() in _must_have),
+        "good": sum(1 for d in assessed if (d.get("ai_deal_rating") or "").lower() == "good"),
+        "est_profit": round(
+            sum(float(d.get("ai_estimated_gross_profit") or 0) for d in assessed if d.get("ai_assessed")),
+            2,
+        ),
+    }
+
     return jsonify(
         {
             "query": query,
+            "app_version": APP_VERSION,
             "deal_count": len(assessed),
             "deals": assessed,
             "errors": search_errors,
+            "insights": insights,
             "ebay_count": ebay_n,
             "kleinanzeigen_count": kdx_n,
             "ai_enabled": assessor.enabled and _user_enabled,
@@ -505,6 +523,7 @@ def health():
     return jsonify(
         {
             "status": "healthy",
+            "app_version": APP_VERSION,
             "ai_enabled": assessor.enabled and _db_ai_user_enabled(),
             "ai_rate_limited": assessor.is_rate_limited,
             "ai_paused_seconds": round(paused_seconds),
@@ -529,6 +548,7 @@ def get_settings():
     return jsonify(
         {
             "gemini_model": assessor.model_name,
+            "app_version": APP_VERSION,
             "ai_enabled": _db_ai_user_enabled(),
             "data_source": data_source_setting,
             "active_data_source": active_source,
@@ -558,11 +578,11 @@ def update_settings():
     if "gemini_model" in data:
         model = str(data["gemini_model"]).strip()
         if not model:
-            errors["gemini_model"] = "gemini_model must not be empty (e.g., gemini-2.0-flash-lite)"
+            errors["gemini_model"] = "gemini_model must not be empty (e.g., gemini-3.5-flash-lite)"
         elif not _MODEL_NAME_RE.match(model):
             errors["gemini_model"] = (
                 "gemini_model contains invalid characters; use only letters, "
-                "digits, hyphens, underscores, and dots (e.g., gemini-2.0-flash-lite)"
+                "digits, hyphens, underscores, and dots (e.g., gemini-3.5-flash-lite)"
             )
         else:
             try:
@@ -601,6 +621,7 @@ def update_settings():
         {
             "updated": updated,
             "gemini_model": assessor.model_name,
+            "app_version": APP_VERSION,
             "ai_enabled": assessor.user_enabled,
             "data_source": data_source_setting,
             "active_data_source": active_source,

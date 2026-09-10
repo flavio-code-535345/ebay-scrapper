@@ -1,14 +1,15 @@
-# eBay Deal Finder
+# eBay Deal Finder v4
 
-Find resale-worthy secondhand gaming deals on **eBay Germany** (`EBAY_DE`). Dual data sources (official Browse API + HTML scraper fallback), Gemini multimodal scoring, deterministic anti-scam/junk rules, SQLite persistence, and a dark-themed web UI.
+Find resale-worthy secondhand gaming deals on **eBay Germany** (`EBAY_DE`). Dual data sources (official Browse API + HTML scraper fallback), V4 AI scoring, deterministic anti-scam/junk rules, SQLite persistence, and a premium dark-themed web UI.
 
 ## Features
 
-- Web UI for search, filters, save/skip, history, and CSV export
+- Premium v4 web UI — search insights strip, staggered deal reveal, glass hero
 - Official **eBay Browse API** with automatic HTML scraper fallback
-- **Gemini AI** deal ratings: Must Have / Good / Okay / Avoid / Garbage
+- **V4 AI deal ratings**: Must Have / Good / Okay / Avoid / Garbage
 - Deterministic overrides for scams, sports/Kinect lots, broken/untested junk
 - Per-game resale estimates from live eBay market data
+- At-a-glance search insights: AI-assessed count, Must Haves, est. gross profit
 - Runtime settings (AI on/off, model, data source) persisted in SQLite
 - Docker multi-arch images (`linux/amd64`, `linux/arm64`) for Portainer
 

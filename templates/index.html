@@ -3,14 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>eBay Deal Finder</title>
-    <link rel="stylesheet" href="/static/style.css?v=6">
+    <title>eBay Deal Finder v4</title>
+    <link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
     <!-- Hero / Search bar -->
     <header class="hero">
+        <div class="hero-glow" aria-hidden="true"></div>
         <div class="hero-inner">
-            <h1>🛍️ Deal Finder</h1>
+            <div class="hero-brand">
+                <h1><span class="brand-mark" aria-hidden="true">🛍️</span><span class="brand-name">Deal Finder</span><span class="version-badge">V4</span></h1>
+                <p class="hero-tagline">Premium reselling intelligence for eBay Germany — AI-scored, profit-first</p>
+                <div class="hero-status">
+                    <span class="hero-chip" id="aiEngineChip" title="AI assessment engine">
+                        <span class="hero-chip-dot"></span><span class="hero-chip-label">AI Engine v4</span>
+                    </span>
+                    <span class="hero-chip" id="heroModelChip" title="Active AI model">—</span>
+                    <span class="hero-chip" id="heroVersionChip" title="App version">v4.0.0</span>
+                </div>
+            </div>
             <div class="search-container">
                 <form id="searchForm">
                     <input type="text" id="searchQuery" placeholder="Search for deals… e.g. Xbox 360 Spiele Sammlung" autocomplete="off" required />
@@ -49,7 +60,7 @@
                     </div>
                     <div class="settings-row" id="modelRow">
                         <label for="geminiModelInput" class="settings-label">🤖 Model</label>
-                        <input type="text" id="geminiModelInput" class="settings-input" placeholder="e.g. gemini-2.0-flash-lite" autocomplete="off" spellcheck="false" />
+                        <input type="text" id="geminiModelInput" class="settings-input" placeholder="e.g. gemini-3.5-flash-lite" autocomplete="off" spellcheck="false" />
                         <button id="saveModelBtn" class="btn-save-model">Save</button>
                     </div>
                     <div class="settings-row">
@@ -104,6 +115,34 @@
 
         <!-- AI warning banner -->
         <div id="aiWarningContainer" class="alert alert-warning d-none"></div>
+
+        <!-- Premium v4 search insights strip (shown after each search) -->
+        <div id="insightsBar" class="insights-bar d-none" aria-label="Search insights">
+            <div class="insight-stat">
+                <span class="insight-value" id="insightTotal">0</span>
+                <span class="insight-label">Deals found</span>
+            </div>
+            <div class="insight-stat">
+                <span class="insight-value insight-value--accent" id="insightAssessed">0</span>
+                <span class="insight-label">AI assessed</span>
+            </div>
+            <div class="insight-stat">
+                <span class="insight-value insight-value--gold" id="insightMustHave">0</span>
+                <span class="insight-label">Must Have</span>
+            </div>
+            <div class="insight-stat">
+                <span class="insight-value insight-value--good" id="insightGood">0</span>
+                <span class="insight-label">Good</span>
+            </div>
+            <div class="insight-stat insight-stat--profit">
+                <span class="insight-value insight-value--profit" id="insightProfit">€0</span>
+                <span class="insight-label">Est. gross profit</span>
+            </div>
+            <div class="insight-stat insight-stat--engine">
+                <span class="insight-value insight-value--engine" id="insightEngine">AI v4</span>
+                <span class="insight-label">Engine</span>
+            </div>
+        </div>
 
         <!-- Filters bar (shown in ready/saved/skipped views) -->
         <div id="filtersBar" class="filters-bar">
@@ -180,7 +219,7 @@
                     <span class="ai-badge badge-garbage">Garbage</span>
                     <span class="rating-legend-desc">Worthless — broken, untested, empty cases, demos, or shovelware.</span>
                 </div>
-                <p class="rating-legend-note">Ratings combine Gemini AI analysis with deterministic anti-scam / junk rules and live eBay market data.</p>
+                <p class="rating-legend-note">Ratings combine V4 AI analysis with deterministic anti-scam / junk rules and live eBay market data.</p>
             </div>
         </details>
 
@@ -203,6 +242,11 @@
 
     </main>
 
-    <script src="/static/app.js?v=6"></script>
+    <footer class="app-footer">
+        <span>eBay Deal Finder <span class="version-badge version-badge--sm">V4</span></span>
+        <span class="app-footer-muted">AI-scored reselling intelligence · Germany-only marketplace</span>
+    </footer>
+
+    <script src="/static/app.js?v=7"></script>
 </body>
 </html>
