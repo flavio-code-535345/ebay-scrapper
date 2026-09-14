@@ -94,9 +94,64 @@ class TestSearch:
         mock_resp.json.return_value = {}
         with patch.object(client, "_get_access_token", return_value="tok"):
             with patch.object(client.session, "get", return_value=mock_resp):
-                client.search("query")
+                deals, errors = client.search("query")
         assert client._token is None
         assert client._token_expires_at == 0.0
+        assert deals == []
+        assert any("EBAY_CLIENT_ID" in e for e in errors)
+
+    def test_429_returns_rate_limit_message(self, client):
+        """429 response includes a specific rate-limit explanation."""
+        mock_resp = MagicMock()
+        mock_resp.ok = False
+        mock_resp.status_code = 429
+        mock_resp.reason = "Too Many Requests"
+        mock_resp.json.return_value = {}
+        with patch.object(client, "_get_access_token", return_value="tok"):
+            with patch.object(client.session, "get", return_value=mock_resp):
+                deals, errors = client.search("query")
+        assert deals == []
+        assert any("rate limit" in e.lower() for e in errors)
+
+    def test_zero_results_gives_helpful_diagnostic(self, client):
+        """An empty itemSummaries list returns a clear explanation instead of
+        silently succeeding with nothing."""
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"total": 0, "itemSummaries": []}
+        with patch.object(client, "_get_access_token", return_value="tok"):
+            with patch.object(client.session, "get", return_value=mock_resp):
+                deals, errors = client.search("some rare query")
+        assert deals == []
+        assert any("0 results" in e for e in errors)
+
+    def test_one_bad_item_does_not_abort_the_whole_search(self, client):
+        """A single item that fails to normalize is skipped, not fatal —
+        the other, valid items in the same response still come back."""
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "total": 2,
+            "itemSummaries": [
+                {"itemId": "bad"},  # will raise inside _normalize_item
+                {
+                    "itemId": "123",
+                    "title": "Good Item",
+                    "price": {"value": "10.00", "currency": "EUR"},
+                    "itemWebUrl": "http://ebay.de/itm/123",
+                },
+            ],
+        }
+        with (
+            patch.object(client, "_get_access_token", return_value="tok"),
+            patch.object(client.session, "get", return_value=mock_resp),
+            patch.object(client, "_normalize_item", side_effect=[Exception("boom"), {"title": "Good Item"}]),
+        ):
+            deals, errors = client.search("query")
+        assert deals == [{"title": "Good Item"}]
+        assert any("could not be parsed" in e for e in errors)
 
     def test_parses_item_summaries(self, client):
         """Successful response returns normalised deals."""
