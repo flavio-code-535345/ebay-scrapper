@@ -91,10 +91,15 @@ is the sole entry point; it wires in the concrete provider (currently only `Gemi
   `EbayApiClient.get_median_sold_price` per game (parallel prefetch with a time budget, then cached for
   5 minutes) so Gemini gets real per-game market prices instead of guessing.
 - `assess_deals_batch(deals, deadline=...)` treats `deadline` as an absolute `time.monotonic()` cutoff
-  (checked before each batch and before each retry/timeout) rather than measuring its own elapsed time
-  from an independent start — this way whatever's left of the caller's overall time budget, not a fixed
-  allowance stacked on top of it, bounds how much assessment happens. Omitting `deadline` falls back to
-  the standalone `_ASSESS_TOTAL_BUDGET_S` default for callers outside a request/response cycle.
+  (checked before each batch is submitted and before each retry/timeout) rather than measuring its own
+  elapsed time from an independent start — this way whatever's left of the caller's overall time budget,
+  not a fixed allowance stacked on top of it, bounds how much assessment happens. Omitting `deadline`
+  falls back to the standalone `_ASSESS_TOTAL_BUDGET_S` default for callers outside a request/response
+  cycle. Batches themselves run **concurrently** (bounded by `_BATCH_MAX_CONCURRENCY`, submissions still
+  paced `_BATCH_DELAY_SECONDS` apart to respect the free-tier RPM limit) rather than one at a time, so
+  total wall time is roughly "submission pacing + one call's duration" instead of the sum of every call's
+  duration plus every stagger — the difference between all 30 deals getting an AI rating within a search's
+  overall deadline versus only the first batch or two.
 - Two prompt templates in `prompts/`: `system_prompt.txt` (single-deal) and `batch_system_prompt.txt`
   (batch — explicitly instructed to return **one entry per deal, no aggregation**, since a past bug had
   the model collapsing multiple listings into one summary).

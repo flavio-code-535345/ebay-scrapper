@@ -1241,6 +1241,35 @@ class TestAssessDealsBatchDeadline:
         for call in spy.call_args_list:
             assert call.args[1] == deadline
 
+    def test_batches_run_concurrently_not_sequentially(self, monkeypatch):
+        """Empirical proof batches overlap in flight instead of running one
+        at a time: 6 batches (30 deals — the app's _MAX_DISPLAY cap) each
+        taking ~0.3s must finish well under the ~1.9s a fully sequential
+        design (6 calls + 5 staggers) would take. This is what lets a full
+        set of search results actually get AI ratings within a search's
+        overall deadline instead of only the first batch or two."""
+        import ai_providers.gemini as gemini_module
+
+        monkeypatch.setattr(gemini_module, "_BATCH_DELAY_SECONDS", 0.02)
+        a = self._make_enabled_assessor()
+
+        def slow_generate_content(*, model, contents, config):
+            time.sleep(0.3)
+            resp = mock.MagicMock()
+            resp.text = json.dumps([{"deal_rating": "Okay"}] * _BATCH_SIZE)
+            return resp
+
+        a._client.models.generate_content.side_effect = slow_generate_content
+        deals = [{"title": f"Game {i}", "url": f"http://x/{i}"} for i in range(30)]  # 6 batches
+
+        t0 = time.monotonic()
+        results = a.assess_deals_batch(deals, deadline=time.monotonic() + 30)
+        elapsed = time.monotonic() - t0
+
+        assert len(results) == 30
+        assert all(r is not None for r in results)
+        assert elapsed < 1.2, f"batches do not appear to run concurrently (took {elapsed:.2f}s)"
+
 
 # ---------------------------------------------------------------------------
 # Top-3 value games logic (frontend helper parity test)
