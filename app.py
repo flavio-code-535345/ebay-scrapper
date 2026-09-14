@@ -198,6 +198,22 @@ def _expand_queries(queries: list[str]) -> list[str]:
 # contributes an error string instead of derailing the others.
 _SEARCH_MAX_WORKERS = 8
 
+# Total wall-clock budget for the WHOLE /api/search request (search phase +
+# Gemini AI assessment), measured from the moment the request starts. Many
+# reverse proxies / edge networks kill a still-in-progress request after a
+# fixed idle timeout regardless of what gunicorn's own (much longer) worker
+# timeout allows — Cloudflare's proxied HTTP default is 100s, for example,
+# and returns its own HTML error page (which the frontend then can't parse
+# as JSON) rather than anything from this app. 75s leaves real margin under
+# that for response serialization/transmission. `assess_deals_batch` is
+# handed the remaining time as a deadline, so a slow search phase leaves
+# correspondingly less time for AI scoring instead of the two stacking on
+# top of each other — degrading gracefully (fewer/no AI ratings, but a real
+# response) instead of the proxy cutting the connection with nothing.
+# Override via SEARCH_DEADLINE_SECONDS for deployments without such a
+# proxy in front (or with a longer one) that want the fuller AI budget.
+_SEARCH_DEADLINE_S = int(os.environ.get("SEARCH_DEADLINE_SECONDS", "75"))
+
 
 def _merge_deal(
     all_deals: list[dict],
@@ -307,6 +323,7 @@ def _run_search_jobs(jobs):
 
 @app.route("/api/search", methods=["POST"])
 def search():
+    _request_start = time.monotonic()
     data = request.get_json(silent=True)
     if data is None:
         return jsonify({"error": "Request body must be valid JSON with Content-Type: application/json"}), 400
@@ -432,7 +449,10 @@ def search():
     # is not shared across processes.
     _user_enabled = _db_ai_user_enabled()
     ai_active = assessor.enabled and _user_enabled
-    ai_assessments = assessor.assess_deals_batch(deals_filtered) if (deals_filtered and ai_active) else []
+    _deadline = _request_start + _SEARCH_DEADLINE_S
+    ai_assessments = (
+        assessor.assess_deals_batch(deals_filtered, deadline=_deadline) if (deals_filtered and ai_active) else []
+    )
 
     timed_out = 0
     if assessor.enabled and ai_assessments:

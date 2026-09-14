@@ -981,7 +981,18 @@ class BaseAssessor:
     def assess_deal(self, deal: dict) -> dict | None:
         raise NotImplementedError
 
-    def assess_deals_batch(self, deals: list[dict]) -> list[dict | None]:
+    def assess_deals_batch(self, deals: list[dict], deadline: float | None = None) -> list[dict | None]:
+        """Assess *deals* in batches.
+
+        ``deadline`` is an absolute ``time.monotonic()`` timestamp by which
+        assessment must stop (whatever hasn't been assessed yet comes back
+        as ``None``). Callers on a request/response cycle with an external
+        time budget — e.g. a reverse proxy that will kill the connection
+        after N seconds regardless of what the app is still doing — should
+        pass one; ``None`` falls back to a provider-chosen standalone
+        default (``_ASSESS_TOTAL_BUDGET_S`` in this module) for callers
+        with no such constraint.
+        """
         raise NotImplementedError
 
     # ── eBay price cache ──────────────────────────────────────────────────

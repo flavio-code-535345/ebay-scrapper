@@ -7,6 +7,7 @@ the sports/Kinect deal detector that filters out low-resale-value listings.
 """
 
 import json
+import time
 import unittest.mock as mock
 
 import pytest
@@ -1171,6 +1172,74 @@ class TestBatchTimeoutConstants:
         assert _EBAY_PREFETCH_BUDGET_S + _ASSESS_TOTAL_BUDGET_S < self._GUNICORN_TIMEOUT, (
             "Combined eBay prefetch + Gemini budget exceeds Gunicorn worker timeout"
         )
+
+
+# ---------------------------------------------------------------------------
+# assess_deals_batch deadline handling — regression tests for the Cloudflare
+# 524 fix: /api/search now hands assess_deals_batch an absolute deadline
+# (request-start + a total request budget) instead of the provider always
+# getting its own independent ~145s allowance stacked on top of however
+# long the search phase already took.
+# ---------------------------------------------------------------------------
+
+
+class TestAssessDealsBatchDeadline:
+    def _make_enabled_assessor(self):
+        from google.genai import types
+
+        a = GeminiAssessor()
+        a.enabled = True
+        a.user_enabled = True
+        a._ebay_client = None  # skip the price-prefetch step entirely
+        a._client = mock.MagicMock()
+        a._types = types  # real (network-free) request-builder classes
+        return a
+
+    def test_expired_deadline_skips_all_batches_without_calling_api(self):
+        """An already-passed deadline must short-circuit every batch — no
+        Gemini call is made, every deal comes back as None."""
+        a = self._make_enabled_assessor()
+        deals = [{"title": f"Game {i}", "url": f"http://x/{i}"} for i in range(7)]  # 2 batches
+        results = a.assess_deals_batch(deals, deadline=time.monotonic() - 1)
+        assert results == [None] * len(deals)
+        a._client.models.generate_content.assert_not_called()
+
+    def test_no_deadline_falls_back_to_default_budget(self):
+        """Omitting deadline (e.g. a direct/standalone caller) must not
+        crash — it falls back to _ASSESS_TOTAL_BUDGET_S from 'now'."""
+        a = self._make_enabled_assessor()
+        a._client.models.generate_content.side_effect = RuntimeError("boom")
+        deals = [{"title": "Game", "url": "http://x/1"}]
+        results = a.assess_deals_batch(deals)
+        assert results == [None]
+
+    def test_deadline_survives_text_only_model_fallback_recursion(self):
+        """_assess_batch_with_retry re-invokes itself when it discovers the
+        model is text-only mid-call; the deadline must be threaded through
+        that recursive call too, not silently dropped (it originally was —
+        the recursive call used to read ``self._assess_batch_with_retry(deals)``
+        with no deadline argument at all)."""
+        a = self._make_enabled_assessor()
+        a._images_supported = True
+        # First call: the SDK rejects the image part. Second call (after
+        # images get disabled) fails a different, unrelated way so we can
+        # tell the recursive call actually happened and isn't just a repeat.
+        a._client.models.generate_content.side_effect = [
+            Exception("does not support image input"),
+            RuntimeError("second call"),
+        ]
+        deadline = time.monotonic() + 30  # plenty of time for both attempts
+        deals = [{"title": "Game", "url": "http://x/1"}]
+        with mock.patch.object(a, "_assess_batch_with_retry", wraps=a._assess_batch_with_retry) as spy:
+            results = a._assess_batch_with_retry(deals, deadline)
+        assert results == [None]
+        assert a._images_supported is False
+        # Called twice: the original attempt, then the images-disabled retry.
+        assert spy.call_count == 2
+        # Both calls — including the recursive one — must carry the same
+        # deadline rather than it being silently dropped.
+        for call in spy.call_args_list:
+            assert call.args[1] == deadline
 
 
 # ---------------------------------------------------------------------------

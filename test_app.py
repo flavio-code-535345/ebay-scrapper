@@ -1,6 +1,7 @@
 """Tests for app.py — Flask API routes."""
 
 import os
+import time
 from unittest.mock import patch
 
 import pytest
@@ -176,6 +177,61 @@ class TestSearch:
         data = resp.get_json()
         assert data["deal_count"] == 1
         assert data["deals"][0]["title"] == "Zelda Switch"
+
+
+# ── Search deadline ─────────────────────────────────────────────────────────
+# Regression tests for the Cloudflare 524 fix: a slow search phase plus
+# Gemini's own (much longer, independent) assessment budget could together
+# exceed a reverse proxy's timeout, which then returns its own HTML error
+# page instead of anything from this app. /api/search now hands
+# assess_deals_batch a deadline derived from the request's own start time.
+
+
+class TestSearchDeadline:
+    def test_search_passes_deadline_to_assess_deals_batch(self, client):
+        app.assessor.enabled = True
+        app.assessor.user_enabled = True
+        app.kleinanzeigen = None
+        fake_deals = [
+            {
+                "title": "Test Deal",
+                "price": 10.0,
+                "condition": "Used",
+                "seller_rating": 95.0,
+                "url": "http://ebay.de/itm/1",
+                "shipping": "Free",
+                "is_trending": False,
+                "item_location": "Berlin, DE",
+                "image_urls": [],
+                "image_issues": [],
+                "listing_date": None,
+            }
+        ]
+        before = time.monotonic()
+        with (
+            patch.object(app.scraper, "search", return_value=(fake_deals, [])),
+            patch.object(app.assessor, "assess_deals_batch", return_value=[None]) as mock_assess,
+        ):
+            resp = client.post("/api/search", json={"query": "test"})
+        after = time.monotonic()
+        assert resp.status_code == 200
+        assert mock_assess.call_count == 1
+        _, kwargs = mock_assess.call_args
+        assert "deadline" in kwargs
+        # Must be "request start" + the configured budget — not the
+        # provider's own, much larger, independent default budget.
+        assert before + app._SEARCH_DEADLINE_S <= kwargs["deadline"] <= after + app._SEARCH_DEADLINE_S
+
+    def test_search_deadline_leaves_headroom_under_common_proxy_timeouts(self):
+        """The default end-to-end deadline must stay comfortably under
+        common reverse-proxy timeouts (Cloudflare's proxied-HTTP default is
+        100s) so /api/search returns its own response instead of a proxy
+        killing the connection and returning an HTML error page that the
+        frontend can't parse as JSON."""
+        assert app._SEARCH_DEADLINE_S <= 85, (
+            f"_SEARCH_DEADLINE_S={app._SEARCH_DEADLINE_S} leaves too little margin "
+            "under a 100s proxy timeout once response serialization/transmission is included"
+        )
 
 
 # ── Settings ────────────────────────────────────────────────────────────────

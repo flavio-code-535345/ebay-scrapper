@@ -45,14 +45,23 @@ the Docker multi-arch build/push step only runs on non-PR events (i.e. after mer
    (`_QUERY_SYNONYMS` — e.g. "Sammlung"/"Konvolut"/"Paket"/"Bundle", console name variants) up to 8 total.
 2. Pick a search engine via `_resolve_engine(data_source_setting)`: `"api"` → `EbayApiClient`,
    `"scraper"` → `EbayScraper`, `"auto"` → API if credentials are configured, else scraper.
-3. Run every expanded query against: the chosen eBay engine, `EbayApiClient.search_auctions` (if API
-   configured), and `KleinanzeigenScraper` (if importable) — merging and de-duplicating by normalized URL
-   and by `title|price`.
+3. Run every (query × source) combination — the chosen eBay engine, `EbayApiClient.search_auctions` (if
+   API configured), and `KleinanzeigenScraper` (if importable) — **concurrently** via a thread pool
+   (`_build_search_jobs`/`_run_search_jobs`), then merge results in a fixed, deterministic order
+   (query-major, eBay → auctions → Kleinanzeigen), de-duplicating by normalized URL and by `title|price`
+   (`_merge_deal`/`_merge_deals`). `EbayScraper` and `KleinanzeigenScraper` each gate their own outgoing
+   requests behind an instance-level lock (`_rate_limit`) so concurrent callers still hit those sites with
+   human-ish spacing instead of a simultaneous burst — eBay's anti-bot heuristic reacts to bursts, not
+   steady volume; verified by hand (a naive unthrottled parallel version got most requests HTTP 403'd).
 4. Apply post-filters in order: previously-skipped URLs (from SQLite) → Germany-only location filter
    (`_is_german_location`) → sports/Kinect filter (drops FIFA/Kinect/etc.-only listings unless the title
    also has ≥3 non-sports tokens, letting Gemini judge mixed bundles) → cap to 30 deals.
 5. Send the surviving deals to Gemini in **one batched request** (`assessor.assess_deals_batch`) rather
-   than per-deal calls, to conserve API quota.
+   than per-deal calls, to conserve API quota — passed a `deadline` (request-start + `_SEARCH_DEADLINE_S`,
+   env `SEARCH_DEADLINE_SECONDS`, default 75s) so a slow search phase leaves correspondingly less time for
+   AI scoring instead of the two stacking into a request long enough for a reverse proxy in front (e.g. a
+   Cloudflare Tunnel, whose proxied-HTTP default timeout is 100s) to kill the connection with its own HTML
+   error page — degrading gracefully (fewer/no AI ratings) rather than losing the response entirely.
 6. Sort: "Must Have"/"Must Buy" first, then everything else, each group newest → oldest by `listing_date`.
 7. Persist the search + results via `database.save_search`.
 
@@ -81,6 +90,11 @@ is the sole entry point; it wires in the concrete provider (currently only `Gemi
   individual game titles extracted (`_extract_potential_game_titles`) and priced separately by querying
   `EbayApiClient.get_median_sold_price` per game (parallel prefetch with a time budget, then cached for
   5 minutes) so Gemini gets real per-game market prices instead of guessing.
+- `assess_deals_batch(deals, deadline=...)` treats `deadline` as an absolute `time.monotonic()` cutoff
+  (checked before each batch and before each retry/timeout) rather than measuring its own elapsed time
+  from an independent start — this way whatever's left of the caller's overall time budget, not a fixed
+  allowance stacked on top of it, bounds how much assessment happens. Omitting `deadline` falls back to
+  the standalone `_ASSESS_TOTAL_BUDGET_S` default for callers outside a request/response cycle.
 - Two prompt templates in `prompts/`: `system_prompt.txt` (single-deal) and `batch_system_prompt.txt`
   (batch — explicitly instructed to return **one entry per deal, no aggregation**, since a past bug had
   the model collapsing multiple listings into one summary).
