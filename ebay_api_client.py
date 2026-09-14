@@ -252,9 +252,6 @@ class EbayApiClient:
 
         logger.info("eBay Browse API HTTP %d %s", response.status_code, response.reason)
         if not response.ok:
-            if response.status_code == 401:
-                self._token = None
-                self._token_expires_at = 0.0
             try:
                 err_body = response.json()
                 api_msg = "; ".join(e.get("message", "") for e in err_body.get("errors", [])) or response.reason
@@ -263,6 +260,16 @@ class EbayApiClient:
             msg = f"eBay Browse API error {response.status_code}: {api_msg}"
             logger.error(msg)
             errors.append(msg)
+            if response.status_code == 401:
+                self._token = None
+                self._token_expires_at = 0.0
+                errors.append(
+                    "Authentication token was rejected. Check EBAY_CLIENT_ID and "
+                    "EBAY_CLIENT_SECRET and ensure your application has the "
+                    "required Browse API scopes."
+                )
+            elif response.status_code == 429:
+                errors.append("eBay API rate limit exceeded. Wait before making another request.")
             return [], errors
 
         try:
@@ -271,13 +278,31 @@ class EbayApiClient:
             return [], [f"Failed to parse eBay API response: {exc}"]
 
         raw_items = body.get("itemSummaries", [])
-        total = body.get("total", 0)
+        total = body.get("total", len(raw_items))
         logger.info("eBay Browse API returned %d/%d items", len(raw_items), total)
+
+        if not raw_items:
+            warnings = body.get("warnings", [])
+            if warnings:
+                for w in warnings:
+                    errors.append(f"eBay API warning: {w.get('message', w)}")
+            else:
+                errors.append(f"eBay Browse API returned 0 results for query {query!r}. Try a different search term.")
+            return [], errors
+
         deals: list[dict] = []
+        parse_errors = 0
         for item in raw_items:
-            d = self._normalize_item(item)  # type: ignore[attr-defined]
-            if d:
-                deals.append(d)
+            try:
+                d = self._normalize_item(item)  # type: ignore[attr-defined]
+                if d:
+                    deals.append(d)
+            except Exception as exc:
+                parse_errors += 1
+                logger.warning("Failed to parse API item %r: %s", item.get("itemId"), exc)
+        if parse_errors:
+            errors.append(f"{parse_errors} item(s) from the eBay API could not be parsed and were skipped.")
+
         logger.info("Returning %d normalised deals (%d errors)", len(deals), len(errors))
         return deals, errors
 
@@ -335,176 +360,6 @@ class EbayApiClient:
         for d in deals:
             d["source"] = "ebay"
             d["listing_type"] = "auction"
-        return deals, errors
-        """Search eBay via the Browse API.
-
-        Returns a ``(deals, errors)`` tuple that matches the contract of
-        :meth:`EbayScraper.search` so the two engines are interchangeable.
-        """
-        errors: list[str] = []
-
-        if not self.is_configured:
-            errors.append(
-                "eBay API credentials are not configured. "
-                "Set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in your environment."
-            )
-            return [], errors
-
-        # Append negative keywords to filter out low-value junk.
-        _JUNK_KEYWORDS = "-skylanders -lego -amiibo -disney -singstar -guitar -rockband -djhero -singstar -justdance"
-        search_query = f"{query} {_JUNK_KEYWORDS}"
-
-        # Obtain a valid access token.
-        try:
-            token = self._get_access_token()
-        except requests.exceptions.HTTPError as exc:
-            msg = f"eBay API authentication failed: {exc}"
-            logger.error(msg)
-            errors.append(msg)
-            return [], errors
-        except requests.exceptions.Timeout:
-            msg = "eBay OAuth token request timed out"
-            logger.error(msg)
-            errors.append(msg)
-            return [], errors
-        except requests.exceptions.ConnectionError as exc:
-            msg = f"eBay OAuth connection error: {exc}"
-            logger.error(msg)
-            errors.append(msg)
-            return [], errors
-        except Exception as exc:
-            msg = f"eBay API authentication failed: {exc}"
-            logger.error(msg)
-            errors.append(msg)
-            return [], errors
-
-        # Call the search endpoint.
-        url = self._base_url + self._SEARCH_PATH
-        # Build the filter string:
-        #   itemLocationCountry — restricts results to items *physically located*
-        #                         in the target country (e.g. DE).  This is the
-        #                         primary filter that ensures "Germany-only" deals.
-        #   deliveryCountry     — additionally restricts to items that ship to the
-        #                         target country, preventing cross-border listings
-        #                         that technically deliver to DE but originate abroad.
-        #   buyingOptions       — only "FIXED_PRICE" (BIN/Sofort-Kauf) listings;
-        #                         auction listings are irrelevant for resellers.
-        #   conditionIds         — "3000" (Used/Gebraucht) + "1500" (New/Neu:OVP);
-        #                         exclude "For parts / Not working" listings at API
-        #                         level. "7000" (New/Neu) is excluded — we want
-        #                         secondhand bargains, not retail new items.
-        api_filter = (
-            f"itemLocationCountry:{self.delivery_country},"
-            f"deliveryCountry:{self.delivery_country},"
-            f"buyingOptions:{{FIXED_PRICE}},"
-            f"conditionIds:{{3000|1500}}"
-        )
-        params = {
-            "q": search_query,
-            "limit": min(max(1, max_results), 200),
-            "sort": "newlyListed",
-            "filter": api_filter,
-            "category_ids": "1249",  # Video Games & Consoles (eBay Germany)
-        }
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "X-EBAY-C-MARKETPLACE-ID": self.marketplace_id,
-            # Tell eBay which language to use for item titles and metadata.
-            "Accept-Language": self.accept_language,
-            # X-EBAY-C-LOCALE is the primary signal the Browse API uses to return
-            # content in the correct regional language (format: language_COUNTRY).
-            "X-EBAY-C-LOCALE": self.locale,
-            # Provide contextual location so eBay routes to the correct regional
-            # catalogue and returns localised pricing/shipping.
-            "X-EBAY-C-ENDUSERCTX": f"contextualLocation=country%3D{self.delivery_country}",
-            "Content-Type": "application/json",
-            # Ask eBay to return compact item summaries (fewer fields, faster).
-            "X-EBAY-C-MARKETPLACE-CAMPAIGN-ID": "eBayDealFinder",
-        }
-
-        logger.info(
-            "eBay Browse API search: q=%r limit=%d marketplace=%s locale=%s",
-            query,
-            params["limit"],
-            self.marketplace_id,
-            self.locale,
-        )
-
-        try:
-            response = self.session.get(url, headers=headers, params=params, timeout=15)
-        except requests.exceptions.Timeout:
-            msg = "eBay Browse API request timed out after 15 seconds"
-            logger.error(msg)
-            errors.append(msg)
-            return [], errors
-        except requests.exceptions.ConnectionError as exc:
-            msg = f"eBay Browse API connection error: {exc}"
-            logger.error(msg)
-            errors.append(msg)
-            return [], errors
-
-        logger.info("eBay Browse API HTTP %d %s", response.status_code, response.reason)
-
-        if not response.ok:
-            try:
-                err_body = response.json()
-                api_msg = "; ".join(e.get("message", "") for e in err_body.get("errors", [])) or response.reason
-            except Exception:
-                api_msg = response.reason
-            msg = f"eBay Browse API error {response.status_code}: {api_msg}"
-            logger.error(msg)
-            errors.append(msg)
-            if response.status_code == 401:
-                # Invalidate cached token so it will be refreshed on the next call.
-                self._token = None
-                self._token_expires_at = 0.0
-                errors.append(
-                    "Authentication token was rejected. Check EBAY_CLIENT_ID and "
-                    "EBAY_CLIENT_SECRET and ensure your application has the "
-                    "required Browse API scopes."
-                )
-            elif response.status_code == 429:
-                errors.append("eBay API rate limit exceeded. Wait before making another request.")
-            return [], errors
-
-        try:
-            body = response.json()
-        except Exception as exc:
-            msg = f"Failed to parse eBay API response as JSON: {exc}"
-            logger.error(msg)
-            errors.append(msg)
-            return [], errors
-
-        raw_items = body.get("itemSummaries", [])
-        total = body.get("total", len(raw_items))
-        logger.info("eBay Browse API returned %d/%d items", len(raw_items), total)
-
-        if not raw_items:
-            # Provide a helpful diagnostic when zero items come back.
-            warnings = body.get("warnings", [])
-            if warnings:
-                for w in warnings:
-                    errors.append(f"eBay API warning: {w.get('message', w)}")
-            else:
-                errors.append(f"eBay Browse API returned 0 results for query {query!r}. Try a different search term.")
-            return [], errors
-
-        deals: list[dict] = []
-        parse_errors = 0
-        for item in raw_items:
-            try:
-                deal = self._normalize_item(item)
-                if deal:
-                    deals.append(deal)
-            except Exception as exc:
-                parse_errors += 1
-                logger.warning("Failed to parse API item %r: %s", item.get("itemId"), exc)
-
-        if parse_errors:
-            errors.append(f"{parse_errors} item(s) from the eBay API could not be parsed and were skipped.")
-
-        logger.info("Returning %d normalised deals (%d errors)", len(deals), len(errors))
         return deals, errors
 
     def get_median_sold_price(self, query: str, max_results: int = 10) -> "tuple[float | None, str, list[str]]":
