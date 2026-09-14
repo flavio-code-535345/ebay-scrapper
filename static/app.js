@@ -332,6 +332,23 @@ async function handleSearch(e) {
             signal: _abortController.signal,
         });
 
+        // A proxy/edge network in front of the app (Cloudflare, nginx, …) can
+        // kill a slow request and return its own HTML error page instead of
+        // anything from this app — response.json() would throw a cryptic
+        // "Unexpected token '<' … is not valid JSON" on that. Check the
+        // content type first so we can show a clear message instead.
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+            if (response.status === 524 || response.status === 504) {
+                throw new Error(
+                    'The search took too long and a proxy in front of the server timed out ' +
+                    '(this can happen with AI evaluation on and a broad query). ' +
+                    'Try a narrower search, or try again.'
+                );
+            }
+            throw new Error(`HTTP ${response.status}: server did not return a valid response`);
+        }
+
         const data = await response.json();
 
         if (!response.ok) {

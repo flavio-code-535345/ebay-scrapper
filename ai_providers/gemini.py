@@ -176,27 +176,35 @@ class GeminiAssessor(BaseAssessor):
 
     # ── Batch assessment ──────────────────────────────────────────────────
 
-    def assess_deals_batch(self, deals: list[dict]) -> list[dict | None]:
+    def assess_deals_batch(self, deals: list[dict], deadline: float | None = None) -> list[dict | None]:
         if not self.enabled or not self.user_enabled or not deals or self.is_rate_limited:
             return [None] * len(deals) if deals else []
+        if deadline is None:
+            # No caller-supplied deadline (e.g. a direct/standalone call outside
+            # the Flask request cycle) — fall back to a fixed standalone budget.
+            deadline = time.monotonic() + _ASSESS_TOTAL_BUDGET_S
+        # Counting the eBay price prefetch against the deadline too (it used
+        # to run before the clock even started) — a slow prefetch previously
+        # got a free pass on top of the assessment budget.
         self._prefetch_ebay_prices_parallel(deals)
         results: list[dict | None] = []
-        t_start = time.monotonic()
         for batch_idx, batch_start in enumerate(range(0, len(deals), _BATCH_SIZE)):
             batch = deals[batch_start : batch_start + _BATCH_SIZE]
-            elapsed = time.monotonic() - t_start
-            if elapsed >= _ASSESS_TOTAL_BUDGET_S:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 logger.warning(
-                    "GeminiAssessor: total budget exhausted after batch %d; returning %d unassessed deals as None.",
+                    "GeminiAssessor: deadline exhausted after batch %d; returning %d unassessed deals as None.",
                     batch_idx,
                     len(deals) - len(results),
                 )
                 results.extend([None] * (len(deals) - len(results)))
                 break
-            batch_results = self._assess_batch_with_retry(batch)
-            # Stagger to stay within 15 RPM free-tier limit
+            batch_results = self._assess_batch_with_retry(batch, deadline)
+            # Stagger to stay within the 15 RPM free-tier limit, but never
+            # sleep past the deadline — the next iteration's check handles
+            # stopping cleanly if that leaves no time for another batch.
             if batch_idx > 0:
-                time.sleep(_BATCH_DELAY_SECONDS)
+                time.sleep(max(0.0, min(_BATCH_DELAY_SECONDS, deadline - time.monotonic())))
             for deal, assessment in zip(batch, batch_results, strict=False):
                 if isinstance(assessment, dict):
                     assessment = _apply_garbage_overrides(deal, assessment)
@@ -329,9 +337,22 @@ class GeminiAssessor(BaseAssessor):
         )
         return parts
 
-    def _assess_batch_with_retry(self, deals: list[dict]) -> list[dict | None]:
+    def _assess_batch_with_retry(self, deals: list[dict], deadline: float | None = None) -> list[dict | None]:
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES):
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 1:
+                    logger.warning(
+                        "GeminiAssessor: deadline exhausted before attempt %d/%d (batch of %d) — skipping.",
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        len(deals),
+                    )
+                    return [None] * len(deals)
+                call_timeout = min(_GEMINI_REQUEST_TIMEOUT, remaining)
+            else:
+                call_timeout = _GEMINI_REQUEST_TIMEOUT
             try:
                 contents = self._build_batch_contents(deals)
                 t0 = time.monotonic()
@@ -346,16 +367,16 @@ class GeminiAssessor(BaseAssessor):
                     ),
                 )
                 try:
-                    response = future.result(timeout=_GEMINI_REQUEST_TIMEOUT)
+                    response = future.result(timeout=call_timeout)
                 except concurrent.futures.TimeoutError:
                     elapsed = time.monotonic() - t0
                     logger.error(
-                        "GeminiAssessor: Batch of %d timed out after %.1f s (attempt %d/%d, timeout=%d s).",
+                        "GeminiAssessor: Batch of %d timed out after %.1f s (attempt %d/%d, timeout=%.0f s).",
                         len(deals),
                         elapsed,
                         attempt + 1,
                         _MAX_RETRIES,
-                        _GEMINI_REQUEST_TIMEOUT,
+                        call_timeout,
                     )
                     future.cancel()
                     return [{"ai_error_type": "timeout", "ai_assessed": False}] * len(deals)
@@ -375,7 +396,7 @@ class GeminiAssessor(BaseAssessor):
                 ):
                     logger.info("GeminiAssessor: model %r is text-only — disabling images.", self._model_name)
                     self._images_supported = False
-                    return self._assess_batch_with_retry(deals)
+                    return self._assess_batch_with_retry(deals, deadline)
                 if _is_rate_limit_error(exc):
                     delay = _parse_retry_delay(exc) or _DEFAULT_BACKOFF_SECONDS
                     _set_rate_limited_until(time.monotonic() + delay)
@@ -388,6 +409,8 @@ class GeminiAssessor(BaseAssessor):
                 last_exc = exc
                 if _is_transient_error(exc) and attempt < _MAX_RETRIES - 1:
                     retry_delay = _RETRY_BASE_DELAY * (2**attempt)
+                    if deadline is not None:
+                        retry_delay = max(0.0, min(retry_delay, deadline - time.monotonic()))
                     logger.warning(
                         "GeminiAssessor: Transient error attempt %d/%d (batch of %d) – retrying in %.1f s: %s",
                         attempt + 1,
