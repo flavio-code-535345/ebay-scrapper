@@ -9,6 +9,7 @@ import base64
 import logging
 import os
 import re
+import threading
 import time
 from contextlib import suppress
 
@@ -129,6 +130,13 @@ class EbayApiClient:
 
         self._token: str | None = None
         self._token_expires_at: float = 0.0
+        # search() is now called concurrently for several queries at once
+        # (app.py's search pipeline fans queries out across a thread pool),
+        # and _get_access_token() is also called from the AI assessor's own
+        # parallel per-game price prefetch — without this lock, several
+        # threads racing past the "is the cached token still valid" check
+        # at once would each fire a redundant OAuth request.
+        self._token_lock = threading.Lock()
         self.session = requests.Session()
         _proxy = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or ""
         _proxy_https = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or ""
@@ -602,35 +610,46 @@ class EbayApiClient:
     # ── Private helpers ────────────────────────────────────────────────────
 
     def _get_access_token(self) -> str:
-        """Return a valid OAuth application access token, refreshing if needed."""
+        """Return a valid OAuth application access token, refreshing if needed.
+
+        Double-checked locking: the common case (a still-valid cached token)
+        never touches the lock, but a refresh takes it — and re-checks —
+        so concurrent callers block on the *first* thread's refresh instead
+        of each firing their own redundant OAuth request.
+        """
         now = time.monotonic()
         if self._token and now < self._token_expires_at:
             return self._token
 
-        logger.info("Requesting new eBay OAuth application token")
+        with self._token_lock:
+            now = time.monotonic()
+            if self._token and now < self._token_expires_at:
+                return self._token
 
-        credentials = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode()).decode("ascii")
+            logger.info("Requesting new eBay OAuth application token")
 
-        response = self.session.post(
-            self._base_url + self._OAUTH_PATH,
-            headers={
-                "Authorization": f"Basic {credentials}",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-            data={
-                "grant_type": "client_credentials",
-                "scope": self._SCOPE,
-            },
-            timeout=10,
-        )
-        response.raise_for_status()
+            credentials = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode()).decode("ascii")
 
-        token_data = response.json()
-        self._token = token_data["access_token"]
-        expires_in = int(token_data.get("expires_in", 7200))
-        self._token_expires_at = now + expires_in - self._TOKEN_REFRESH_BUFFER
-        logger.info("eBay OAuth token obtained (expires in %ds)", expires_in)
-        return self._token
+            response = self.session.post(
+                self._base_url + self._OAUTH_PATH,
+                headers={
+                    "Authorization": f"Basic {credentials}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                data={
+                    "grant_type": "client_credentials",
+                    "scope": self._SCOPE,
+                },
+                timeout=10,
+            )
+            response.raise_for_status()
+
+            token_data = response.json()
+            self._token = token_data["access_token"]
+            expires_in = int(token_data.get("expires_in", 7200))
+            self._token_expires_at = now + expires_in - self._TOKEN_REFRESH_BUFFER
+            logger.info("eBay OAuth token obtained (expires in %ds)", expires_in)
+            return self._token
 
     @staticmethod
     def _extract_prices_from_items(items: list) -> list[float]:

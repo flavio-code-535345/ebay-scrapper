@@ -8,6 +8,7 @@ import logging
 import os
 import random
 import re
+import threading
 import time
 
 import requests
@@ -107,6 +108,27 @@ class EbayScraper:
             }
             logger.info("EbayScraper: HTTP proxy configured (%s)", self.session.proxies)
 
+        self._last_request = 0.0
+        # app.py's search pipeline now fires per-query requests to this
+        # scraper from a thread pool instead of one at a time. Confirmed by
+        # hand: firing several queries at eBay simultaneously (no spacing)
+        # gets most of them 403'd, where the same queries spaced out by a
+        # second or two all succeed — eBay's anti-bot heuristic reacts to
+        # bursts, not to steady request volume. This lock-guarded gate
+        # serializes concurrent callers into randomized, human-ish spacing
+        # (previously this was a `time.sleep()` *after* each request
+        # returned, which only throttled sequential calls — it did nothing
+        # once calls could start concurrently).
+        self._rate_limit_lock = threading.Lock()
+
+    def _rate_limit(self) -> None:
+        with self._rate_limit_lock:
+            elapsed = time.monotonic() - self._last_request
+            delay = random.uniform(1, 3)
+            if elapsed < delay:
+                time.sleep(delay - elapsed)
+            self._last_request = time.monotonic()
+
     def search(self, query: str, max_results: int = 50) -> tuple[list[dict], list[str]]:
         """Search eBay for items matching query.
 
@@ -114,6 +136,7 @@ class EbayScraper:
         human-readable strings describing any problems encountered.
         """
         errors: list[str] = []
+        self._rate_limit()
 
         try:
             params = {
@@ -264,7 +287,6 @@ class EbayScraper:
                 errors.append(f"{parse_errors} item(s) could not be parsed and were skipped.")
 
             logger.info("Returning %d deals (%d errors)", len(deals), len(errors))
-            time.sleep(random.uniform(1, 3))  # Rate limiting
             return deals, errors
 
         except Exception as exc:
