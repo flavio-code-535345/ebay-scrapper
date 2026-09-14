@@ -605,14 +605,15 @@ def _detect_bundle_individual_sale_scam(deal: dict) -> str | None:
         )
 
     # Check 2: description scam phrases — any match = scam.
-    if description and _BUNDLE_TITLE_KEYWORDS_RE.search(title) and _DESC_SCAM_RE.search(description):
-        match = _DESC_SCAM_RE.search(description)
-        short_title = title[:80] + ("..." if len(title) > 80 else "")
-        return (
-            f"BAIT-AND-SWITCH DETECTED (description): Title advertises a bundle "
-            f"('{short_title}') but description contains '{match.group(0)}' which "
-            f"indicates buyer selects/chooses individual items. AVOID."
-        )
+    if description and _BUNDLE_TITLE_KEYWORDS_RE.search(title):
+        desc_match = _DESC_SCAM_RE.search(description)
+        if desc_match:
+            short_title = title[:80] + ("..." if len(title) > 80 else "")
+            return (
+                f"BAIT-AND-SWITCH DETECTED (description): Title advertises a bundle "
+                f"('{short_title}') but description contains '{desc_match.group(0)}' which "
+                f"indicates buyer selects/chooses individual items. AVOID."
+            )
 
     # Check 3: seller_count > 1 + bundle title = canonical scam.
     if not seller_count or not _BUNDLE_TITLE_KEYWORDS_RE.search(title):
@@ -1051,9 +1052,15 @@ class BaseAssessor:
             _EBAY_PREFETCH_BUDGET_S,
         )
 
+        # Bind to a local so the closure below (run from worker threads)
+        # can't observe self._ebay_client having changed to None after the
+        # guard above — and so it's typed as non-Optional, not just
+        # defensively try/excepted.
+        ebay_client = self._ebay_client
+
         def _fetch_one(query: str) -> tuple[str, float | None, str]:
             try:
-                price, source, _ = self._ebay_client.get_median_sold_price(query, max_results=10)
+                price, source, _ = ebay_client.get_median_sold_price(query, max_results=10)
                 return query, price, source
             except Exception as exc:
                 logger.warning("GeminiAssessor: eBay prefetch failed for %r: %s", query, exc)

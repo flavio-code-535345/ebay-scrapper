@@ -1,11 +1,16 @@
 # eBay Deal Finder
 
-Find resale-worthy secondhand gaming deals on **eBay Germany** (`EBAY_DE`). Dual data sources (official Browse API + HTML scraper fallback), Gemini multimodal scoring, deterministic anti-scam/junk rules, SQLite persistence, and a dark-themed web UI.
+Find resale-worthy secondhand gaming deals on **eBay Germany** (`EBAY_DE`), also cross-searching
+**Kleinanzeigen.de**. Dual eBay data sources (official Browse API + HTML scraper fallback, both
+fixed-price and auction listings), Gemini multimodal scoring, deterministic anti-scam/junk rules,
+SQLite persistence, and a dark-themed web UI.
 
 ## Features
 
 - Web UI for search, filters, save/skip, history, and CSV export
-- Official **eBay Browse API** with automatic HTML scraper fallback
+- Official **eBay Browse API** with automatic HTML scraper fallback — fixed-price ("Buy It Now") and
+  auction listings, searched in parallel
+- Also searches **Kleinanzeigen.de** for matching classified listings
 - **Gemini AI** deal ratings: Must Have / Good / Okay / Avoid / Garbage
 - Deterministic overrides for scams, sports/Kinect lots, broken/untested junk
 - Per-game resale estimates from live eBay market data
@@ -118,7 +123,8 @@ ebay-scrapper/
 ├── app.py                 # Flask app & REST API
 ├── database.py            # SQLite persistence
 ├── scraper.py             # Legacy HTML scraper (ebay.de)
-├── ebay_api_client.py     # Browse API client (OAuth + search)
+├── ebay_api_client.py     # Browse API client (OAuth + search + auctions)
+├── kleinanzeigen_scraper.py # Kleinanzeigen.de HTML scraper
 ├── ai_providers/
 │   ├── __init__.py        # create_assessor() factory
 │   ├── base.py            # Shared rules, JSON parse, price helpers
@@ -153,6 +159,11 @@ docker compose up -d
 ```
 
 SQLite data lives in the `ebay_db` named volume.
+
+If the app sits behind a reverse proxy or tunnel with its own request timeout (e.g. a Cloudflare
+Tunnel, whose proxied-HTTP default is ~100s), set `SEARCH_DEADLINE_SECONDS` (default `75`) to the
+total time budget `/api/search` should stay within — see `.env.example` for the full list of
+environment variables.
 
 ### CI/CD
 
