@@ -1,10 +1,16 @@
 # ── Build stage ────────────────────────────────────────────────────────────
 FROM python:3.11-slim AS builder
 
+# uv resolves/installs dependencies far faster than pip; the cache mount
+# persists its download cache across builds (BuildKit only — excluded from
+# the final layer) so re-builds after a requirements.txt change stay fast.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 WORKDIR /build
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=requirements.txt,target=requirements.txt \
+    uv pip install --system -r requirements.txt && \
     find /usr/local -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
 # ── Runtime stage ──────────────────────────────────────────────────────────
