@@ -43,14 +43,17 @@ _TEXT_ONLY_MODELS: frozenset[str] = frozenset()
 
 
 def _is_text_only_model(model: str) -> bool:
-    """Return True for known image-unsupported Gemini model names."""
-    m = model.lower().strip()
-    if m in _TEXT_ONLY_MODELS:
-        return True
-    # Heuristic: "lite" suffix models from 3.x+ are text-only
-    if m.startswith("gemini-3") and "lite" in m:
-        return True
-    return m.startswith("gemini-2.5") and "lite" in m and "preview" in m
+    """Return True for known image-unsupported Gemini model names.
+
+    Every currently-shipping Gemini model family (2.5 and 3.x, "lite"
+    variants included) accepts native multimodal image input — there is no
+    general "lite = text-only" rule. Only ``_TEXT_ONLY_MODELS`` entries are
+    treated as text-only up front; anything else is assumed multimodal and
+    the runtime fallback in :class:`GeminiAssessor` (which disables images
+    after an actual "does not support image" error from the API) covers any
+    future model that genuinely lacks vision support.
+    """
+    return model.lower().strip() in _TEXT_ONLY_MODELS
 
 
 class GeminiAssessor(BaseAssessor):
