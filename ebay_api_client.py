@@ -201,11 +201,22 @@ class EbayApiClient:
             return [], errors
 
         url = self._base_url + self._SEARCH_PATH
+        # No conditionIds filter here — it previously restricted fixed-price
+        # results to only "Used" (3000) and "New – Other" (1500), silently
+        # excluding "Very Good" (4000), "Good" (5000), "Acceptable" (6000),
+        # and plain "New" (1000) — conditions _CONDITION_ID_MAP explicitly
+        # lists as understood and scored by the assessor, and that make up a
+        # large share of real listings. That gap starved the fixed-price
+        # ("Buy It Now") leg of results while search_auctions() below has no
+        # condition filter at all, so auctions ended up dominating merged
+        # results. Matching search_auctions()'s unfiltered condition scope
+        # here and letting the existing broken/defective keyword detection
+        # (which works on title/description, not conditionId) catch genuine
+        # junk keeps both legs consistent.
         api_filter = (
             f"itemLocationCountry:{self.delivery_country},"
             f"deliveryCountry:{self.delivery_country},"
-            f"buyingOptions:{{FIXED_PRICE}},"
-            f"conditionIds:{{3000|1500}}"
+            f"buyingOptions:{{FIXED_PRICE}}"
         )
         params = {
             "q": search_query,

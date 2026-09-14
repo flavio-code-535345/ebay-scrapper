@@ -133,6 +133,39 @@ class TestSearch:
         assert "Berlin" in deals[0]["item_location"]
         assert deals[0]["listing_date"] == "2024-03-01T10:00:00.000Z"
 
+    def test_does_not_restrict_condition_ids(self, client):
+        """Regression: the fixed-price search used to filter conditionIds to
+        only 3000|1500 (Used / New-Other), silently excluding "Very Good"
+        (4000), "Good" (5000), "Acceptable" (6000), and plain "New" (1000)
+        — conditions _CONDITION_ID_MAP explicitly lists as understood by the
+        assessor. That starved fixed-price ("Buy It Now") results relative
+        to search_auctions(), which has never had a condition filter, so
+        auctions ended up dominating merged search results. The filter must
+        not restrict by condition at all, matching search_auctions()."""
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"total": 0, "itemSummaries": []}
+        with patch.object(client, "_get_access_token", return_value="tok"):
+            with patch.object(client.session, "get", return_value=mock_resp) as mock_get:
+                client.search("xbox")
+        _, kwargs = mock_get.call_args
+        assert "conditionIds" not in kwargs["params"]["filter"]
+        # Every condition the assessor understands should be a plausible
+        # fixed-price result now.
+        assert set(_CONDITION_ID_MAP) == {
+            "1000",
+            "1500",
+            "1750",
+            "2000",
+            "2500",
+            "3000",
+            "4000",
+            "5000",
+            "6000",
+            "7000",
+        }
+
     def test_normalize_item_missing_title_url(self, client):
         """Item without title and URL returns None."""
         item = {"itemId": "999"}

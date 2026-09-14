@@ -37,6 +37,14 @@ _MODEL_NAME = "gemini-3.5-flash-lite"
 _MAX_IMAGES = 3
 _IMAGE_FETCH_TIMEOUT = 5
 _BATCH_DELAY_SECONDS = 4.5  # respect 15 RPM free-tier limit
+# How many batch calls may be in flight at once. Submissions are still paced
+# _BATCH_DELAY_SECONDS apart (bounding the *request-start* rate to the same
+# ~13/min the old fully-serial design respected), but letting calls overlap
+# means total wall time is roughly (submission pacing) + (one call's own
+# duration) instead of the sum of every call's duration plus every stagger —
+# the difference between all _MAX_DISPLAY deals fitting in a search's overall
+# deadline versus only the first batch or two.
+_BATCH_MAX_CONCURRENCY = 3
 
 # Known text-only Gemini models — auto-disable image input to avoid SDK errors.
 _TEXT_ONLY_MODELS: frozenset[str] = frozenset()
@@ -187,30 +195,43 @@ class GeminiAssessor(BaseAssessor):
         # to run before the clock even started) — a slow prefetch previously
         # got a free pass on top of the assessment budget.
         self._prefetch_ebay_prices_parallel(deals)
-        results: list[dict | None] = []
-        for batch_idx, batch_start in enumerate(range(0, len(deals), _BATCH_SIZE)):
-            batch = deals[batch_start : batch_start + _BATCH_SIZE]
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                logger.warning(
-                    "GeminiAssessor: deadline exhausted after batch %d; returning %d unassessed deals as None.",
-                    batch_idx,
-                    len(deals) - len(results),
-                )
-                results.extend([None] * (len(deals) - len(results)))
-                break
-            batch_results = self._assess_batch_with_retry(batch, deadline)
-            # Stagger to stay within the 15 RPM free-tier limit, but never
-            # sleep past the deadline — the next iteration's check handles
-            # stopping cleanly if that leaves no time for another batch.
-            if batch_idx > 0:
-                time.sleep(max(0.0, min(_BATCH_DELAY_SECONDS, deadline - time.monotonic())))
-            for deal, assessment in zip(batch, batch_results, strict=False):
-                if isinstance(assessment, dict):
-                    assessment = _apply_garbage_overrides(deal, assessment)
-                    assessment = _apply_sports_kinect_override(deal, assessment)
-                    assessment = _apply_scam_override(deal, assessment)
-                results.append(assessment)
+
+        batches = [deals[i : i + _BATCH_SIZE] for i in range(0, len(deals), _BATCH_SIZE)]
+        n_batches = len(batches)
+        futures: list[concurrent.futures.Future | None] = [None] * n_batches
+        # Batches run concurrently (bounded by _BATCH_MAX_CONCURRENCY) rather
+        # than one at a time — see the constant's comment for why. Submission
+        # (not completion) is still paced _BATCH_DELAY_SECONDS apart.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(_BATCH_MAX_CONCURRENCY, n_batches)) as pool:
+            for batch_idx, batch in enumerate(batches):
+                if time.monotonic() >= deadline:
+                    logger.warning(
+                        "GeminiAssessor: deadline exhausted before submitting batch %d/%d; "
+                        "remaining deals returned as None.",
+                        batch_idx + 1,
+                        n_batches,
+                    )
+                    break
+                futures[batch_idx] = pool.submit(self._assess_batch_with_retry, batch, deadline)
+                if batch_idx < n_batches - 1:
+                    time.sleep(max(0.0, min(_BATCH_DELAY_SECONDS, deadline - time.monotonic())))
+
+            results: list[dict | None] = []
+            for batch, future in zip(batches, futures, strict=True):
+                if future is None:
+                    results.extend([None] * len(batch))
+                    continue
+                try:
+                    batch_results = future.result()
+                except Exception as exc:
+                    logger.error("GeminiAssessor: batch raised unexpectedly: %s", exc, exc_info=True)
+                    batch_results = [None] * len(batch)
+                for deal, assessment in zip(batch, batch_results, strict=False):
+                    if isinstance(assessment, dict):
+                        assessment = _apply_garbage_overrides(deal, assessment)
+                        assessment = _apply_sports_kinect_override(deal, assessment)
+                        assessment = _apply_scam_override(deal, assessment)
+                    results.append(assessment)
         return results
 
     # ── Prompt construction (Gemini-specific — uses self._types.Part) ─────
@@ -357,7 +378,13 @@ class GeminiAssessor(BaseAssessor):
                 contents = self._build_batch_contents(deals)
                 t0 = time.monotonic()
                 if self._timeout_executor is None:
-                    self._timeout_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    # Sized to _BATCH_MAX_CONCURRENCY: assess_deals_batch now
+                    # calls _assess_batch_with_retry from several concurrent
+                    # threads at once, each of which submits its own
+                    # generate_content call here and blocks on it — a
+                    # single-worker executor would silently serialize every
+                    # "concurrent" batch back into one at a time.
+                    self._timeout_executor = concurrent.futures.ThreadPoolExecutor(max_workers=_BATCH_MAX_CONCURRENCY)
                 future = self._timeout_executor.submit(
                     self._client.models.generate_content,
                     model=self._model_name,
