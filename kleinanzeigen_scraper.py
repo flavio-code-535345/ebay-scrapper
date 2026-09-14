@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 
 import requests
@@ -80,12 +81,22 @@ class KleinanzeigenScraper:
             }
         )
         self._last_request = 0.0
+        # The app's search pipeline now fires per-query requests to this
+        # scraper from a thread pool (see app.py's _run_search_jobs); the
+        # naive check-then-sleep-then-update sequence below is not atomic,
+        # so without this lock concurrent callers could all pass the
+        # elapsed-time check together and hit Kleinanzeigen in a burst,
+        # defeating the whole point of rate-limiting a third-party site we
+        # don't have an API agreement with. Holding the lock for the full
+        # wait serializes callers into a properly spaced-out sequence.
+        self._rate_limit_lock = threading.Lock()
 
     def _rate_limit(self) -> None:
-        elapsed = time.monotonic() - self._last_request
-        if elapsed < _REQUEST_DELAY:
-            time.sleep(_REQUEST_DELAY - elapsed)
-        self._last_request = time.monotonic()
+        with self._rate_limit_lock:
+            elapsed = time.monotonic() - self._last_request
+            if elapsed < _REQUEST_DELAY:
+                time.sleep(_REQUEST_DELAY - elapsed)
+            self._last_request = time.monotonic()
 
     def search(self, query: str, max_results: int = 50) -> tuple[list[dict], list[str]]:
         if not query or not query.strip():

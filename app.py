@@ -4,6 +4,7 @@ Flask REST API for eBay Deal Scraper
 Provides endpoints for searching, history, export, stats and health checks
 """
 
+import concurrent.futures
 import json
 import logging
 import os
@@ -185,6 +186,125 @@ def _expand_queries(queries: list[str]) -> list[str]:
     return expanded[:8]
 
 
+# ── Parallel multi-source search ──────────────────────────────────────────
+# Synonym expansion produces up to 8 query variants, each searched against
+# up to 3 sources (eBay, eBay auctions, Kleinanzeigen) — up to 24 independent
+# HTTP round-trips per request. Running them one at a time (the original
+# design) meant a single search could take longer than the Gemini batch
+# assessment that follows it. A thread pool fans them all out concurrently;
+# each provider already returns ``(deals, errors)`` rather than raising for
+# ordinary failures (bad HTTP status, timeout, connection error — see
+# EbayScraper/EbayApiClient/KleinanzeigenScraper), so a flaky source just
+# contributes an error string instead of derailing the others.
+_SEARCH_MAX_WORKERS = 8
+
+
+def _merge_deal(
+    all_deals: list[dict],
+    seen_urls: set[str],
+    seen_titles: set[str],
+    deal: dict,
+    *,
+    source: str | None = None,
+    listing_type: str | None = None,
+) -> bool:
+    """Merge one *deal* into *all_deals*, de-duplicating by URL and by
+    title+price (for the same listing surfacing under a different URL —
+    e.g. a tracking-parameter variant). Returns True if the deal was added.
+    """
+    url = deal.get("url", "")
+    if "?" in url:
+        url = url.split("?")[0]
+    if not url or url in seen_urls:
+        return False
+    title = (deal.get("title") or "").strip().lower()
+    price = deal.get("price")
+    title_price_key = f"{title}|{price}"
+    if title_price_key in seen_titles and price is not None:
+        return False
+    seen_urls.add(url)
+    if price is not None:
+        seen_titles.add(title_price_key)
+    if source:
+        deal["source"] = source
+    if listing_type:
+        deal["listing_type"] = listing_type
+    all_deals.append(deal)
+    return True
+
+
+def _merge_deals(
+    all_deals: list[dict],
+    seen_urls: set[str],
+    seen_titles: set[str],
+    new_deals: list[dict],
+    *,
+    source: str | None = None,
+    listing_type: str | None = None,
+) -> int:
+    """Merge every deal in *new_deals*; returns how many survived de-dup."""
+    return sum(
+        _merge_deal(all_deals, seen_urls, seen_titles, d, source=source, listing_type=listing_type) for d in new_deals
+    )
+
+
+def _build_search_jobs(queries, search_fn, max_results, ebay_api, kleinanzeigen):
+    """Build one search job per (query, source) combination.
+
+    Each job is ``(query, label, source, listing_type, fn)`` where *fn* is a
+    zero-arg callable returning that provider's ``(deals, errors)`` tuple.
+    *source*/*listing_type* mirror what the old inline loop tagged each
+    branch's deals with (auctions already self-tag ``source="ebay"`` inside
+    :meth:`EbayApiClient.search_auctions`, so that job passes ``source=None``
+    to avoid overriding it).
+    """
+    jobs = []
+    for q in queries:
+        jobs.append((q, "eBay", "ebay", "fixed", lambda q=q: search_fn(q, max_results=max_results)))
+        if ebay_api.is_configured:
+            jobs.append(
+                (
+                    q,
+                    "eBay auctions",
+                    None,
+                    "auction",
+                    lambda q=q: ebay_api.search_auctions(q, max_results=min(max_results, 20)),
+                )
+            )
+        if kleinanzeigen:
+            jobs.append(
+                (
+                    q,
+                    "Kleinanzeigen",
+                    "kleinanzeigen",
+                    None,
+                    lambda q=q: kleinanzeigen.search(q, max_results=min(max_results, 30)),
+                )
+            )
+    return jobs
+
+
+def _run_search_jobs(jobs):
+    """Run every search job concurrently; return results in submission
+    order — query-major, eBay → auctions → Kleinanzeigen per query — the
+    same relative priority the old sequential loop gave for de-dup ties,
+    regardless of which thread actually finishes first.
+    """
+    if not jobs:
+        return []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(_SEARCH_MAX_WORKERS, len(jobs))) as pool:
+        futures = [(q, label, source, listing_type, pool.submit(fn)) for q, label, source, listing_type, fn in jobs]
+        results = []
+        for q, label, source, listing_type, fut in futures:
+            try:
+                deals, errs = fut.result()
+            except Exception as exc:
+                logger.warning("%s search failed for %r: %s", label, q, exc)
+                deals, errs = [], [f"{label} search error: {exc}"]
+            results.append((q, label, source, listing_type, deals, errs))
+    return results
+
+
 @app.route("/api/search", methods=["POST"])
 def search():
     data = request.get_json(silent=True)
@@ -214,82 +334,21 @@ def search():
     data_source_setting = _db_data_source()
     search_fn, active_source = _resolve_engine(data_source_setting)
 
-    # Run each query and merge results, deduplicating by URL.
+    # Run every (query × source) search concurrently, then merge results in
+    # a fixed order so de-dup ties resolve the same way the old sequential
+    # loop did — see _build_search_jobs / _run_search_jobs above.
+    jobs = _build_search_jobs(queries, search_fn, max_results, ebay_api, kleinanzeigen)
+    job_results = _run_search_jobs(jobs)
+
     all_deals: list[dict] = []
     all_errors: list[str] = []
     seen_urls: set[str] = set()
     seen_titles: set[str] = set()
-    for q in queries:
-        # ── eBay ────────────────────────────────────────────────────────
-        deals, errs = search_fn(q, max_results=max_results)
+    for q, label, source, listing_type, job_deals, errs in job_results:
         all_errors.extend(errs)
-        for d in deals:
-            url = d.get("url", "")
-            title = (d.get("title") or "").strip().lower()
-            if "?" in url:
-                url = url.split("?")[0]
-            if not url or url in seen_urls:
-                continue
-            price = d.get("price")
-            title_price_key = f"{title}|{price}"
-            if title_price_key in seen_titles and price is not None:
-                continue
-            seen_urls.add(url)
-            if price is not None:
-                seen_titles.add(title_price_key)
-            d["source"] = "ebay"
-            d["listing_type"] = "fixed"
-            all_deals.append(d)
-        logger.info("Search for %r via %s returned %d deals", q, active_source, len(deals))
+        added = _merge_deals(all_deals, seen_urls, seen_titles, job_deals, source=source, listing_type=listing_type)
+        logger.info("%s search for %r returned %d deals (%d new)", label, q, len(job_deals), added)
 
-        # ── eBay Auctions ────────────────────────────────────────────────
-        if ebay_api.is_configured:
-            try:
-                auc_deals, auc_errs = ebay_api.search_auctions(q, max_results=min(max_results, 20))
-                all_errors.extend(auc_errs)
-                for d in auc_deals:
-                    url = d.get("url", "")
-                    if "?" in url:
-                        url = url.split("?")[0]
-                    if not url or url in seen_urls:
-                        continue
-                    title = (d.get("title") or "").strip().lower()
-                    price = d.get("price")
-                    title_price_key = f"{title}|{price}"
-                    if title_price_key in seen_titles and price is not None:
-                        continue
-                    seen_urls.add(url)
-                    if price is not None:
-                        seen_titles.add(title_price_key)
-                    d["listing_type"] = "auction"
-                    all_deals.append(d)
-                logger.info("Auction search for %r returned %d deals", q, len(auc_deals))
-            except Exception as exc:
-                logger.warning("Auction search failed for %r: %s", q, exc)
-        # ── Kleinanzeigen ───────────────────────────────────────────────
-        if kleinanzeigen:
-            try:
-                kdx_deals, kdx_errs = kleinanzeigen.search(q, max_results=min(max_results, 30))
-                all_errors.extend(kdx_errs)
-                for d in kdx_deals:
-                    url = d.get("url", "")
-                    if "?" in url:
-                        url = url.split("?")[0]
-                    if not url or url in seen_urls:
-                        continue
-                    title = (d.get("title") or "").strip().lower()
-                    price = d.get("price")
-                    title_price_key = f"{title}|{price}"
-                    if title_price_key in seen_titles and price is not None:
-                        continue
-                    seen_urls.add(url)
-                    if price is not None:
-                        seen_titles.add(title_price_key)
-                    d["source"] = "kleinanzeigen"
-                    all_deals.append(d)
-                logger.info("Kleinanzeigen %r returned %d deals", q, len(kdx_deals))
-            except Exception as exc:
-                logger.warning("Kleinanzeigen search failed for %r: %s", q, exc)
     deals = all_deals
     search_errors = all_errors
     ebay_n = sum(1 for d in deals if d.get("source") == "ebay")

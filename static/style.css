@@ -343,10 +343,11 @@ a:focus-visible,
     padding: 0.4rem 0.7rem;
     font-size: 0.85rem;
     outline: none;
-    transition: border-color 0.2s;
+    transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
 }
 
-.settings-input:focus { border-color: var(--accent); }
+.settings-input:hover { border-color: var(--border2); }
+.settings-input:focus { border-color: var(--accent); background: var(--surface3); }
 .settings-input::placeholder { color: var(--muted); }
 
 .settings-select {
@@ -360,9 +361,11 @@ a:focus-visible,
     font-size: 0.85rem;
     outline: none;
     cursor: pointer;
+    transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
 }
 
-.settings-select:focus { border-color: var(--accent); }
+.settings-select:hover { border-color: var(--border2); }
+.settings-select:focus { border-color: var(--accent); background: var(--surface3); }
 .settings-select option { background: var(--surface2); }
 
 .btn-save-model {
@@ -373,12 +376,13 @@ a:focus-visible,
     padding: 0.4rem 0.8rem;
     font-size: 0.82rem;
     cursor: pointer;
-    transition: background 0.2s, border-color 0.2s;
+    transition: background 0.2s var(--ease), border-color 0.2s var(--ease), transform 0.15s var(--ease);
     white-space: nowrap;
 }
 
 .btn-save-model:hover { background: var(--accent-dim); border-color: var(--accent); }
-.btn-save-model:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-save-model:active { transform: scale(0.96); }
+.btn-save-model:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
 .btn-ai-toggle {
     background: var(--green-dim);
@@ -391,7 +395,7 @@ a:focus-visible,
     display: flex;
     align-items: center;
     gap: 0.3rem;
-    transition: background 0.2s, opacity 0.2s;
+    transition: background 0.2s var(--ease), opacity 0.2s var(--ease), transform 0.15s var(--ease);
     white-space: nowrap;
 }
 
@@ -402,7 +406,8 @@ a:focus-visible,
 }
 
 .btn-ai-toggle:hover { opacity: 0.85; }
-.btn-ai-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-ai-toggle:active { transform: scale(0.96); }
+.btn-ai-toggle:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
 .model-status {
     font-size: 0.78rem;
@@ -528,12 +533,25 @@ a:focus-visible,
     max-width: 240px;
 }
 
+@keyframes pipelineShimmer {
+    to { background-position: -200% 0; }
+}
+
 .active-pipeline-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--accent), var(--purple));
+    background: linear-gradient(
+        90deg,
+        var(--accent) 0%, var(--purple) 40%, var(--accent) 60%, var(--purple) 100%
+    );
+    background-size: 200% 100%;
+    animation: pipelineShimmer 1.6s linear infinite;
     border-radius: 2px;
     width: 0%;
-    transition: width 0.1s linear;
+    transition: width 0.15s var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .active-pipeline-fill { animation: none; }
 }
 
 .btn-cancel-search {
@@ -660,11 +678,12 @@ a:focus-visible,
     padding: 0.4rem 0.7rem;
     font-size: 0.83rem;
     outline: none;
-    transition: border-color 0.2s;
+    transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
     min-width: 140px;
 }
 
-.filter-input:focus { border-color: var(--accent); }
+.filter-input:hover { border-color: var(--border2); }
+.filter-input:focus { border-color: var(--accent); background: var(--surface3); }
 .filter-input::placeholder { color: var(--muted); }
 
 .filter-select {
@@ -676,9 +695,11 @@ a:focus-visible,
     font-size: 0.83rem;
     outline: none;
     cursor: pointer;
+    transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
 }
 
-.filter-select:focus { border-color: var(--accent); }
+.filter-select:hover { border-color: var(--border2); }
+.filter-select:focus { border-color: var(--accent); background: var(--surface3); }
 .filter-select option { background: var(--surface2); }
 
 .deal-count-badge {
@@ -718,11 +739,12 @@ a:focus-visible,
     padding: 0.35rem 0.7rem;
     font-size: 0.8rem;
     cursor: pointer;
-    transition: background 0.2s, border-color 0.2s;
+    transition: background 0.2s var(--ease), border-color 0.2s var(--ease), transform 0.15s var(--ease);
     white-space: nowrap;
 }
 
 .btn-filter-action:hover { background: var(--surface3); border-color: var(--border2); }
+.btn-filter-action:active { transform: scale(0.96); }
 
 .batch-actions {
     display: flex;
@@ -746,10 +768,11 @@ a:focus-visible,
     font-size: 0.78rem;
     cursor: pointer;
     white-space: nowrap;
-    transition: opacity 0.2s;
+    transition: opacity 0.2s var(--ease), transform 0.15s var(--ease);
 }
 
 .btn-batch-save:hover { opacity: 0.8; }
+.btn-batch-save:active { transform: scale(0.96); }
 
 .btn-batch-skip {
     background: var(--red-dim);
@@ -760,10 +783,11 @@ a:focus-visible,
     font-size: 0.78rem;
     cursor: pointer;
     white-space: nowrap;
-    transition: opacity 0.2s;
+    transition: opacity 0.2s var(--ease), transform 0.15s var(--ease);
 }
 
 .btn-batch-skip:hover { opacity: 0.8; }
+.btn-batch-skip:active { transform: scale(0.96); }
 
 .btn-clear-selection {
     background: var(--surface3);
@@ -774,7 +798,7 @@ a:focus-visible,
     font-size: 0.78rem;
     cursor: pointer;
     white-space: nowrap;
-    transition: background 0.2s;
+    transition: background 0.2s var(--ease);
 }
 
 .btn-clear-selection:hover { background: var(--surface2); color: var(--text); }
@@ -787,18 +811,25 @@ a:focus-visible,
     padding: 0.35rem 0.75rem;
     font-size: 0.8rem;
     cursor: pointer;
-    transition: background 0.2s, border-color 0.2s;
+    transition: background 0.2s var(--ease), border-color 0.2s var(--ease), transform 0.15s var(--ease);
     white-space: nowrap;
 }
 
 .btn-export:hover { background: var(--surface3); border-color: var(--accent); color: var(--accent); }
+.btn-export:active { transform: scale(0.96); }
 
 /* ── Empty state ────────────────────────────────────────────────────────── */
+@keyframes emptyStateIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
 .empty-state {
     text-align: center;
     padding: 3rem 1rem;
     color: var(--muted);
     font-size: 1rem;
+    animation: emptyStateIn 0.4s var(--ease) both;
 }
 
 /* ── Deals grid ─────────────────────────────────────────────────────────── */
@@ -1344,10 +1375,11 @@ a:focus-visible,
     cursor: pointer;
     border: 1px solid var(--border);
     white-space: nowrap;
-    transition: background 0.2s, opacity 0.2s;
+    transition: background 0.2s var(--ease), opacity 0.2s var(--ease), transform 0.15s var(--ease);
 }
 
-.btn-deal-action:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-deal-action:active { transform: scale(0.94); }
+.btn-deal-action:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
 .btn-save {
     background: var(--surface2);
