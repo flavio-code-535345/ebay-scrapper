@@ -12,3 +12,15 @@ env/
 .DS_Store
 Thumbs.db
 .env
+
+# Test/coverage artifacts (pytest/ruff/mypy already self-ignore their own
+# cache dirs via an internal .gitignore; coverage.py does not)
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# setuptools build artifacts (this project is pip-installable per pyproject.toml)
+build/
+dist/
+*.egg-info/

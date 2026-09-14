@@ -22,6 +22,12 @@ services:
       - EBAY_ENVIRONMENT=${EBAY_ENVIRONMENT:-production}
       # DATA_SOURCE: "auto" (default), "api", or "scraper"
       - DATA_SOURCE=${DATA_SOURCE:-auto}
+      # Total time budget (seconds) for a single /api/search request. Lower
+      # this if a reverse proxy/tunnel in front of this container has its
+      # own shorter timeout (e.g. Cloudflare Tunnel's proxied-HTTP default
+      # is ~100s); raise it if there's no such proxy and you want the
+      # fuller AI-assessment budget on broad/slow searches.
+      - SEARCH_DEADLINE_SECONDS=${SEARCH_DEADLINE_SECONDS:-75}
     volumes:
       - ebay_db:/data
     healthcheck:

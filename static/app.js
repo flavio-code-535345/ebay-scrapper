@@ -829,7 +829,7 @@ function createDealCard(deal, mode) {
             ${scoresHtml}
         </div>
         <div class="deal-footer">
-            <a href="${encodedUrl}" target="_blank" rel="noopener noreferrer" class="btn-view">View on eBay →</a>
+            <a href="${safeHref(deal.url)}" target="_blank" rel="noopener noreferrer" class="btn-view">View on eBay →</a>
             ${actionsHtml}
         </div>
     </div>`;
@@ -1713,4 +1713,17 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text || '';
     return div.innerHTML;
+}
+
+// Deal URLs come from eBay/Kleinanzeigen's own pages/API, not free-text
+// seller input, so this is defense-in-depth rather than a known live
+// issue: escapeHtml() neutralizes HTML metacharacters but does nothing to
+// stop a non-http(s) scheme (e.g. "javascript:...") from executing when
+// used as an <a href>. Only ever render deal URLs that are actually
+// http(s) links; anything else renders as a plain "#" (inert).
+function safeHref(url) {
+    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+        return escapeHtml(url);
+    }
+    return '#';
 }

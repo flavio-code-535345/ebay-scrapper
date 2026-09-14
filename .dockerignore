@@ -15,9 +15,16 @@ __pycache__/
 venv/
 env/
 
-# Test files
-tests/
-*.test.py
+# Test files — this project's tests live at the repo root as test_*.py,
+# not under tests/ or named *.test.py (those patterns never matched anything)
+test_*.py
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # Documentation
 *.md

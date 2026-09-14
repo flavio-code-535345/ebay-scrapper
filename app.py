@@ -23,7 +23,7 @@ from scraper import EbayScraper
 try:
     from kleinanzeigen_scraper import KleinanzeigenScraper
 except ImportError:
-    KleinanzeigenScraper = None  # type: ignore[assignment]
+    KleinanzeigenScraper = None  # type: ignore[assignment,misc]
 
 
 class JsonFormatter(logging.Formatter):
