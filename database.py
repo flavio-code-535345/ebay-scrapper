@@ -71,15 +71,12 @@ def init_db():
                 url TEXT,
                 shipping TEXT,
                 is_trending INTEGER DEFAULT 0,
-                overall_score REAL,
-                price_score REAL,
-                seller_score REAL,
-                condition_score REAL,
-                trend_score REAL,
-                recommendation TEXT,
                 created_at REAL NOT NULL,
                 FOREIGN KEY (search_id) REFERENCES searches(id)
             );
+
+            CREATE INDEX IF NOT EXISTS idx_deals_search_id ON deals(search_id);
+            CREATE INDEX IF NOT EXISTS idx_deals_created_at ON deals(created_at);
         """)
 
         _add_column_if_missing(cursor, "deals", "ai_deal_rating", "TEXT")
@@ -164,6 +161,20 @@ def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> No
         cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
 
 
+def _encode_list_field(value) -> str | None:
+    """Encode a list-typed deal field as a JSON array string for storage.
+
+    Always produces a JSON array (or None) rather than sometimes storing the
+    raw value as-is — the old code only JSON-encoded when the value was
+    already a Python list, so a stray non-list truthy value would be stored
+    as raw text and round-trip inconsistently through get_deals_by_search's
+    decoder (which only decodes bytes it recognizes as JSON).
+    """
+    if value is None:
+        return None
+    return json.dumps(value if isinstance(value, list) else [])
+
+
 def save_search(query: str, deals: list[dict]) -> int:
     with get_db() as conn:
         cursor = conn.cursor()
@@ -174,23 +185,17 @@ def save_search(query: str, deals: list[dict]) -> int:
         )
         search_id = cursor.lastrowid
         for deal in deals:
-            visual_findings = deal.get("ai_visual_findings")
-            red_flags = deal.get("ai_red_flags")
-            image_issues = deal.get("image_issues")
-            image_urls = deal.get("image_urls")
-            itemized = deal.get("ai_itemized_resale_estimates")
             cursor.execute(
                 """INSERT INTO deals (search_id, title, price, condition, seller_rating,
-                   url, shipping, is_trending, overall_score, price_score, seller_score,
-                   condition_score, trend_score, recommendation, ai_deal_rating,
+                   url, shipping, is_trending, ai_deal_rating,
                    ai_confidence_score, ai_visual_findings, ai_red_flags,
                    ai_fair_market_estimate, ai_verdict_summary, ai_assessed,
                    ai_potential_scam, ai_scam_warning, image_issues, image_urls,
                    item_location, description, seller_count, listing_date,
                    ai_itemized_resale_estimates, ai_estimated_total_cost,
                    ai_estimated_gross_profit, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     search_id,
                     deal.get("title"),
@@ -200,28 +205,22 @@ def save_search(query: str, deals: list[dict]) -> int:
                     deal.get("url"),
                     deal.get("shipping"),
                     int(bool(deal.get("is_trending"))),
-                    deal.get("overall_score"),
-                    deal.get("price_score"),
-                    deal.get("seller_score"),
-                    deal.get("condition_score"),
-                    deal.get("trend_score"),
-                    deal.get("recommendation"),
                     deal.get("ai_deal_rating"),
                     deal.get("ai_confidence_score"),
-                    json.dumps(visual_findings) if isinstance(visual_findings, list) else visual_findings,
-                    json.dumps(red_flags) if isinstance(red_flags, list) else red_flags,
+                    _encode_list_field(deal.get("ai_visual_findings")),
+                    _encode_list_field(deal.get("ai_red_flags")),
                     deal.get("ai_fair_market_estimate"),
                     deal.get("ai_verdict_summary"),
                     int(bool(deal.get("ai_assessed"))),
                     int(bool(deal.get("ai_potential_scam"))),
                     deal.get("ai_scam_warning"),
-                    json.dumps(image_issues) if isinstance(image_issues, list) else image_issues,
-                    json.dumps(image_urls) if isinstance(image_urls, list) else image_urls,
+                    _encode_list_field(deal.get("image_issues")),
+                    _encode_list_field(deal.get("image_urls")),
                     deal.get("item_location"),
                     deal.get("description"),
                     deal.get("seller_count"),
                     deal.get("listing_date"),
-                    json.dumps(itemized) if isinstance(itemized, list) else itemized,
+                    _encode_list_field(deal.get("ai_itemized_resale_estimates")),
                     deal.get("ai_estimated_total_cost"),
                     deal.get("ai_estimated_gross_profit"),
                     now,
@@ -331,13 +330,6 @@ def get_saved_deals() -> list[dict]:
         cursor = conn.cursor()
         cursor.execute("SELECT url, title, price, saved_at FROM user_saved_deals ORDER BY saved_at DESC")
         return [dict(row) for row in cursor.fetchall()]
-
-
-def is_deal_saved(url: str) -> bool:
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1 FROM user_saved_deals WHERE url = ?", (url,))
-        return cursor.fetchone() is not None
 
 
 def skip_deal(url: str, title: str = "", price: float = 0.0) -> None:

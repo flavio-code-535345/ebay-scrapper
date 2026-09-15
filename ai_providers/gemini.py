@@ -1,12 +1,29 @@
-"""Gemini AI provider — uses google.genai Client to call Gemini models."""
+"""Gemini AI provider — uses google.genai Client to call Gemini models.
+
+Assessment runs in three phases (see ai_providers/enrichment.py's module
+docstring for the full rationale):
+
+  Phase A (ai_providers.enrichment.Enricher) — all network I/O other than
+    the Gemini call itself: eBay price lookups and image fetches, run
+    concurrently for the WHOLE filtered deal set at once, bounded by the
+    caller's deadline.
+  Phase B (this module's _build_contents/_build_batch_contents) — pure
+    formatting over already-enriched data. Zero network calls.
+  Phase C (this module's _assess_batch_with_retry) — the actual Gemini API
+    call, wrapped in a real, deadline-aware timeout.
+
+Only Phase C used to be deadline-bounded; Phase B used to make its own live,
+unbounded eBay calls (in this project's earlier prompt-building code) which
+could alone exceed a whole search's deadline before Gemini was ever called.
+Splitting enrichment out into its own phase is what makes Phase C's existing
+timeout actually sufficient.
+"""
 
 from __future__ import annotations
 
 import concurrent.futures
 import os
 import time
-
-import requests
 
 from ai_providers.base import (
     _ASSESS_TOTAL_BUDGET_S,
@@ -17,12 +34,6 @@ from ai_providers.base import (
     _RETRY_BASE_DELAY,
     _SYSTEM_PROMPT,
     BaseAssessor,
-    _apply_garbage_overrides,
-    _apply_scam_override,
-    _apply_sports_kinect_override,
-    _build_deterministic_garbage,
-    _detect_broken_deal,
-    _detect_trash_title,
     _is_rate_limit_error,
     _is_transient_error,
     _parse_response,
@@ -31,19 +42,10 @@ from ai_providers.base import (
     extract_listed_game_prices,
     logger,
 )
+from ai_providers.enrichment import EnrichedDeal
 
 _GEMINI_REQUEST_TIMEOUT = 35
 _MODEL_NAME = "gemini-3.5-flash-lite"
-_MAX_IMAGES = 3
-_IMAGE_FETCH_TIMEOUT = 5
-# A batch of 5 deals × up to 3 images each is up to 15 image downloads.
-# Fetched sequentially (the original design) that's up to 15 × 5s = 75s in
-# the worst case — entirely unbounded by the batch's own deadline/timeout,
-# since it all happens before the API call (and its timeout) even starts.
-# That's large enough to plausibly eat most of a search's whole deadline on
-# just the FIRST batch, before it ever reaches Gemini — worth bounding with
-# real concurrency rather than raising a timeout number.
-_IMAGE_FETCH_MAX_WORKERS = 8
 _BATCH_DELAY_SECONDS = 4.5  # respect 15 RPM free-tier limit
 # How many batch calls may be in flight at once. Submissions are still paced
 # _BATCH_DELAY_SECONDS apart (bounding the *request-start* rate to the same
@@ -119,48 +121,22 @@ class GeminiAssessor(BaseAssessor):
         url = deal.get("url", "")
         if url and url in self._result_cache:
             return dict(self._result_cache[url])
-        # 1. Check deterministic rules — garbage first, then sports/Kinect, then scam.
-        broken = _detect_broken_deal(deal)
-        if broken:
-            return _build_deterministic_garbage("Garbage", 100, broken)
-        trash = _detect_trash_title(deal)
-        if trash:
-            return _build_deterministic_garbage("Garbage", 100, trash)
-        sr = _detect_sports_kinect_deal(deal)
-        if sr:
-            return {
-                "ai_deal_rating": "Avoid",
-                "ai_confidence_score": 100,
-                "ai_visual_findings": [],
-                "ai_red_flags": ["Automatically flagged — sports/Kinect content"],
-                "ai_fair_market_estimate": "",
-                "ai_itemized_resale_estimates": [],
-                "ai_estimated_total_cost": deal.get("price", 0) or 0,
-                "ai_estimated_gross_profit": 0,
-                "ai_verdict_summary": sr,
-                "ai_assessed": True,
-                "ai_potential_scam": False,
-                "ai_scam_warning": "",
-            }
-        scam = _detect_bundle_individual_sale_scam(deal)
-        if scam:
-            return {
-                "ai_deal_rating": "Avoid",
-                "ai_confidence_score": 100,
-                "ai_visual_findings": [],
-                "ai_red_flags": [],
-                "ai_fair_market_estimate": "",
-                "ai_itemized_resale_estimates": [],
-                "ai_estimated_total_cost": deal.get("price", 0) or 0,
-                "ai_estimated_gross_profit": 0,
-                "ai_verdict_summary": scam,
-                "ai_assessed": True,
-                "ai_potential_scam": True,
-                "ai_scam_warning": scam,
-            }
+        pre = self._try_deterministic_assessment(deal)
+        if pre is not None:
+            return pre
+        deadline = time.monotonic() + _ASSESS_TOTAL_BUDGET_S
         try:
-            contents = self._build_contents(deal)
-            response = self._client.models.generate_content(
+            enriched = self._enricher.enrich_deals([deal], deadline, fetch_images=self._images_supported)[0]
+            contents = self._build_contents(deal, enriched)
+            call_timeout = max(0.0, min(_GEMINI_REQUEST_TIMEOUT, deadline - time.monotonic()))
+            if self._timeout_executor is None:
+                # Sized to _BATCH_MAX_CONCURRENCY so a single-worker executor
+                # never silently serializes this against the batch path's
+                # own concurrent generate_content calls (see
+                # _assess_batch_with_retry's identical comment).
+                self._timeout_executor = concurrent.futures.ThreadPoolExecutor(max_workers=_BATCH_MAX_CONCURRENCY)
+            future = self._timeout_executor.submit(
+                self._client.models.generate_content,
                 model=self._model_name,
                 contents=contents,
                 config=self._types.GenerateContentConfig(
@@ -168,10 +144,14 @@ class GeminiAssessor(BaseAssessor):
                     temperature=0.2,
                 ),
             )
+            try:
+                response = future.result(timeout=call_timeout)
+            except concurrent.futures.TimeoutError:
+                future.cancel()
+                logger.error("GeminiAssessor: assess_deal timed out after %.0f s.", call_timeout)
+                return None
             assessment = _parse_response(response.text)
-            assessment = _apply_garbage_overrides(deal, assessment)
-            assessment = _apply_sports_kinect_override(deal, assessment)
-            assessment = _apply_scam_override(deal, assessment)
+            assessment = self._finalize_assessment(deal, assessment)
             if url:
                 self._result_cache[url] = dict(assessment)
             return assessment
@@ -199,19 +179,22 @@ class GeminiAssessor(BaseAssessor):
             # No caller-supplied deadline (e.g. a direct/standalone call outside
             # the Flask request cycle) — fall back to a fixed standalone budget.
             deadline = time.monotonic() + _ASSESS_TOTAL_BUDGET_S
-        # Counting the eBay price prefetch against the deadline too (it used
-        # to run before the clock even started) — a slow prefetch previously
-        # got a free pass on top of the assessment budget.
-        self._prefetch_ebay_prices_parallel(deals)
+
+        # Phase A: one concurrent, deadline-bounded pass over the WHOLE
+        # filtered deal set (not per Gemini sub-batch) — see
+        # ai_providers/enrichment.py. Everything from here on (Phase B/C)
+        # reads only the result; no more eBay/image network calls happen.
+        enriched_list = self._enricher.enrich_deals(deals, deadline, fetch_images=self._images_supported)
 
         batches = [deals[i : i + _BATCH_SIZE] for i in range(0, len(deals), _BATCH_SIZE)]
+        enriched_batches = [enriched_list[i : i + _BATCH_SIZE] for i in range(0, len(enriched_list), _BATCH_SIZE)]
         n_batches = len(batches)
         futures: list[concurrent.futures.Future | None] = [None] * n_batches
         # Batches run concurrently (bounded by _BATCH_MAX_CONCURRENCY) rather
         # than one at a time — see the constant's comment for why. Submission
         # (not completion) is still paced _BATCH_DELAY_SECONDS apart.
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(_BATCH_MAX_CONCURRENCY, n_batches)) as pool:
-            for batch_idx, batch in enumerate(batches):
+            for batch_idx, (batch, enriched_batch) in enumerate(zip(batches, enriched_batches, strict=True)):
                 if time.monotonic() >= deadline:
                     logger.warning(
                         "GeminiAssessor: deadline exhausted before submitting batch %d/%d; "
@@ -220,7 +203,7 @@ class GeminiAssessor(BaseAssessor):
                         n_batches,
                     )
                     break
-                futures[batch_idx] = pool.submit(self._assess_batch_with_retry, batch, deadline)
+                futures[batch_idx] = pool.submit(self._assess_batch_with_retry, batch, enriched_batch, deadline)
                 if batch_idx < n_batches - 1:
                     time.sleep(max(0.0, min(_BATCH_DELAY_SECONDS, deadline - time.monotonic())))
 
@@ -236,43 +219,20 @@ class GeminiAssessor(BaseAssessor):
                     batch_results = [None] * len(batch)
                 for deal, assessment in zip(batch, batch_results, strict=False):
                     if isinstance(assessment, dict):
-                        assessment = _apply_garbage_overrides(deal, assessment)
-                        assessment = _apply_sports_kinect_override(deal, assessment)
-                        assessment = _apply_scam_override(deal, assessment)
+                        assessment = self._finalize_assessment(deal, assessment)
                     results.append(assessment)
         return results
 
-    # ── Prompt construction (Gemini-specific — uses self._types.Part) ─────
+    # ── Prompt construction (Phase B — pure formatting, zero I/O) ──────────
 
-    def _fetch_image_parts_for_deals(self, deals: list[dict]) -> dict[int, list]:
-        """Fetch every deal's images concurrently.
+    def _format_deal_text(self, deal: dict, enriched: EnrichedDeal, *, header: str, description_limit: int) -> str:
+        """Format one deal's prompt text from already-enriched data.
 
-        Returns ``{deal_index: [Part, ...]}`` — each deal's own images stay
-        in their original order even though the underlying HTTP fetches run
-        concurrently and may complete in any order; a deal with no
-        successfully-fetched images is simply absent from the result.
+        Shared by both ``_build_contents`` (single-deal) and
+        ``_build_batch_contents`` (per-item, batch) — the only difference
+        between the two call sites is the header line and how much
+        description text is kept.
         """
-        if not self._images_supported:
-            return {}
-        jobs: list[tuple[int, str]] = [
-            (i, url) for i, deal in enumerate(deals) for url in (deal.get("image_urls") or [])[:_MAX_IMAGES]
-        ]
-        if not jobs:
-            return {}
-        results: dict[int, list] = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(_IMAGE_FETCH_MAX_WORKERS, len(jobs))) as pool:
-            # Submit in job order, then collect in that SAME order (not
-            # completion order) so each deal's image list stays correctly
-            # ordered — the pattern used throughout this module for
-            # concurrency without losing a meaningful original ordering.
-            futures = [(i, pool.submit(self._fetch_image_part, url)) for i, url in jobs]
-            for i, fut in futures:
-                part = fut.result()
-                if part is not None:
-                    results.setdefault(i, []).append(part)
-        return results
-
-    def _build_contents(self, deal: dict) -> list:
         title = deal.get("title", "Unknown")
         price = deal.get("price", "?")
         condition = deal.get("condition", "?")
@@ -282,8 +242,8 @@ class GeminiAssessor(BaseAssessor):
         seller_count = deal.get("seller_count", "")
         item_location = deal.get("item_location", "")
         listing_date = deal.get("listing_date", "")
-        prompt_lines = [
-            "Analyze this eBay listing:\n",
+        lines = [
+            header,
             f"Title: {title}",
             f"Price: €{price}",
             f"Shipping: {shipping}",
@@ -293,91 +253,49 @@ class GeminiAssessor(BaseAssessor):
             f"Item Location: {item_location}",
             f"Listing Date: {listing_date}",
         ]
-        # Bundle price enrichment
-        ebay_prices = self._fetch_ebay_prices_for_bundle(deal)
-        if not ebay_prices:
-            single_price = self._fetch_ebay_price_for_single_listing(deal)
-            if single_price is not None:
-                prompt_lines.append(f"\nFetched eBay Market Price: €{single_price:.2f}")
-        else:
-            prompt_lines.append(
+        priced = [e for e in enriched.bundle_prices if e.get("price_eur") is not None]
+        if priced:
+            lines.append(
                 "\nFetched eBay Prices:\n"
-                + "\n".join(
-                    f"  - {e['game']}: €{e['price_eur']:.2f} ({e['price_source']})"
-                    for e in ebay_prices
-                    if e.get("price_eur") is not None
-                )
+                + "\n".join(f"  - {e['game']}: €{e['price_eur']:.2f} ({e['price_source']})" for e in priced)
             )
-        # Image issues
+        elif enriched.single_price is not None:
+            lines.append(f"\nFetched eBay Market Price: €{enriched.single_price:.2f}")
         image_issues_line = self._format_image_issues_line(deal)
         if image_issues_line:
-            prompt_lines.append(image_issues_line)
-        # Extract individual game prices from description (Kleinanzeigen pattern)
+            lines.append(image_issues_line)
         listed_games = extract_listed_game_prices(description)
         if listed_games:
-            prompt_lines.append("\nGames listed in description:")
-            for name, pr in listed_games:
-                prompt_lines.append(f"  - {name}: €{pr:.2f}")
-        # Description (truncated)
+            lines.append(
+                "\nGames listed in description:\n" + "\n".join(f"  - {name}: €{pr:.2f}" for name, pr in listed_games)
+            )
         if description:
-            prompt_lines.append(f"\nDescription:\n{description[:1500]}")
-        text_prompt = "\n".join(prompt_lines)
+            lines.append(f"\nDescription:\n{description[:description_limit]}")
+        return "\n".join(lines)
+
+    def _build_contents(self, deal: dict, enriched: EnrichedDeal) -> list:
+        text_prompt = self._format_deal_text(
+            deal, enriched, header="Analyze this eBay listing:", description_limit=1500
+        )
         parts: list = [self._types.Part.from_text(text=text_prompt)]
-        parts.extend(self._fetch_image_parts_for_deals([deal]).get(0, []))
+        if self._images_supported:
+            for data, mime_type in enriched.images:
+                parts.append(self._types.Part.from_bytes(data=data, mime_type=mime_type))
         return parts
 
-    def _build_batch_contents(self, deals: list[dict]) -> list:
+    def _build_batch_contents(self, deals: list[dict], enriched_list: list[EnrichedDeal]) -> list:
         parts: list = []
         intro = (
             f"Below are {len(deals)} eBay listings to analyze. "
             "Return a JSON array of analysis objects, one per listing in order.\n"
         )
         parts.append(self._types.Part.from_text(text=intro))
-        # Fetch every deal's images up front, concurrently, instead of one
-        # URL at a time inside the loop below — see _IMAGE_FETCH_MAX_WORKERS'
-        # comment for why a sequential fetch here was a real latency bug.
-        image_parts_by_deal = self._fetch_image_parts_for_deals(deals)
-        for idx, deal in enumerate(deals, 1):
-            title = deal.get("title", "Unknown")
-            price = deal.get("price", "?")
-            condition = deal.get("condition", "?")
-            seller_rating = deal.get("seller_rating", "?")
-            shipping = deal.get("shipping", "?")
-            description = deal.get("description", "")
-            seller_count = deal.get("seller_count", "")
-            item_location = deal.get("item_location", "")
-            listing_date = deal.get("listing_date", "")
-            item_text = (
-                f"\n--- ITEM {idx} ---\n"
-                f"Title: {title}\n"
-                f"Price: €{price}\n"
-                f"Shipping: {shipping}\n"
-                f"Condition: {condition}\n"
-                f"Seller rating: {seller_rating}%\n"
-                f"Seller Count: {seller_count}\n"
-                f"Item Location: {item_location}\n"
-                f"Listing Date: {listing_date}\n"
-            )
-            listed_games = extract_listed_game_prices(description)
-            if listed_games:
-                item_text += "Games listed in description:\n"
-                for name, pr in listed_games:
-                    item_text += f"  - {name}: €{pr:.2f}\n"
-            item_text += f"Description:\n{description[:800]}\n"
-            ebay_prices = self._fetch_ebay_prices_for_bundle(deal)
-            if ebay_prices:
-
-                def _fmt(e):
-                    price = f"€{e['price_eur']:.2f}" if e.get("price_eur") is not None else "N/A"
-                    return f"  - {e['game']}: {price} ({e.get('price_source', '?')})"
-
-                prices_text = "\n".join(_fmt(e) for e in ebay_prices)
-                item_text += f"Fetched eBay Prices:\n{prices_text}\n"
-            image_issues_line = self._format_image_issues_line(deal)
-            if image_issues_line:
-                item_text += image_issues_line
+        for idx, (deal, enriched) in enumerate(zip(deals, enriched_list, strict=True), 1):
+            item_text = self._format_deal_text(deal, enriched, header=f"--- ITEM {idx} ---", description_limit=800)
             parts.append(self._types.Part.from_text(text=item_text))
-            parts.extend(image_parts_by_deal.get(idx - 1, []))
+            if self._images_supported:
+                for data, mime_type in enriched.images:
+                    parts.append(self._types.Part.from_bytes(data=data, mime_type=mime_type))
         parts.append(
             self._types.Part.from_text(
                 text=(
@@ -388,7 +306,11 @@ class GeminiAssessor(BaseAssessor):
         )
         return parts
 
-    def _assess_batch_with_retry(self, deals: list[dict], deadline: float | None = None) -> list[dict | None]:
+    # ── Phase C — the actual, deadline-timed Gemini API call ───────────────
+
+    def _assess_batch_with_retry(
+        self, deals: list[dict], enriched_batch: list[EnrichedDeal], deadline: float | None = None
+    ) -> list[dict | None]:
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES):
             if deadline is not None:
@@ -405,7 +327,7 @@ class GeminiAssessor(BaseAssessor):
             else:
                 call_timeout = _GEMINI_REQUEST_TIMEOUT
             try:
-                contents = self._build_batch_contents(deals)
+                contents = self._build_batch_contents(deals, enriched_batch)
                 t0 = time.monotonic()
                 if self._timeout_executor is None:
                     # Sized to _BATCH_MAX_CONCURRENCY: assess_deals_batch now
@@ -453,7 +375,7 @@ class GeminiAssessor(BaseAssessor):
                 ):
                     logger.info("GeminiAssessor: model %r is text-only — disabling images.", self._model_name)
                     self._images_supported = False
-                    return self._assess_batch_with_retry(deals, deadline)
+                    return self._assess_batch_with_retry(deals, enriched_batch, deadline)
                 if _is_rate_limit_error(exc):
                     delay = _parse_retry_delay(exc) or _DEFAULT_BACKOFF_SECONDS
                     _set_rate_limited_until(time.monotonic() + delay)
@@ -488,23 +410,3 @@ class GeminiAssessor(BaseAssessor):
                     return [None] * len(deals)
         logger.error("GeminiAssessor: All retries exhausted (batch of %d): %s", len(deals), last_exc)
         return [None] * len(deals)
-
-    def _fetch_image_part(self, url: str):
-        if self._types is None:
-            return None
-        try:
-            resp = requests.get(url, timeout=_IMAGE_FETCH_TIMEOUT)
-            resp.raise_for_status()
-            content_type = resp.headers.get("Content-Type", "image/jpeg")
-            mime_type = content_type.split(";")[0].strip()
-            return self._types.Part.from_bytes(data=resp.content, mime_type=mime_type)
-        except Exception as exc:
-            logger.debug("GeminiAssessor: Failed to fetch image %r: %s", url, exc)
-            return None
-
-
-# Re-export for backward compatibility (used by gemini_assessor.py shim)
-from ai_providers.base import (  # noqa: E402, F811
-    _detect_bundle_individual_sale_scam,
-    _detect_sports_kinect_deal,
-)

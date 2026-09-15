@@ -239,11 +239,36 @@ class TestSearch:
             deal = client._normalize_item(item)
             assert deal["condition"] == label, f"conditionId {cid} should map to {label}"
 
+    def test_normalize_item_condition_normalized_present(self, client):
+        """Every conditionId label maps to a known models.Condition value —
+        never a silent 'unknown' for a value the API itself defines."""
+        from models import Condition
 
-class TestGetMedianSoldPrice:
+        for cid in _CONDITION_ID_MAP:
+            item = {
+                "title": "Test",
+                "itemWebUrl": "http://ex.com",
+                "price": {"value": "10", "currency": "EUR"},
+                "conditionId": cid,
+            }
+            deal = client._normalize_item(item)
+            assert deal["condition_normalized"] != Condition.UNKNOWN, f"conditionId {cid} normalized to UNKNOWN"
+
+    def test_normalize_item_image_issues_present(self, client):
+        """image_issues is always present, matching the other two deal
+        sources' schema — [] when images exist, ["no_images"] otherwise."""
+        with_image = client._normalize_item(
+            {"title": "Test", "itemWebUrl": "http://ex.com", "image": {"imageUrl": "http://x/1.jpg"}}
+        )
+        assert with_image["image_issues"] == []
+        without_image = client._normalize_item({"title": "Test", "itemWebUrl": "http://ex.com"})
+        assert without_image["image_issues"] == ["no_images"]
+
+
+class TestGetLowestMarketPrice:
     def test_not_configured_returns_none(self):
         c = EbayApiClient()
-        price, source, errors = c.get_median_sold_price("test")
+        price, source, errors = c.get_lowest_market_price("test")
         assert price is None
         assert source == "none"
 
@@ -271,7 +296,7 @@ class TestGetMedianSoldPrice:
 
         with patch.object(client, "_get_access_token", mock_token):
             with patch.object(client.session, "get", side_effect=[mock_fail, mock_ok]):
-                price, source, errors = client.get_median_sold_price("Test Game Xbox 360")
+                price, source, errors = client.get_lowest_market_price("Test Game Xbox 360")
         assert price == 15.0
         assert source == "active_listings"
         assert len(errors) >= 1  # fallback warning

@@ -30,9 +30,6 @@ _BATCH_SIZE = 5
 _MAX_RETRIES = 2
 _RETRY_BASE_DELAY = 2.0
 _ASSESS_TOTAL_BUDGET_S = 145
-_EBAY_CACHE_TTL = 300.0
-_EBAY_PREFETCH_BUDGET_S = 15
-_EBAY_MAX_WORKERS = 5
 
 # Shared rate-limit state (module-level so all assessors share the same
 # gate when the user switches providers without restarting).
@@ -852,9 +849,16 @@ class BaseAssessor:
         self.enabled = bool(api_key)
         self.user_enabled: bool = True
         self._model_name: str = default_model
-        self._ebay_client: Any | None = None
-        self._ebay_price_cache: dict[str, tuple[float | None, str, float]] = {}
-        self._prefetch_executor: concurrent.futures.ThreadPoolExecutor | None = None
+        # Owns the eBay price cache and runs Phase A of assessment (see
+        # ai_providers/enrichment.py) — concurrent, deadline-bounded price
+        # lookups and image fetches, so Phase B (this class's content
+        # builders) never makes a network call of its own. Imported here
+        # (not at module level) because enrichment.py itself imports several
+        # pure text-helpers back out of this module — a module-level import
+        # in either direction would be circular.
+        from ai_providers.enrichment import Enricher
+
+        self._enricher = Enricher()
         self._timeout_executor: concurrent.futures.ThreadPoolExecutor | None = None
         # Subclass sets provider-specific client objects
         self._client = None
@@ -864,7 +868,7 @@ class BaseAssessor:
 
     def set_ebay_client(self, client: Any) -> None:
         """Register an :class:`EbayApiClient` for per-game price lookups."""
-        self._ebay_client = client
+        self._enricher.ebay_client = client
         logger.info("%s: eBay client registered.", type(self).__name__)
 
     # ── Properties ────────────────────────────────────────────────────────
@@ -934,45 +938,6 @@ class BaseAssessor:
             }
         return None
 
-    def _build_deal_text_prompt(self, deal: dict, *, description_limit: int = 1500, include_header: bool = True) -> str:
-        title = deal.get("title", "Unknown")
-        price = deal.get("price", "?")
-        condition = deal.get("condition", "?")
-        seller_rating = deal.get("seller_rating", "?")
-        shipping = deal.get("shipping", "?")
-        description = deal.get("description", "")
-        seller_count = deal.get("seller_count", "")
-        item_location = deal.get("item_location", "")
-        listing_date = deal.get("listing_date", "")
-        lines: list[str] = []
-        if include_header:
-            lines.append("Analyze this eBay listing:\n")
-        lines.extend(
-            [
-                f"Title: {title}",
-                f"Price: €{price}",
-                f"Shipping: {shipping}",
-                f"Condition: {condition}",
-                f"Seller rating: {seller_rating}%",
-                f"Seller Count: {seller_count}",
-                f"Item Location: {item_location}",
-                f"Listing Date: {listing_date}",
-            ]
-        )
-        ebay_prices = self._fetch_ebay_prices_for_bundle(deal)
-        if not ebay_prices:
-            single_price = self._fetch_ebay_price_for_single_listing(deal)
-            if single_price is not None:
-                lines.append(f"\nFetched eBay Market Price: €{single_price:.2f}")
-        else:
-            lines.append("\n" + self._format_ebay_prices_section(ebay_prices).rstrip())
-        image_issues_line = self._format_image_issues_line(deal)
-        if image_issues_line:
-            lines.append(image_issues_line.rstrip())
-        if description:
-            lines.append(f"\nDescription:\n{description[:description_limit]}")
-        return "\n".join(lines)
-
     def _finalize_assessment(self, deal: dict, assessment: dict) -> dict:
         assessment = _apply_garbage_overrides(deal, assessment)
         assessment = _apply_sports_kinect_override(deal, assessment)
@@ -996,158 +961,6 @@ class BaseAssessor:
         """
         raise NotImplementedError
 
-    # ── eBay price cache ──────────────────────────────────────────────────
-
-    def _cached_ebay_price(self, query: str) -> tuple[float | None, str] | None:
-        entry = self._ebay_price_cache.get(query)
-        if entry is None:
-            return None
-        price, source, expire_at = entry
-        if time.monotonic() >= expire_at:
-            del self._ebay_price_cache[query]
-            return None
-        return price, source
-
-    def _store_ebay_price_in_cache(self, query: str, price: float | None, source: str) -> None:
-        self._ebay_price_cache[query] = (price, source, time.monotonic() + _EBAY_CACHE_TTL)
-
-    def _collect_ebay_queries_for_deal(self, deal: dict) -> list[str]:
-        if self._ebay_client is None:
-            return []
-        title = deal.get("title", "")
-        if not _BUNDLE_TITLE_KEYWORDS_RE.search(title):
-            q = _build_single_game_search_query(title)
-            return [q] if q else []
-        game_titles = _extract_potential_game_titles(title)
-        platform = _extract_platform_name(title)
-        queries: list[str] = []
-        for game in game_titles:
-            q = f"{game} ({platform})" if platform else game
-            if len(q) >= 5:
-                queries.append(q)
-        return queries
-
-    def _prefetch_ebay_prices_parallel(self, deals: list[dict]) -> None:
-        if self._ebay_client is None:
-            return
-        if not deals:
-            return
-        all_queries: list[str] = []
-        seen: set = set()
-        for deal in deals:
-            for q in self._collect_ebay_queries_for_deal(deal):
-                if q not in seen:
-                    seen.add(q)
-                    all_queries.append(q)
-        if not all_queries:
-            return
-        uncached = [q for q in all_queries if self._cached_ebay_price(q) is None]
-        if not uncached:
-            return
-        logger.info(
-            "GeminiAssessor: eBay prefetch: %d unique queries (%d cached, %d to fetch, ≤%ds budget).",
-            len(all_queries),
-            len(all_queries) - len(uncached),
-            len(uncached),
-            _EBAY_PREFETCH_BUDGET_S,
-        )
-
-        # Bind to a local so the closure below (run from worker threads)
-        # can't observe self._ebay_client having changed to None after the
-        # guard above — and so it's typed as non-Optional, not just
-        # defensively try/excepted.
-        ebay_client = self._ebay_client
-
-        def _fetch_one(query: str) -> tuple[str, float | None, str]:
-            try:
-                price, source, _ = ebay_client.get_median_sold_price(query, max_results=10)
-                return query, price, source
-            except Exception as exc:
-                logger.warning("GeminiAssessor: eBay prefetch failed for %r: %s", query, exc)
-                return query, None, "no_result"
-
-        t0 = time.monotonic()
-        if self._prefetch_executor is None:
-            self._prefetch_executor = concurrent.futures.ThreadPoolExecutor(max_workers=_EBAY_MAX_WORKERS)
-        future_to_query = {self._prefetch_executor.submit(_fetch_one, q): q for q in uncached}
-        done, not_done = concurrent.futures.wait(future_to_query, timeout=_EBAY_PREFETCH_BUDGET_S)
-        for fut in done:
-            try:
-                query, price, source = fut.result()
-                self._store_ebay_price_in_cache(query, price, source)
-            except Exception as exc:
-                q = future_to_query[fut]
-                logger.warning("GeminiAssessor: eBay prefetch result error for %r: %s", q, exc)
-        if not_done:
-            logger.warning(
-                "GeminiAssessor: eBay prefetch budget (%.0fs) exhausted; %d/%d queries did not complete.",
-                _EBAY_PREFETCH_BUDGET_S,
-                len(not_done),
-                len(uncached),
-            )
-        elapsed = time.monotonic() - t0
-        found = sum(1 for q in all_queries if (self._cached_ebay_price(q) or (None,))[0] is not None)
-        logger.info(
-            "GeminiAssessor: eBay prefetch done in %.1fs: %d/%d prices found.",
-            elapsed,
-            found,
-            len(all_queries),
-        )
-
-    def _fetch_ebay_prices_for_bundle(self, deal: dict) -> list[dict]:
-        if self._ebay_client is None:
-            return []
-        title = deal.get("title", "")
-        if not _BUNDLE_TITLE_KEYWORDS_RE.search(title):
-            return []
-        game_titles = _extract_potential_game_titles(title)
-        if not game_titles:
-            return []
-        platform = _extract_platform_name(title)
-        results: list[dict] = []
-        for game in game_titles:
-            search_query = f"{game} ({platform})" if platform else game
-            cached = self._cached_ebay_price(search_query)
-            if cached is not None:
-                price, source = cached
-                errs: list[str] = []
-            else:
-                try:
-                    price, source, errs = self._ebay_client.get_median_sold_price(search_query, max_results=10)
-                except Exception as exc:
-                    logger.warning("GeminiAssessor: bundle price fetch failed for %r: %s", search_query, exc)
-                    price, source = None, "no_result"
-            if price is not None:
-                price_source = "ebay_sold" if source == "sold_listings" else "ebay_active"
-                results.append(
-                    {
-                        "game": game,
-                        "price_eur": round(price, 2),
-                        "price_source": price_source,
-                    }
-                )
-            else:
-                results.append({"game": game, "price_eur": None, "price_source": "no_result"})
-        return results
-
-    def _fetch_ebay_price_for_single_listing(self, deal: dict) -> float | None:
-        if self._ebay_client is None:
-            return None
-        title = deal.get("title", "")
-        query = _build_single_game_search_query(title)
-        if not query:
-            return None
-        cached = self._cached_ebay_price(query)
-        if cached is not None:
-            return cached[0]
-        try:
-            price, source, _ = self._ebay_client.get_median_sold_price(query, max_results=10)
-            self._store_ebay_price_in_cache(query, price, source)
-            return price
-        except Exception as exc:
-            logger.warning("GeminiAssessor: single-listing price fetch failed for %r: %s", query, exc)
-            return None
-
     @staticmethod
     def _format_image_issues_line(deal: dict) -> str:
         issues: list[str] = deal.get("image_issues", [])
@@ -1162,19 +975,6 @@ class BaseAssessor:
     @staticmethod
     def _parse_batch_response(text: str, expected_count: int) -> list[dict]:
         return _parse_batch_response(text, expected_count)
-
-    @staticmethod
-    def _format_ebay_prices_section(ebay_prices: list[dict]) -> str:
-        if not ebay_prices:
-            return ""
-        lines = ["Fetched eBay Prices:"]
-        for entry in ebay_prices:
-            game = entry.get("game", "?")
-            price = entry.get("price_eur")
-            src = entry.get("price_source", "?")
-            price_str = f"€{price:.2f}" if price is not None else "N/A"
-            lines.append(f"  - {game}: {price_str} ({src})")
-        return "\n".join(lines) + "\n"
 
 
 def extract_listed_game_prices(text: str) -> list[tuple[str, float]]:

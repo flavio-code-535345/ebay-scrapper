@@ -10,6 +10,8 @@ import time
 import requests
 from bs4 import BeautifulSoup
 
+from models import normalize_condition, parse_listing_date
+
 logger = logging.getLogger(__name__)
 
 _KLEINANZEIGEN_BASE = "https://www.kleinanzeigen.de"
@@ -158,7 +160,8 @@ class KleinanzeigenScraper:
             rating = self._extract_rating(article)
             condition = self._extract_condition(description, title)
             date_el = article.select_one('[class*="aditem-main--top--right"]') or article.select_one("[class*='date']")
-            listing_date = date_el.get_text(strip=True) if date_el else ""
+            listing_date_raw = date_el.get_text(strip=True) if date_el else ""
+            parsed_date = parse_listing_date(listing_date_raw, "kleinanzeigen")
 
             # Extract images from the article
             images = []
@@ -177,14 +180,21 @@ class KleinanzeigenScraper:
                 "title": title[:300],
                 "price": price,
                 "condition": condition,
+                "condition_normalized": normalize_condition(condition),
                 "seller_rating": rating,
                 "url": href,
-                "shipping": "VB" if is_vb else "",
+                # Kleinanzeigen doesn't expose real shipping-cost info on the
+                # search-results page — "shipping" stays empty rather than
+                # being overloaded with the price-negotiability flag (that
+                # used to live here as "VB"), which is a different concept
+                # and now has its own field below.
+                "shipping": "",
+                "shipping_note": "VB" if is_vb else "",
                 "is_trending": False,
                 "item_location": location,
                 "description": description[:2000],
                 "seller_count": "",
-                "listing_date": listing_date,
+                "listing_date": parsed_date.isoformat() if parsed_date else None,
                 "image_urls": images[:3],
                 "image_issues": [] if images else ["no_images"],
             }

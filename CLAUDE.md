@@ -65,31 +65,49 @@ the Docker multi-arch build/push step only runs on non-PR events (i.e. after mer
 6. Sort: "Must Have"/"Must Buy" first, then everything else, each group newest → oldest by `listing_date`.
 7. Persist the search + results via `database.save_search`.
 
-**Data source abstraction** — `EbayScraper` (HTML scraping, [scraper.py](scraper.py)) and `EbayApiClient`
-(OAuth2 Browse API, [ebay_api_client.py](ebay_api_client.py)) both expose
-`search(query, max_results) -> (deals, errors)` and normalize to the *same* deal dict schema
-(`title`, `price`, `condition`, `seller_rating`, `url`, `shipping`, `item_location`, `listing_date`,
-`description`, `seller_count`, …) so the rest of the app — assessors, database, frontend — is agnostic to
-which one produced a result. `KleinanzeigenScraper` ([kleinanzeigen_scraper.py](kleinanzeigen_scraper.py))
-follows the same contract and is optional (imported defensively; `app.py` runs without it).
+**Data source abstraction** — `EbayScraper` (HTML scraping, [scraper.py](scraper.py)), `EbayApiClient`
+(OAuth2 Browse API, [ebay_api_client.py](ebay_api_client.py)), and `KleinanzeigenScraper`
+([kleinanzeigen_scraper.py](kleinanzeigen_scraper.py), optional — imported defensively; `app.py` runs
+without it) all expose `search(query, max_results) -> (deals, errors)` and normalize to the same deal dict
+schema documented in [models.py](models.py) (`Deal` — `title`, `price`, `condition`,
+`condition_normalized`, `seller_rating`, `url`, `shipping`, `shipping_note`, `item_location`,
+`listing_date`, `description`, `seller_count`, …) so the rest of the app — assessors, database, frontend —
+is agnostic to which one produced a result. `condition_normalized` (`models.normalize_condition`) gives a
+cross-source-comparable value without touching the raw `condition` text/enum each source still populates
+as-is; `listing_date` is always a real ISO-8601 string or `None` (`models.parse_listing_date` — the HTML
+scraper's search-results page exposes no date at all, so it's always `None` there, never fabricated), which
+is what lets `models.sort_key_for_deal` sort dated deals newest-first ahead of undated ones within each
+rating tier instead of collapsing every undated deal below every dated one.
 
 **AI assessment layer (`ai_providers/`)** — `create_assessor()` ([ai_providers/__init__.py](ai_providers/__init__.py))
 is the sole entry point; it wires in the concrete provider (currently only `GeminiAssessor`,
 [ai_providers/gemini.py](ai_providers/gemini.py)). All AI-agnostic logic lives in
 `BaseAssessor` ([ai_providers/base.py](ai_providers/base.py)) — a new provider only needs to implement
-`assess_deal`/`assess_deals_batch` and reuse everything else:
+`assess_deal`/`assess_deals_batch` and reuse everything else. Assessment runs in three explicit phases so
+nothing network-bound is ever unbounded by the caller's `deadline`:
+- **Phase A — enrichment** ([ai_providers/enrichment.py](ai_providers/enrichment.py)'s `Enricher.enrich_deals`):
+  one concurrent, deadline-bounded pass fetching every eBay price lookup (bundle titles get one lookup per
+  extracted game via `EbayApiClient.get_lowest_market_price`, cached 5 minutes) and every image for the
+  *whole* filtered deal set at once — not per Gemini sub-batch. Whatever isn't done when its own budget runs
+  out (capped at `_ENRICH_MAX_BUDGET_S`, itself never more than half of whatever deadline remains) is simply
+  omitted; nothing here ever blocks past it.
+- **Phase B — content-building** (`GeminiAssessor._build_contents`/`_build_batch_contents`): pure formatting
+  over already-enriched data, zero network calls — this is what makes Phase C's deadline actually sufficient.
+  A past bug had bundle-price lookups running live and unbounded *inside* this phase (up to 8 sequential
+  calls per bundle listing), so a slow/uncached lookup could alone exceed a whole search's deadline before
+  Gemini was ever called — the actual root cause of "some listings never get an AI rating."
+- **Phase C — the API call** (`_assess_batch_with_retry`): a real `future.result(timeout=...)` bound to
+  `min(_GEMINI_REQUEST_TIMEOUT, deadline - now)`.
 - **Deterministic overrides always win over the AI's own rating**, applied by `_finalize_assessment`
   in this order: garbage/trash keywords → sports/Kinect keywords → bait-and-switch scam detection
   (`_apply_garbage_overrides` → `_apply_sports_kinect_override` → `_apply_scam_override`). Each can force
-  the rating to `"Garbage"` or `"Avoid"` regardless of what Gemini returned. Some of the same checks also
-  run *before* calling the AI at all via `_try_deterministic_assessment`, to skip the API call entirely
-  for obvious cases.
+  the rating to `"Garbage"` or `"Avoid"` regardless of what Gemini returned. The same checks also run
+  *before* calling the AI at all via `_try_deterministic_assessment` (one shared implementation used by
+  both the single-deal and batch paths), to skip the API call entirely for obvious cases.
 - Rating scale (from [prompts/system_prompt.txt](prompts/system_prompt.txt)): `Must Have` (profit ≥ cost,
   and *always* forced when a working item costs ≤ €2 total) → `Good` → `Okay` → `Avoid` → `Garbage`.
 - Bundle titles (matched via `_BUNDLE_TITLE_KEYWORDS_RE`: Sammlung/Konvolut/Paket/Lot/Bundle/…) get their
-  individual game titles extracted (`_extract_potential_game_titles`) and priced separately by querying
-  `EbayApiClient.get_median_sold_price` per game (parallel prefetch with a time budget, then cached for
-  5 minutes) so Gemini gets real per-game market prices instead of guessing.
+  individual game titles extracted (`_extract_potential_game_titles`) for Phase A's per-game price lookups.
 - `assess_deals_batch(deals, deadline=...)` treats `deadline` as an absolute `time.monotonic()` cutoff
   (checked before each batch is submitted and before each retry/timeout) rather than measuring its own
   elapsed time from an independent start — this way whatever's left of the caller's overall time budget,
@@ -107,8 +125,9 @@ is the sole entry point; it wires in the concrete provider (currently only `Gemi
   retries with bracket-matching heuristics, and falls back to `_DEFAULT_PARSE_ERROR` per item rather than
   failing the whole batch.
 
-**Persistence ([database.py](database.py))** — raw `sqlite3` (no ORM), WAL mode, one row per search and
-one row per deal (FK to search), plus a generic `settings` key/value table for runtime toggles
+**Persistence ([database.py](database.py))** — raw `sqlite3` (no ORM), WAL mode, indexed on
+`deals.search_id` and `deals.created_at`, one row per search and one row per deal (FK to search), plus a
+generic `settings` key/value table for runtime toggles
 (`ai_enabled`, `gemini_model`, `data_source`) that must survive across Gunicorn worker processes — hence
 `app.py` re-reads `ai_enabled`/`data_source` from the DB on every request rather than trusting in-memory
 state. Saved/skipped deals are separate tables keyed by URL; skipped URLs are filtered out of all future
@@ -120,8 +139,9 @@ search results.
 ## Conventions
 
 - Deal dicts flow untyped through the whole pipeline (scraper/API → filters → assessor → DB → JSON
-  response) — when adding a field, thread it through all four normalized producers (`EbayScraper`,
-  `EbayApiClient`, `KleinanzeigenScraper`) or code that reads it must treat it as optional.
+  response) — the canonical field reference is [models.py](models.py)'s `Deal` TypedDict; when adding a
+  field, thread it through all three deal-producing sources (`EbayScraper`, `EbayApiClient`,
+  `KleinanzeigenScraper`) or code that reads it must treat it as optional.
 - Regex-driven German/English keyword lists (trash titles, broken/defective terms, sports franchises,
   scam phrasing, platform names) live at module level in `ai_providers/base.py`, each documented with a
   short rationale — extend the existing `_..._RE` pattern rather than adding ad-hoc string checks.

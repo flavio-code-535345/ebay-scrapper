@@ -909,26 +909,11 @@ a:focus-visible,
     gap: 0.5rem;
 }
 
-.deal-score {
-    font-family: var(--font-mono);
-    font-size: 1.6rem;
-    font-weight: 700;
-    line-height: 1;
-    min-width: 2.8rem;
-    letter-spacing: -0.03em;
-}
-
 .deal-header-right {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
     gap: 0.3rem;
-}
-
-.deal-recommendation {
-    font-size: 0.72rem;
-    color: var(--muted);
-    text-align: right;
 }
 
 /* Age badge */
@@ -998,6 +983,13 @@ a:focus-visible,
     font-weight: 700;
     color: var(--accent);
     letter-spacing: -0.02em;
+}
+
+.price-negotiable {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--muted);
+    letter-spacing: normal;
 }
 
 /* Meta rows */
@@ -1302,37 +1294,6 @@ a:focus-visible,
     width: 100%;
     margin: 0;
     line-height: 1.4;
-}
-
-/* Score breakdown */
-.scores-breakdown {
-    border-top: 1px solid var(--border);
-    padding-top: 0.4rem;
-    margin-top: 0.3rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-}
-
-.score-row {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.72rem;
-    color: var(--muted);
-}
-
-.score-bar {
-    height: 3px;
-    background: var(--surface3);
-    border-radius: 2px;
-    overflow: hidden;
-}
-
-.score-fill {
-    height: 100%;
-    background: linear-gradient(90deg, var(--accent-dim), var(--accent));
-    border-radius: 2px;
-    transition: width 0.4s ease;
 }
 
 /* Deal footer */

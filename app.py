@@ -10,7 +10,6 @@ import logging
 import os
 import re
 import time
-from datetime import UTC, datetime
 
 from flask import Flask, Response, jsonify, render_template, request
 
@@ -18,6 +17,7 @@ import database
 from ai_providers import create_assessor
 from ai_providers.base import _SPORTS_KINECT_KEYWORDS_RE, _detect_sports_kinect_deal
 from ebay_api_client import _MARKETPLACE_LOCALE_MAP, EbayApiClient
+from models import sort_key_for_deal
 from scraper import EbayScraper
 
 try:
@@ -213,6 +213,12 @@ _SEARCH_MAX_WORKERS = 8
 # Override via SEARCH_DEADLINE_SECONDS for deployments without such a
 # proxy in front (or with a longer one) that want the fuller AI budget.
 _SEARCH_DEADLINE_S = int(os.environ.get("SEARCH_DEADLINE_SECONDS", "75"))
+
+# Cap on how many deals get sent to Gemini for AI assessment per search.
+_MAX_DISPLAY = 30
+
+# Gemini model names: alphanumeric, hyphens, underscores, and dots only.
+_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,99}$")
 
 
 def _merge_deal(
@@ -438,7 +444,6 @@ def search():
 
     # Cap deals before sending to Gemini — no score-based pre-filtering.
     # All deals that pass the post-filters above are eligible for AI assessment.
-    _MAX_DISPLAY = 30
     deals_filtered = deals[:_MAX_DISPLAY]
 
     # AI assessment via Gemini: send only the top filtered deals in a single
@@ -504,24 +509,10 @@ def search():
         ai_assessment = ai_assessments[i] if i < len(ai_assessments) else None
         assessed.append({**deal, **(ai_assessment or {})})
 
-    # Sort deals: "Must Have"/"Must Buy" first, then all others — both groups
-    # ordered newest → oldest by listing_date.
-    def _parse_listing_date(d: dict) -> datetime:
-        raw = d.get("listing_date") or ""
-        if not raw:
-            return datetime.min.replace(tzinfo=UTC)
-        try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            return datetime.min.replace(tzinfo=UTC)
-
-    def _sort_key(d: dict):
-        rating = (d.get("ai_deal_rating") or "").lower()
-        not_must_have = int(rating not in ("must have", "must buy"))  # 0 = must have first
-        date = _parse_listing_date(d)
-        return (not_must_have, -date.timestamp())
-
-    assessed.sort(key=_sort_key)
+    # Sort deals: "Must Have"/"Must Buy" first, then all others — within each
+    # group, deals with a known listing date sort newest → oldest, ahead of
+    # deals with no known date at all (see models.sort_key_for_deal).
+    assessed.sort(key=sort_key_for_deal)
 
     database.save_search(query, assessed)
 
@@ -552,7 +543,10 @@ def search():
 
 @app.route("/api/history")
 def history():
-    limit = int(request.args.get("limit", 20))
+    try:
+        limit = max(1, min(int(request.args.get("limit", 20)), 200))
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit must be a positive integer"}), 400
     return jsonify(database.get_history(limit))
 
 
@@ -623,13 +617,9 @@ def get_settings():
 
 @app.route("/api/settings", methods=["POST"])
 def update_settings():
-    global assessor
     data = request.get_json(silent=True)
     if data is None:
         return jsonify({"error": "Request body must be valid JSON with Content-Type: application/json"}), 400
-
-    # Gemini model names: alphanumeric, hyphens, underscores, and dots only.
-    _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,99}$")
 
     errors = {}
     updated = {}

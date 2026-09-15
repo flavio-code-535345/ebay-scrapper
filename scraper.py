@@ -14,6 +14,8 @@ import time
 import requests
 from bs4 import BeautifulSoup
 
+from models import normalize_condition
+
 logger = logging.getLogger(__name__)
 
 # German condition keywords used on ebay.de for best-effort text matching
@@ -79,11 +81,6 @@ _TITLE_NOISE_PHRASES = frozenset(
         "top-bewerteter anbieter",
     }
 )
-
-# Regex that matches eBay CDN image URL size codes indicating very low resolution
-# (below 230 px wide) – e.g. ``s-l140``, ``s-l225``.  These are often placeholder
-# thumbnails rather than real product shots.
-_LOW_RES_URL_RE = re.compile(r"s-l(1[0-9]{2}|2[0-2][0-9])\b")
 
 
 class EbayScraper:
@@ -377,6 +374,7 @@ class EbayScraper:
                 "title": title,
                 "price": price,
                 "condition": condition,
+                "condition_normalized": normalize_condition(condition),
                 "seller_rating": seller_rating,
                 "url": item_url,
                 "shipping": shipping,
@@ -386,6 +384,10 @@ class EbayScraper:
                 "item_location": item_location,
                 "image_urls": image_urls,
                 "image_issues": image_issues,
+                # eBay's search-results page exposes no listing date at all —
+                # never fabricate one (see models.parse_listing_date, source
+                # "scraper", which always returns None for the same reason).
+                "listing_date": None,
                 "timestamp": time.time(),
             }
 
@@ -661,69 +663,3 @@ class EbayScraper:
             return 0.0
         except Exception:
             return 0.0
-
-    def get_item_details(self, item_url: str) -> dict:
-        """Fetch detailed information about specific item"""
-        try:
-            response = self.session.get(item_url, headers=self.headers, timeout=10)
-            logger.info("get_item_details HTTP %d %s", response.status_code, response.reason)
-            response.raise_for_status()
-
-            soup = BeautifulSoup(response.content, "html.parser")
-
-            details = {
-                "views": self._extract_views(soup),
-                "watchers": self._extract_watchers(soup),
-                "sold_count": self._extract_sold_count(soup),
-                "time_listed": self._extract_time_listed(soup),
-            }
-
-            time.sleep(random.uniform(1, 2))
-            return details
-
-        except Exception as exc:
-            logger.error("Error getting item details: %s", exc, exc_info=True)
-            return {}
-
-    def _extract_views(self, soup) -> int:
-        """Extract view count from item page"""
-        try:
-            views_elem = soup.find("span", string=lambda s: s and "views" in s.lower())
-            if views_elem:
-                count = views_elem.text.split()[0].replace(",", "")
-                return int(count)
-        except Exception:
-            pass
-        return 0
-
-    def _extract_watchers(self, soup) -> int:
-        """Extract watcher count from item page"""
-        try:
-            watchers_elem = soup.find("span", string=lambda s: s and "watchers" in s.lower())
-            if watchers_elem:
-                count = watchers_elem.text.split()[0].replace(",", "")
-                return int(count)
-        except Exception:
-            pass
-        return 0
-
-    def _extract_sold_count(self, soup) -> int:
-        """Extract sold count from item page"""
-        try:
-            sold_elem = soup.find("span", string=lambda s: s and "sold" in s.lower())
-            if sold_elem:
-                count = sold_elem.text.split()[0].replace(",", "")
-                return int(count)
-        except Exception:
-            pass
-        return 0
-
-    def _extract_time_listed(self, soup) -> str:
-        """Extract when item was listed"""
-        try:
-            time_elem = soup.find("span", string=lambda s: s and "listed" in s.lower())
-            if time_elem:
-                return time_elem.text.strip()
-        except Exception:
-            pass
-        return "Unknown"
