@@ -15,7 +15,6 @@ import pytest
 from ai_providers.base import (
     _ASSESS_TOTAL_BUDGET_S,
     _BATCH_SIZE,
-    _EBAY_PREFETCH_BUDGET_S,
     _apply_scam_override,
     _apply_sports_kinect_override,
     _build_single_game_search_query,
@@ -25,6 +24,7 @@ from ai_providers.base import (
     _extract_potential_game_titles,
     _is_aggregate_placeholder,
 )
+from ai_providers.enrichment import _ENRICH_MAX_BUDGET_S, EnrichedDeal, Enricher, _query_jobs_for_deal
 from ai_providers.gemini import _GEMINI_REQUEST_TIMEOUT, GeminiAssessor
 
 # ---------------------------------------------------------------------------
@@ -909,22 +909,19 @@ class TestParseBatchResponseGoodMustHave:
 
 
 class TestEbayPriceCache:
-    """Tests for the in-memory eBay price cache helpers."""
-
-    def _make_assessor(self):
-        """Return a GeminiAssessor instance (no API key needed for cache tests)."""
-        return GeminiAssessor()
+    """Tests for Enricher's in-memory eBay price cache (moved out of the
+    assessor itself as part of splitting network I/O into its own phase)."""
 
     def test_cache_miss_returns_none(self):
-        """A fresh assessor returns None for any query."""
-        a = self._make_assessor()
-        assert a._cached_ebay_price("Halo 3 (Microsoft Xbox 360)") is None
+        """A fresh Enricher returns None for any query."""
+        e = Enricher()
+        assert e._cached_price("Halo 3 (Microsoft Xbox 360)") is None
 
     def test_store_and_retrieve(self):
         """Stored price is returned on the next lookup."""
-        a = self._make_assessor()
-        a._store_ebay_price_in_cache("Halo 3 (Microsoft Xbox 360)", 12.50, "sold_listings")
-        result = a._cached_ebay_price("Halo 3 (Microsoft Xbox 360)")
+        e = Enricher()
+        e._store_price("Halo 3 (Microsoft Xbox 360)", 12.50, "sold_listings")
+        result = e._cached_price("Halo 3 (Microsoft Xbox 360)")
         assert result is not None
         price, source = result
         assert price == pytest.approx(12.50)
@@ -932,9 +929,9 @@ class TestEbayPriceCache:
 
     def test_store_none_price_is_cached(self):
         """A None price (no eBay result) is also cached to avoid retrying."""
-        a = self._make_assessor()
-        a._store_ebay_price_in_cache("Unknown Game (Nintendo Switch)", None, "no_result")
-        result = a._cached_ebay_price("Unknown Game (Nintendo Switch)")
+        e = Enricher()
+        e._store_price("Unknown Game (Nintendo Switch)", None, "no_result")
+        result = e._cached_price("Unknown Game (Nintendo Switch)")
         assert result is not None
         price, source = result
         assert price is None
@@ -944,112 +941,93 @@ class TestEbayPriceCache:
         """Cache entries are evicted when their TTL has elapsed."""
         import time as _time
 
-        a = self._make_assessor()
-        a._store_ebay_price_in_cache("God of War (Sony PlayStation 4)", 20.0, "active_listings")
+        e = Enricher()
+        e._store_price("God of War (Sony PlayStation 4)", 20.0, "active_listings")
         # Manually expire the entry by backdating its timestamp.
         query = "God of War (Sony PlayStation 4)"
-        price, source, expire_at = a._ebay_price_cache[query]
-        a._ebay_price_cache[query] = (price, source, _time.monotonic() - 1.0)
-        assert a._cached_ebay_price(query) is None
+        price, source, expire_at = e._price_cache[query]
+        e._price_cache[query] = (price, source, _time.monotonic() - 1.0)
+        assert e._cached_price(query) is None
         # Evicted entry should be removed from the dict.
-        assert query not in a._ebay_price_cache
+        assert query not in e._price_cache
 
     def test_separate_queries_do_not_collide(self):
         """Different queries are stored and retrieved independently."""
-        a = self._make_assessor()
-        a._store_ebay_price_in_cache("Halo 3 (Microsoft Xbox 360)", 12.0, "sold_listings")
-        a._store_ebay_price_in_cache("Zelda (Nintendo Switch)", 35.0, "active_listings")
-        r1 = a._cached_ebay_price("Halo 3 (Microsoft Xbox 360)")
-        r2 = a._cached_ebay_price("Zelda (Nintendo Switch)")
+        e = Enricher()
+        e._store_price("Halo 3 (Microsoft Xbox 360)", 12.0, "sold_listings")
+        e._store_price("Zelda (Nintendo Switch)", 35.0, "active_listings")
+        r1 = e._cached_price("Halo 3 (Microsoft Xbox 360)")
+        r2 = e._cached_price("Zelda (Nintendo Switch)")
         assert r1 is not None and r1[0] == pytest.approx(12.0)
         assert r2 is not None and r2[0] == pytest.approx(35.0)
 
 
 # ---------------------------------------------------------------------------
-# _collect_ebay_queries_for_deal
+# _query_jobs_for_deal — pure computation, no I/O
 # ---------------------------------------------------------------------------
 
 
-class TestCollectEbayQueriesForDeal:
-    """Tests for the per-deal query-collection helper."""
-
-    def _make_assessor_with_client(self):
-        a = GeminiAssessor()
-        # Provide a mock eBay client so the method knows to collect queries.
-        a._ebay_client = object()
-        return a
+class TestQueryJobsForDeal:
+    """Tests for the pure per-deal eBay-query-job builder."""
 
     def test_single_game_xbox360(self):
         """Single-game Xbox 360 listing produces a 'GAME (Microsoft Xbox 360)' query."""
-        a = self._make_assessor_with_client()
-        deal = {"title": "Halo 3 Xbox 360 gebraucht"}
-        queries = a._collect_ebay_queries_for_deal(deal)
-        assert len(queries) == 1
-        assert queries[0].endswith("(Microsoft Xbox 360)")
-        assert "Halo" in queries[0]
+        is_bundle, jobs = _query_jobs_for_deal({"title": "Halo 3 Xbox 360 gebraucht"})
+        assert is_bundle is False
+        assert len(jobs) == 1
+        _label, query = jobs[0]
+        assert query.endswith("(Microsoft Xbox 360)")
+        assert "Halo" in query
 
     def test_single_game_ps4(self):
         """Single-game PS4 listing produces a 'GAME (Sony PlayStation 4)' query."""
-        a = self._make_assessor_with_client()
-        deal = {"title": "God of War PS4"}
-        queries = a._collect_ebay_queries_for_deal(deal)
-        assert len(queries) == 1
-        assert "(Sony PlayStation 4)" in queries[0]
+        is_bundle, jobs = _query_jobs_for_deal({"title": "God of War PS4"})
+        assert is_bundle is False
+        assert len(jobs) == 1
+        assert "(Sony PlayStation 4)" in jobs[0][1]
 
     def test_bundle_produces_multiple_queries(self):
-        """Bundle listing produces one query per extracted game title."""
-        a = self._make_assessor_with_client()
-        deal = {"title": "Xbox 360 Bundle: Halo 3, Gears of War, Mass Effect"}
-        queries = a._collect_ebay_queries_for_deal(deal)
-        # Should have at least 2 game queries
-        assert len(queries) >= 2
-        # Every query should include the platform
-        for q in queries:
+        """Bundle listing produces one (game, query) job per extracted title."""
+        is_bundle, jobs = _query_jobs_for_deal({"title": "Xbox 360 Bundle: Halo 3, Gears of War, Mass Effect"})
+        assert is_bundle is True
+        assert len(jobs) >= 2
+        for _label, q in jobs:
             assert "(Microsoft Xbox 360)" in q
 
-    def test_bundle_no_titles_returns_empty(self):
-        """Bundle keyword present but no extractable titles → empty list."""
-        a = self._make_assessor_with_client()
-        deal = {"title": "10 Xbox 360 Spiele Sammlung Lot"}
-        queries = a._collect_ebay_queries_for_deal(deal)
-        # Either empty or only platform-free generic words
-        for q in queries:
-            # Should not be a bare platform keyword alone
+    def test_bundle_no_titles_falls_back_to_single_listing(self):
+        """A bundle-keyword title with no extractable game names falls back to
+        treating the whole title as one single-listing query — matching the
+        original behavior (empty bundle_prices used to trigger a single-
+        listing price fetch on the whole title instead)."""
+        assert _extract_potential_game_titles("Xbox 360 Konvolut") == []  # sanity-check the premise
+        is_bundle, jobs = _query_jobs_for_deal({"title": "Xbox 360 Konvolut"})
+        assert is_bundle is False
+        for _label, q in jobs:
             assert len(q.strip()) >= 3
 
-    def test_no_ebay_client_returns_empty(self):
-        """Returns empty list when no eBay client is registered."""
-        a = GeminiAssessor()
-        a._ebay_client = None
-        deal = {"title": "Halo 3 Xbox 360"}
-        assert a._collect_ebay_queries_for_deal(deal) == []
-
     def test_empty_title_returns_empty(self):
-        """Empty title returns empty list."""
-        a = self._make_assessor_with_client()
-        assert a._collect_ebay_queries_for_deal({"title": ""}) == []
+        _is_bundle, jobs = _query_jobs_for_deal({"title": ""})
+        assert jobs == []
 
     def test_missing_title_returns_empty(self):
-        """Missing title key returns empty list."""
-        a = self._make_assessor_with_client()
-        assert a._collect_ebay_queries_for_deal({}) == []
+        _is_bundle, jobs = _query_jobs_for_deal({})
+        assert jobs == []
 
 
 # ---------------------------------------------------------------------------
-# _prefetch_ebay_prices_parallel
+# Enricher.enrich_deals — price lookups
 # ---------------------------------------------------------------------------
 
 
-class TestPrefetchEbayPricesParallel:
-    """Tests for the parallel eBay price pre-fetcher."""
+class TestEnricherPriceLookups:
+    """Tests for Enricher.enrich_deals's eBay price-lookup half."""
 
-    def _make_assessor_with_mock_client(self, price_map=None):
-        """Return a GeminiAssessor with a mock eBay client.
+    def _make_enricher_with_mock_client(self, price_map=None):
+        """Return an Enricher with a mock eBay client.
 
         *price_map* maps query substrings to (price, source) tuples so tests
         can simulate different eBay API outcomes.
         """
-        a = GeminiAssessor()
         price_map = price_map or {}
 
         def _mock_get_median(query, max_results=10):
@@ -1060,32 +1038,25 @@ class TestPrefetchEbayPricesParallel:
 
         mock_client = mock.MagicMock()
         mock_client.get_median_sold_price.side_effect = _mock_get_median
-        a._ebay_client = mock_client
-        return a
+        e = Enricher()
+        e.ebay_client = mock_client
+        return e
 
-    def test_populates_cache_for_single_game_deal(self):
-        """Pre-fetch populates the cache for a single-game deal."""
-        a = self._make_assessor_with_mock_client({"Halo": (12.0, "sold_listings")})
-        deals = [{"title": "Halo 3 Xbox 360"}]
-        a._prefetch_ebay_prices_parallel(deals)
-        # Cache should now have a Halo 3 entry.
-        found = any(a._cached_ebay_price(q) is not None for q in a._collect_ebay_queries_for_deal(deals[0]))
-        assert found, "Expected Halo 3 price to be in cache after prefetch"
+    def test_populates_single_price_for_single_game_deal(self):
+        e = self._make_enricher_with_mock_client({"Halo": (12.0, "sold_listings")})
+        results = e.enrich_deals([{"title": "Halo 3 Xbox 360"}], deadline=time.monotonic() + 5)
+        assert results[0].single_price == pytest.approx(12.0)
 
-    def test_populates_cache_for_bundle_deal(self):
-        """Pre-fetch populates cache entries for games in a bundle listing."""
-        a = self._make_assessor_with_mock_client(
+    def test_populates_bundle_prices_for_bundle_deal(self):
+        e = self._make_enricher_with_mock_client(
             {
                 "Halo": (12.0, "sold_listings"),
                 "Gears": (9.0, "sold_listings"),
             }
         )
-        deals = [{"title": "Xbox 360 Bundle: Halo 3, Gears of War"}]
-        a._prefetch_ebay_prices_parallel(deals)
-        queries = a._collect_ebay_queries_for_deal(deals[0])
-        assert len(queries) >= 1
-        # At least one game should be cached.
-        assert any(a._cached_ebay_price(q) is not None for q in queries)
+        results = e.enrich_deals([{"title": "Xbox 360 Bundle: Halo 3, Gears of War"}], deadline=time.monotonic() + 5)
+        assert len(results[0].bundle_prices) >= 1
+        assert any(g["price_eur"] is not None for g in results[0].bundle_prices)
 
     def test_deduplicates_queries_across_deals(self):
         """Same game appearing in multiple deals triggers only one eBay call."""
@@ -1095,53 +1066,76 @@ class TestPrefetchEbayPricesParallel:
             call_count["n"] += 1
             return 10.0, "sold_listings", []
 
-        a = GeminiAssessor()
+        e = Enricher()
         mock_client = mock.MagicMock()
         mock_client.get_median_sold_price.side_effect = _mock_get_median
-        a._ebay_client = mock_client
+        e.ebay_client = mock_client
 
         # Two deals with the same title → same query → should deduplicate.
-        deals = [
-            {"title": "Halo 3 Xbox 360"},
-            {"title": "Halo 3 Xbox 360"},
-        ]
-        a._prefetch_ebay_prices_parallel(deals)
+        deals = [{"title": "Halo 3 Xbox 360"}, {"title": "Halo 3 Xbox 360"}]
+        e.enrich_deals(deals, deadline=time.monotonic() + 5)
         assert call_count["n"] == 1, "Duplicate queries should only be fetched once"
 
     def test_uses_cache_on_second_call(self):
-        """A second prefetch for the same deals does not make any eBay API calls."""
+        """A second enrich_deals call for the same deals makes no new eBay API calls."""
         call_count = {"n": 0}
 
         def _mock_get_median(query, max_results=10):
             call_count["n"] += 1
             return 10.0, "sold_listings", []
 
-        a = GeminiAssessor()
+        e = Enricher()
         mock_client = mock.MagicMock()
         mock_client.get_median_sold_price.side_effect = _mock_get_median
-        a._ebay_client = mock_client
+        e.ebay_client = mock_client
 
         deals = [{"title": "Halo 3 Xbox 360"}]
-        a._prefetch_ebay_prices_parallel(deals)
+        e.enrich_deals(deals, deadline=time.monotonic() + 5)
         first_count = call_count["n"]
-        a._prefetch_ebay_prices_parallel(deals)
-        assert call_count["n"] == first_count, "Second prefetch should hit cache, not call eBay again"
+        e.enrich_deals(deals, deadline=time.monotonic() + 5)
+        assert call_count["n"] == first_count, "Second call should hit cache, not call eBay again"
 
-    def test_no_ebay_client_is_noop(self):
-        """When no eBay client is registered the method returns without error."""
-        a = GeminiAssessor()
-        a._ebay_client = None
-        deals = [{"title": "Halo 3 Xbox 360"}]
-        a._prefetch_ebay_prices_parallel(deals)  # Should not raise
+    def test_no_ebay_client_returns_no_prices(self):
+        """When no eBay client is registered, enrichment still succeeds — just
+        with no price data — rather than raising."""
+        e = Enricher()
+        results = e.enrich_deals([{"title": "Halo 3 Xbox 360"}], deadline=time.monotonic() + 5)
+        assert results[0].single_price is None
+        assert results[0].bundle_prices == []
 
     def test_failed_ebay_call_does_not_raise(self):
         """A failing eBay API call is silently absorbed; the cache is not poisoned."""
-        a = GeminiAssessor()
+        e = Enricher()
         mock_client = mock.MagicMock()
         mock_client.get_median_sold_price.side_effect = RuntimeError("connection refused")
-        a._ebay_client = mock_client
-        deals = [{"title": "Halo 3 Xbox 360"}]
-        a._prefetch_ebay_prices_parallel(deals)  # Should not raise
+        e.ebay_client = mock_client
+        e.enrich_deals([{"title": "Halo 3 Xbox 360"}], deadline=time.monotonic() + 5)  # Should not raise
+
+    def test_slow_uncached_price_lookups_respect_the_deadline(self):
+        """The actual bug this rewrite fixes: a bundle listing with several
+        extractable game titles used to trigger SEQUENTIAL, blocking,
+        non-deadline-aware eBay calls inside content-building — enough of
+        them could alone burn more time than a whole search's deadline,
+        before Gemini was ever called. Here, 5 uncached queries each taking
+        2s (10s if still sequential) must not make enrich_deals itself run
+        anywhere near that long."""
+
+        def _slow_get_median(query, max_results=10):
+            time.sleep(2.0)
+            return 10.0, "sold_listings", []
+
+        e = Enricher()
+        mock_client = mock.MagicMock()
+        mock_client.get_median_sold_price.side_effect = _slow_get_median
+        e.ebay_client = mock_client
+
+        deal = {"title": "Xbox 360 Konvolut: Halo 3, Gears of War, Mass Effect, Fable 2, Dead Space"}
+        deadline = time.monotonic() + 3
+        t0 = time.monotonic()
+        e.enrich_deals([deal], deadline)
+        elapsed = time.monotonic() - t0
+
+        assert elapsed < 4.0, f"enrich_deals blocked past its deadline (took {elapsed:.2f}s)"
 
 
 # ---------------------------------------------------------------------------
@@ -1168,9 +1162,10 @@ class TestBatchTimeoutConstants:
         assert _GEMINI_REQUEST_TIMEOUT < _ASSESS_TOTAL_BUDGET_S
 
     def test_total_budget_leaves_gunicorn_headroom(self):
-        """eBay pre-fetch + total Gemini budget must stay below Gunicorn timeout."""
-        assert _EBAY_PREFETCH_BUDGET_S + _ASSESS_TOTAL_BUDGET_S < self._GUNICORN_TIMEOUT, (
-            "Combined eBay prefetch + Gemini budget exceeds Gunicorn worker timeout"
+        """Enrichment's own budget ceiling + total Gemini budget must stay
+        below the Gunicorn timeout."""
+        assert _ENRICH_MAX_BUDGET_S + _ASSESS_TOTAL_BUDGET_S < self._GUNICORN_TIMEOUT, (
+            "Combined enrichment + Gemini budget exceeds Gunicorn worker timeout"
         )
 
 
@@ -1190,7 +1185,6 @@ class TestAssessDealsBatchDeadline:
         a = GeminiAssessor()
         a.enabled = True
         a.user_enabled = True
-        a._ebay_client = None  # skip the price-prefetch step entirely
         a._client = mock.MagicMock()
         a._types = types  # real (network-free) request-builder classes
         return a
@@ -1230,8 +1224,9 @@ class TestAssessDealsBatchDeadline:
         ]
         deadline = time.monotonic() + 30  # plenty of time for both attempts
         deals = [{"title": "Game", "url": "http://x/1"}]
+        enriched_batch = [EnrichedDeal()]
         with mock.patch.object(a, "_assess_batch_with_retry", wraps=a._assess_batch_with_retry) as spy:
-            results = a._assess_batch_with_retry(deals, deadline)
+            results = a._assess_batch_with_retry(deals, enriched_batch, deadline)
         assert results == [None]
         assert a._images_supported is False
         # Called twice: the original attempt, then the images-disabled retry.
@@ -1239,7 +1234,46 @@ class TestAssessDealsBatchDeadline:
         # Both calls — including the recursive one — must carry the same
         # deadline rather than it being silently dropped.
         for call in spy.call_args_list:
-            assert call.args[1] == deadline
+            assert call.args[2] == deadline
+
+    def test_slow_uncached_bundle_price_lookups_do_not_starve_the_batch(self):
+        """The actual triggering bug, reproduced end-to-end and proven fixed:
+        a bundle listing with several extractable game titles used to
+        trigger SEQUENTIAL, blocking, non-deadline-aware eBay price lookups
+        inside content-building — enough of them could alone burn more time
+        than the whole batch's deadline, before Gemini was ever called. Here
+        a real (mocked, slow) eBay client with 5 uncached queries (10s if
+        still sequential) must not prevent the batch from completing well
+        within its deadline, and the Gemini call must still happen."""
+        a = self._make_enabled_assessor()
+        mock_client = mock.MagicMock()
+
+        def _slow_get_median(query, max_results=10):
+            time.sleep(2.0)
+            return 10.0, "sold_listings", []
+
+        mock_client.get_median_sold_price.side_effect = _slow_get_median
+        a._enricher.ebay_client = mock_client
+
+        def fast_generate_content(*, model, contents, config):
+            resp = mock.MagicMock()
+            resp.text = json.dumps([{"deal_rating": "Okay"}] * 1)
+            return resp
+
+        a._client.models.generate_content.side_effect = fast_generate_content
+
+        deal = {
+            "title": "Xbox 360 Konvolut: Halo 3, Gears of War, Mass Effect, Fable 2, Dead Space",
+            "url": "http://x/1",
+        }
+        deadline = time.monotonic() + 4
+        t0 = time.monotonic()
+        results = a.assess_deals_batch([deal], deadline=deadline)
+        elapsed = time.monotonic() - t0
+
+        assert elapsed < 5.0, f"batch was starved by slow price lookups (took {elapsed:.2f}s)"
+        assert results[0] is not None
+        a._client.models.generate_content.assert_called()
 
     def test_batches_run_concurrently_not_sequentially(self, monkeypatch):
         """Empirical proof batches overlap in flight instead of running one
@@ -1272,46 +1306,42 @@ class TestAssessDealsBatchDeadline:
 
 
 # ---------------------------------------------------------------------------
-# _fetch_image_parts_for_deals — regression tests for a real latency bug: a
-# batch's images (up to 3 per deal x 5 deals = 15) used to be fetched one at
-# a time inside _build_batch_contents, entirely unbounded by the batch's own
-# deadline/timeout since it all happened before the API call even started.
-# Worst case (15 x the 5s per-image timeout = 75s) was large enough to eat
-# most of a search's whole deadline on a single batch before it ever reached
-# Gemini — surfacing in production as specific batches (whichever one drew
-# the slow-to-fetch images) coming back with no rating at all.
+# Enricher.enrich_deals — image fetching. Regression tests for a real
+# latency bug: a batch's images (up to 3 per deal x 5 deals = 15) used to be
+# fetched one at a time inside _build_batch_contents, entirely unbounded by
+# the batch's own deadline/timeout since it all happened before the API call
+# even started. Worst case (15 x the 5s per-image timeout = 75s) was large
+# enough to eat most of a search's whole deadline on a single batch before
+# it ever reached Gemini — surfacing in production as specific batches
+# (whichever one drew the slow-to-fetch images) coming back with no rating
+# at all. Image fetching now happens inside Enricher.enrich_deals, for the
+# WHOLE filtered deal set at once, not per Gemini sub-batch.
 # ---------------------------------------------------------------------------
 
 
-class TestFetchImagePartsForDeals:
-    def _make_assessor(self):
-        a = GeminiAssessor()
-        a._images_supported = True
-        return a
-
+class TestEnricherImageFetching:
     def test_fetches_concurrently_not_sequentially(self):
         """15 images (5 deals x 3 each), each taking 0.2s, must finish in
         well under the 3.0s a fully sequential fetch would take."""
-        a = self._make_assessor()
+        e = Enricher()
         deals = [{"image_urls": [f"http://x/{i}-{j}.jpg" for j in range(3)]} for i in range(5)]
 
         def slow_fetch(url):
             time.sleep(0.2)
-            return f"part:{url}"
+            return (f"bytes:{url}".encode(), "image/jpeg")
 
-        with mock.patch.object(a, "_fetch_image_part", side_effect=slow_fetch):
+        with mock.patch.object(e, "_fetch_one_image", side_effect=slow_fetch):
             t0 = time.monotonic()
-            result = a._fetch_image_parts_for_deals(deals)
+            results = e.enrich_deals(deals, deadline=time.monotonic() + 5)
             elapsed = time.monotonic() - t0
 
-        assert len(result) == 5
+        assert all(len(r.images) == 3 for r in results)
         assert elapsed < 1.0, f"images do not appear to be fetched concurrently (took {elapsed:.2f}s)"
 
     def test_preserves_per_deal_image_order_despite_concurrent_completion(self):
         """Deal N's images must come back in their original URL order even
         though different deals'/images' fetches complete in whatever order
         the thread pool happens to finish them in."""
-        a = self._make_assessor()
         deals = [
             {"image_urls": ["http://x/a1.jpg", "http://x/a2.jpg", "http://x/a3.jpg"]},
             {"image_urls": ["http://x/b1.jpg"]},
@@ -1322,35 +1352,96 @@ class TestFetchImagePartsForDeals:
 
         def fetch(url):
             time.sleep(delays[url])
-            return url  # stand in for a fetched Part
+            return (url.encode(), "image/jpeg")
 
-        with mock.patch.object(a, "_fetch_image_part", side_effect=fetch):
-            result = a._fetch_image_parts_for_deals(deals)
+        e = Enricher()
+        with mock.patch.object(e, "_fetch_one_image", side_effect=fetch):
+            results = e.enrich_deals(deals, deadline=time.monotonic() + 5)
 
-        assert result[0] == ["http://x/a1.jpg", "http://x/a2.jpg", "http://x/a3.jpg"]
-        assert result[1] == ["http://x/b1.jpg"]
+        assert [data.decode() for data, _mime in results[0].images] == [
+            "http://x/a1.jpg",
+            "http://x/a2.jpg",
+            "http://x/a3.jpg",
+        ]
+        assert [data.decode() for data, _mime in results[1].images] == ["http://x/b1.jpg"]
 
     def test_skips_failed_fetches(self):
         """A None return (fetch failed) is dropped, not kept as a placeholder."""
-        a = self._make_assessor()
         deals = [{"image_urls": ["http://x/good.jpg", "http://x/bad.jpg"]}]
 
         def fetch(url):
-            return None if "bad" in url else url
+            return None if "bad" in url else (url.encode(), "image/jpeg")
 
-        with mock.patch.object(a, "_fetch_image_part", side_effect=fetch):
-            result = a._fetch_image_parts_for_deals(deals)
+        e = Enricher()
+        with mock.patch.object(e, "_fetch_one_image", side_effect=fetch):
+            results = e.enrich_deals(deals, deadline=time.monotonic() + 5)
 
-        assert result[0] == ["http://x/good.jpg"]
+        assert len(results[0].images) == 1
+        assert results[0].images[0][0] == b"http://x/good.jpg"
 
-    def test_images_not_supported_skips_fetch_entirely(self):
-        a = self._make_assessor()
-        a._images_supported = False
+    def test_fetch_images_false_skips_fetch_entirely(self):
+        """The caller (GeminiAssessor, when its active model is text-only)
+        can skip image fetching entirely rather than fetching images it
+        knows it will discard."""
         deals = [{"image_urls": ["http://x/a.jpg"]}]
-        with mock.patch.object(a, "_fetch_image_part") as mock_fetch:
-            result = a._fetch_image_parts_for_deals(deals)
-        assert result == {}
+        e = Enricher()
+        with mock.patch.object(e, "_fetch_one_image") as mock_fetch:
+            results = e.enrich_deals(deals, deadline=time.monotonic() + 5, fetch_images=False)
+        assert results[0].images == []
         mock_fetch.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Phase B (content-building) must make zero network calls of its own — all
+# eBay/image I/O happens in Phase A (Enricher) beforehand. This is what
+# makes Phase C's existing deadline-checked timeout actually sufficient;
+# verified here by making any live network call raise.
+# ---------------------------------------------------------------------------
+
+
+class TestPhaseBIsNetworkFree:
+    def _make_assessor(self):
+        from google.genai import types
+
+        a = GeminiAssessor()
+        a._images_supported = True
+        a._types = types
+        return a
+
+    def test_build_batch_contents_makes_no_network_calls(self, monkeypatch):
+        import requests
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("Phase B must not make network calls")
+
+        monkeypatch.setattr(requests, "get", _boom)
+        a = self._make_assessor()
+        deals = [
+            {
+                "title": "Xbox 360 Konvolut: Halo 3, Gears of War",
+                "image_urls": ["http://x/1.jpg"],
+                "description": "",
+            }
+        ]
+        enriched = [
+            EnrichedDeal(
+                bundle_prices=[{"game": "Halo 3", "price_eur": 12.0, "price_source": "ebay_sold"}],
+                images=[(b"fake-bytes", "image/jpeg")],
+            )
+        ]
+        a._build_batch_contents(deals, enriched)  # must not raise
+
+    def test_build_contents_makes_no_network_calls(self, monkeypatch):
+        import requests
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("Phase B must not make network calls")
+
+        monkeypatch.setattr(requests, "get", _boom)
+        a = self._make_assessor()
+        deal = {"title": "Halo 3 Xbox 360", "image_urls": ["http://x/1.jpg"], "description": ""}
+        enriched = EnrichedDeal(single_price=12.0, images=[(b"fake-bytes", "image/jpeg")])
+        a._build_contents(deal, enriched)  # must not raise
 
 
 # ---------------------------------------------------------------------------
