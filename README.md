@@ -122,13 +122,15 @@ ruff format --check .
 ebay-scrapper/
 ├── app.py                 # Flask app & REST API
 ├── database.py            # SQLite persistence
+├── models.py              # Shared Deal schema, condition/date normalization, sort key
 ├── scraper.py             # Legacy HTML scraper (ebay.de)
 ├── ebay_api_client.py     # Browse API client (OAuth + search + auctions)
 ├── kleinanzeigen_scraper.py # Kleinanzeigen.de HTML scraper
 ├── ai_providers/
 │   ├── __init__.py        # create_assessor() factory
-│   ├── base.py            # Shared rules, JSON parse, price helpers
-│   └── gemini.py          # Google Gemini multimodal assessor
+│   ├── base.py            # Shared rules, JSON parse
+│   ├── enrichment.py      # Phase A: concurrent, deadline-bounded price/image fetching
+│   └── gemini.py          # Google Gemini multimodal assessor (Phase B/C)
 ├── prompts/               # System prompts for single + batch AI
 ├── templates/index.html
 ├── static/                # app.js + style.css
