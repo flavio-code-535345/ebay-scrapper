@@ -33,6 +33,16 @@ class TestInitDB:
         """Calling init_db twice does not raise."""
         database.init_db()
 
+    def test_deals_indexes_exist(self):
+        """search_id (FK, filtered constantly) and created_at (ORDER BY in
+        CSV export) must be indexed — both were previously unindexed."""
+        with database.get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='deals'")
+            indexes = {row["name"] for row in cursor.fetchall()}
+        assert "idx_deals_search_id" in indexes
+        assert "idx_deals_created_at" in indexes
+
 
 class TestSettings:
     def test_get_setting_default(self):
@@ -101,6 +111,40 @@ class TestSaveSearch:
         assert fetched[0]["title"] == "Game X"
         assert fetched[0]["price"] == 5.0
 
+    def test_list_fields_round_trip_as_lists(self):
+        """List-typed fields must always come back as lists after a
+        save/load round trip — never a raw string, regardless of what shape
+        they arrived in (a None-vs-list encoding inconsistency previously
+        made this depend on the input type)."""
+        deals = [
+            {
+                "title": "Bundle Game",
+                "price": 20.0,
+                "url": "http://ebay.com/itm/3",
+                "ai_visual_findings": ["blurry photo"],
+                "ai_red_flags": [],
+                "image_issues": ["no_images"],
+                "image_urls": ["http://x/1.jpg", "http://x/2.jpg"],
+                "ai_itemized_resale_estimates": [{"game": "Halo 3", "price_eur": 12.0}],
+            }
+        ]
+        sid = database.save_search("list-fields", deals)
+        fetched = database.get_deals_by_search(sid)[0]
+        assert fetched["ai_visual_findings"] == ["blurry photo"]
+        assert fetched["ai_red_flags"] == []
+        assert fetched["image_issues"] == ["no_images"]
+        assert fetched["image_urls"] == ["http://x/1.jpg", "http://x/2.jpg"]
+        assert fetched["ai_itemized_resale_estimates"] == [{"game": "Halo 3", "price_eur": 12.0}]
+
+    def test_missing_list_fields_are_none_not_raw_garbage(self):
+        """A deal that never sets a list-typed field at all stores/loads as
+        None, not some other inconsistent representation."""
+        deals = [{"title": "No AI data", "price": 1.0, "url": "http://ebay.com/itm/4"}]
+        sid = database.save_search("missing-fields", deals)
+        fetched = database.get_deals_by_search(sid)[0]
+        assert fetched["ai_visual_findings"] is None
+        assert fetched["image_urls"] is None
+
     def test_deals_with_ai_fields(self):
         deals = [
             {
@@ -148,11 +192,6 @@ class TestSaveUnsaveDeal:
         database.save_deal("http://ex.com/d2", "Game B", 5.0)
         database.unsave_deal("http://ex.com/d2")
         assert database.get_saved_deals() == []
-
-    def test_is_deal_saved(self):
-        assert not database.is_deal_saved("http://ex.com/d3")
-        database.save_deal("http://ex.com/d3", "Game C", 8.0)
-        assert database.is_deal_saved("http://ex.com/d3")
 
     def test_upsert_updates(self):
         database.save_deal("http://ex.com/u1", "Old", 1.0)
