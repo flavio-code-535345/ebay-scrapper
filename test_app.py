@@ -32,7 +32,7 @@ def _reset_globals():
     """Reset module-level state between tests."""
     app.assessor.enabled = False
     app.assessor.user_enabled = True
-    app.assessor._ebay_client = None
+    app.assessor._enricher.ebay_client = None
     yield
 
 
@@ -234,6 +234,75 @@ class TestSearchDeadline:
         )
 
 
+# ── Sort order ──────────────────────────────────────────────────────────────
+# Regression test for a real bug in the old sort: deals with no known
+# listing_date (e.g. every HTML-scraper-sourced deal, which exposes no date
+# at all) collapsed to datetime.min and always sank below EVERY dated deal,
+# even an old one — see models.sort_key_for_deal.
+
+
+class TestSearchSortOrder:
+    def _fake_deal(self, *, url, listing_date):
+        return {
+            "title": f"Deal {url}",
+            "price": 10.0,
+            "condition": "Used",
+            "seller_rating": 95.0,
+            "url": url,
+            "shipping": "Free",
+            "is_trending": False,
+            "item_location": "Berlin, DE",
+            "image_urls": [],
+            "image_issues": [],
+            "listing_date": listing_date,
+        }
+
+    def test_dated_deal_sorts_before_undated_deal_in_the_same_tier(self, client):
+        """A deal with no known date must not sink below an OLD dated deal —
+        it should sort right after dated deals within its rating tier."""
+        app.assessor.enabled = True
+        app.assessor.user_enabled = True
+        app.kleinanzeigen = None
+        fake_deals = [
+            self._fake_deal(url="http://ebay.de/itm/undated", listing_date=None),
+            self._fake_deal(url="http://ebay.de/itm/old-dated", listing_date="2020-01-01T00:00:00+00:00"),
+        ]
+        with (
+            patch.object(app.scraper, "search", return_value=(fake_deals, [])),
+            patch.object(
+                app.assessor,
+                "assess_deals_batch",
+                return_value=[{"ai_deal_rating": "Good", "ai_assessed": True}] * 2,
+            ),
+        ):
+            resp = client.post("/api/search", json={"query": "test"})
+        urls = [d["url"] for d in resp.get_json()["deals"]]
+        assert urls == ["http://ebay.de/itm/old-dated", "http://ebay.de/itm/undated"]
+
+    def test_must_have_still_sorts_first_regardless_of_date(self, client):
+        app.assessor.enabled = True
+        app.assessor.user_enabled = True
+        app.kleinanzeigen = None
+        fake_deals = [
+            self._fake_deal(url="http://ebay.de/itm/good-newer", listing_date="2024-06-01T00:00:00+00:00"),
+            self._fake_deal(url="http://ebay.de/itm/must-have-undated", listing_date=None),
+        ]
+        with (
+            patch.object(app.scraper, "search", return_value=(fake_deals, [])),
+            patch.object(
+                app.assessor,
+                "assess_deals_batch",
+                return_value=[
+                    {"ai_deal_rating": "Good", "ai_assessed": True},
+                    {"ai_deal_rating": "Must Have", "ai_assessed": True},
+                ],
+            ),
+        ):
+            resp = client.post("/api/search", json={"query": "test"})
+        urls = [d["url"] for d in resp.get_json()["deals"]]
+        assert urls == ["http://ebay.de/itm/must-have-undated", "http://ebay.de/itm/good-newer"]
+
+
 # ── Settings ────────────────────────────────────────────────────────────────
 
 
@@ -396,6 +465,17 @@ class TestHistory:
         data = resp.get_json()
         assert len(data) >= 1
         assert data[0]["query"] == "hist-test"
+
+    def test_history_non_numeric_limit_returns_400(self, client):
+        """A malformed limit must not 500 the request."""
+        resp = client.get("/api/history?limit=not-a-number")
+        assert resp.status_code == 400
+        assert "error" in resp.get_json()
+
+    def test_history_limit_is_clamped(self, client):
+        """An out-of-range limit is clamped rather than passed through raw."""
+        resp = client.get("/api/history?limit=999999")
+        assert resp.status_code == 200
 
 
 # ── Export ──────────────────────────────────────────────────────────────────
