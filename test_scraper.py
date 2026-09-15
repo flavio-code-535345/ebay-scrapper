@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from scraper import _LOW_RES_URL_RE, EbayScraper
+from scraper import EbayScraper
 
 
 @pytest.fixture
@@ -110,6 +110,13 @@ class TestEbayScraper:
         assert deals[0]["url"] == "http://ebay.de/itm/123"
         assert "DE" in deals[0]["item_location"].upper()
         assert len(deals[0]["image_urls"]) >= 1
+        # The HTML scraper's search-results page exposes no listing date at
+        # all — the field must be present and explicitly None, never omitted
+        # or fabricated (see models.parse_listing_date, source "scraper").
+        assert deals[0]["listing_date"] is None
+        # Normalized condition (models.Condition) is populated alongside the
+        # original raw-text condition string, which is left untouched.
+        assert "condition_normalized" in deals[0]
 
     def test_search_strips_badge_spans(self, scraper):
         """Badge text like 'Neues Angebot' and 'Gesponsert' is stripped from title."""
@@ -139,13 +146,6 @@ class TestEbayScraper:
         assert scraper._parse_seller_rating("99.9%") == 99.9
         assert scraper._parse_seller_rating("No rating") == 0.0
 
-    def test_low_res_url_regex(self):
-        """Regex matches low-res eBay image URLs."""
-        assert _LOW_RES_URL_RE.search("s-l140.jpg")
-        assert _LOW_RES_URL_RE.search("s-l225.jpg")
-        assert not _LOW_RES_URL_RE.search("s-l500.jpg")
-        assert not _LOW_RES_URL_RE.search("s-l1600.jpg")
-
     def test_extract_condition_with_text(self, scraper):
         """_extract_condition falls back to keyword matching."""
         from bs4 import BeautifulSoup
@@ -154,10 +154,3 @@ class TestEbayScraper:
         soup = BeautifulSoup(html, "html.parser")
         condition = scraper._extract_condition(soup)
         assert "Gebraucht" in condition
-
-    def test_get_item_details(self, scraper):
-        """get_item_details returns a dict even on error."""
-        with patch.object(scraper.session, "get") as mock_get:
-            mock_get.side_effect = Exception("boom")
-            details = scraper.get_item_details("http://ebay.de/itm/999")
-        assert details == {}

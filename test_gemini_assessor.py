@@ -1037,7 +1037,7 @@ class TestEnricherPriceLookups:
             return None, "no_result", []
 
         mock_client = mock.MagicMock()
-        mock_client.get_median_sold_price.side_effect = _mock_get_median
+        mock_client.get_lowest_market_price.side_effect = _mock_get_median
         e = Enricher()
         e.ebay_client = mock_client
         return e
@@ -1068,7 +1068,7 @@ class TestEnricherPriceLookups:
 
         e = Enricher()
         mock_client = mock.MagicMock()
-        mock_client.get_median_sold_price.side_effect = _mock_get_median
+        mock_client.get_lowest_market_price.side_effect = _mock_get_median
         e.ebay_client = mock_client
 
         # Two deals with the same title → same query → should deduplicate.
@@ -1086,7 +1086,7 @@ class TestEnricherPriceLookups:
 
         e = Enricher()
         mock_client = mock.MagicMock()
-        mock_client.get_median_sold_price.side_effect = _mock_get_median
+        mock_client.get_lowest_market_price.side_effect = _mock_get_median
         e.ebay_client = mock_client
 
         deals = [{"title": "Halo 3 Xbox 360"}]
@@ -1107,7 +1107,7 @@ class TestEnricherPriceLookups:
         """A failing eBay API call is silently absorbed; the cache is not poisoned."""
         e = Enricher()
         mock_client = mock.MagicMock()
-        mock_client.get_median_sold_price.side_effect = RuntimeError("connection refused")
+        mock_client.get_lowest_market_price.side_effect = RuntimeError("connection refused")
         e.ebay_client = mock_client
         e.enrich_deals([{"title": "Halo 3 Xbox 360"}], deadline=time.monotonic() + 5)  # Should not raise
 
@@ -1126,7 +1126,7 @@ class TestEnricherPriceLookups:
 
         e = Enricher()
         mock_client = mock.MagicMock()
-        mock_client.get_median_sold_price.side_effect = _slow_get_median
+        mock_client.get_lowest_market_price.side_effect = _slow_get_median
         e.ebay_client = mock_client
 
         deal = {"title": "Xbox 360 Konvolut: Halo 3, Gears of War, Mass Effect, Fable 2, Dead Space"}
@@ -1252,7 +1252,7 @@ class TestAssessDealsBatchDeadline:
             time.sleep(2.0)
             return 10.0, "sold_listings", []
 
-        mock_client.get_median_sold_price.side_effect = _slow_get_median
+        mock_client.get_lowest_market_price.side_effect = _slow_get_median
         a._enricher.ebay_client = mock_client
 
         def fast_generate_content(*, model, contents, config):

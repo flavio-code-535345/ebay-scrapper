@@ -15,7 +15,14 @@ from contextlib import suppress
 
 import requests
 
+from models import normalize_condition
+
 logger = logging.getLogger(__name__)
+
+# Junk-keyword exclusion list shared by both search() (fixed-price) and
+# search_auctions() — previously two separately-maintained literals that had
+# drifted apart (search_auctions() was missing "-djhero -justdance").
+_JUNK_KEYWORDS = "-skylanders -lego -amiibo -disney -singstar -guitar -rockband -djhero -justdance"
 
 # Mapping eBay API conditionId → human-readable English label understood by
 # the existing DealAssessor (which scores on 'new', 'refurbished', 'used', etc.)
@@ -174,7 +181,6 @@ class EbayApiClient:
             )
             return [], errors
 
-        _JUNK_KEYWORDS = "-skylanders -lego -amiibo -disney -singstar -guitar -rockband -djhero -justdance"
         search_query = f"{query} {_JUNK_KEYWORDS}"
 
         try:
@@ -317,7 +323,6 @@ class EbayApiClient:
         except Exception as exc:
             return [], [f"eBay auth failed: {exc}"]
 
-        _JUNK_KEYWORDS = "-skylanders -lego -amiibo -disney -singstar -guitar -rockband"
         search_query = f"{query} {_JUNK_KEYWORDS}"
 
         api_filter = (
@@ -362,7 +367,7 @@ class EbayApiClient:
             d["listing_type"] = "auction"
         return deals, errors
 
-    def get_median_sold_price(self, query: str, max_results: int = 10) -> "tuple[float | None, str, list[str]]":
+    def get_lowest_market_price(self, query: str, max_results: int = 10) -> "tuple[float | None, str, list[str]]":
         """Return the lowest Buy It Now (BIN/fixed-price) price for *query*.
 
         Tries the eBay Marketplace Insights API (sold/completed listings) first.
@@ -584,6 +589,7 @@ class EbayApiClient:
         condition_id = str(item.get("conditionId", ""))
         condition_text = item.get("condition", "")
         condition = _CONDITION_ID_MAP.get(condition_id, condition_text or "Unknown")
+        condition_normalized = normalize_condition(condition)
 
         # ── Seller ─────────────────────────────────────────────────────────
         seller = item.get("seller") or {}
@@ -655,6 +661,9 @@ class EbayApiClient:
         for img in item.get("additionalImages") or []:
             if isinstance(img, dict) and img.get("imageUrl"):
                 image_urls.append(img["imageUrl"])
+        # Same convention as the other two deal sources: ["no_images"] when
+        # the listing has no photos at all, else [].
+        image_issues: list[str] = [] if image_urls else ["no_images"]
 
         # ── Listing date ───────────────────────────────────────────────────
         # itemCreationDate is an ISO-8601 string like "2024-03-01T10:00:00.000Z".
@@ -664,6 +673,7 @@ class EbayApiClient:
             "title": title or "Unknown",
             "price": price,
             "condition": condition,
+            "condition_normalized": condition_normalized,
             "seller_rating": seller_rating,
             "url": url,
             "shipping": shipping,
@@ -672,6 +682,7 @@ class EbayApiClient:
             # Set by itemLocationCountry filter; e.g. "Berlin, DE" or "DE".
             "item_location": item_location,
             "image_urls": image_urls,
+            "image_issues": image_issues,
             # Short description text from the listing (may be empty).
             "description": description,
             # Quantity/sold info formatted as a human-readable string, e.g.

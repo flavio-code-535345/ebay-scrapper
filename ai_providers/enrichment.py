@@ -121,7 +121,7 @@ class Enricher:
 
     def _fetch_one_price(self, query: str) -> tuple[float | None, str]:
         try:
-            price, source, _errors = self.ebay_client.get_median_sold_price(query, max_results=10)
+            price, source, _errors = self.ebay_client.get_lowest_market_price(query, max_results=10)
             return price, source
         except Exception as exc:
             logger.warning("Enricher: eBay price lookup failed for %r: %s", query, exc)
