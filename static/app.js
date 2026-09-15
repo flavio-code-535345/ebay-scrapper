@@ -435,7 +435,7 @@ function _applySearchResults(data) {
     const aiWarning = document.getElementById('aiWarningContainer');
     if (aiWarning) {
         if (!data.ai_enabled) {
-            aiWarning.textContent = '⭕ AI evaluation is OFF — showing rules-based scores only. Toggle AI ON to enable Gemini scoring.';
+            aiWarning.textContent = '⭕ AI evaluation is OFF — deals are shown unrated. Toggle AI ON to enable Gemini scoring.';
             aiWarning.className   = 'alert alert-warning';
             aiWarning.classList.remove('d-none');
         } else if (data.ai_rate_limited) {
@@ -678,14 +678,6 @@ async function updateTabBadges() {
  */
 function createDealCard(deal, mode) {
     const renderMode = mode || _currentPipeline;
-    const score = deal.overall_score || 0;
-    const scoreColor = getScoreColor(score);
-    const recommendation = deal.recommendation || 'N/A';
-
-    const priceScore     = deal.price_score     || 0;
-    const sellerScore    = deal.seller_score     || 0;
-    const conditionScore = deal.condition_score  || 0;
-    const trendScore     = deal.trend_score      || 0;
 
     const conditionParts = parseConditionParts(deal.condition || '');
     const sellerType     = conditionParts.sellerType;
@@ -782,30 +774,11 @@ function createDealCard(deal, mode) {
         </div>`;
     }
 
-    // Scores breakdown (only for deals with full data)
-    let scoresHtml = '';
-    if (deal.overall_score != null) {
-        scoresHtml = `<div class="scores-breakdown">
-            <div class="score-row"><span>Price</span><span>${priceScore.toFixed(0)}</span></div>
-            <div class="score-bar"><div class="score-fill" style="width:${priceScore}%"></div></div>
-            <div class="score-row"><span>Seller</span><span>${sellerScore.toFixed(0)}</span></div>
-            <div class="score-bar"><div class="score-fill" style="width:${sellerScore}%"></div></div>
-            <div class="score-row"><span>Condition</span><span>${conditionScore.toFixed(0)}</span></div>
-            <div class="score-bar"><div class="score-fill" style="width:${conditionScore}%"></div></div>
-            <div class="score-row"><span>Trend</span><span>${trendScore.toFixed(0)}</span></div>
-            <div class="score-bar"><div class="score-fill" style="width:${trendScore}%"></div></div>
-        </div>`;
-    }
-
-    // Deal header: only show the rules-based score and recommendation when they
-    // carry real data (overall_score is set by the legacy rules engine).  After
-    // the rules engine was removed, these fields are no longer populated and
-    // would otherwise display a confusing "0.0 / N/A" placeholder.
-    const headerScoreHtml = (deal.overall_score != null)
-        ? `<div class="deal-score" style="color:${scoreColor}">${score.toFixed(1)}</div>`
-        : '';
-    const headerRecommendationHtml = (deal.overall_score != null)
-        ? `<div class="deal-recommendation">${escapeHtml(recommendation)}</div>`
+    // Kleinanzeigen's "VB" (Verhandlungsbasis / negotiable) flag is a price
+    // attribute, not shipping info — shown next to the price rather than in
+    // the Shipping meta row, which now only ever holds real shipping data.
+    const priceNegotiableHtml = deal.shipping_note
+        ? ` <span class="price-negotiable">(${escapeHtml(deal.shipping_note)})</span>`
         : '';
 
     return `<div class="deal-card${isSelected ? ' selected' : ''}" data-url="${encodedUrl}" data-title="${escapeHtml(deal.title || '')}">
@@ -813,20 +786,17 @@ function createDealCard(deal, mode) {
             <input type="checkbox" class="deal-checkbox" data-url="${encodedUrl}" ${isChecked} aria-label="Select deal">
         </div>
         <div class="deal-header">
-            ${headerScoreHtml}
             <div class="deal-header-right">
-                ${headerRecommendationHtml}
                 ${ageHtml}
             </div>
         </div>
         ${imageSection}
         <div class="deal-body">
             <div class="deal-title">${buildSourceBadge(deal)} ${escapeHtml(deal.title || '(no title)')}${buildGameCountBadge(deal.title)}</div>
-            <div class="deal-price">€${(deal.price || 0).toFixed(2)}</div>
+            <div class="deal-price">€${(deal.price || 0).toFixed(2)}${priceNegotiableHtml}</div>
             <div class="deal-meta">${metaRows.join('')}</div>
             ${imageWarningSection}
             ${aiSection}
-            ${scoresHtml}
         </div>
         <div class="deal-footer">
             <a href="${safeHref(deal.url)}" target="_blank" rel="noopener noreferrer" class="btn-view">View on eBay →</a>
@@ -1653,14 +1623,6 @@ function getAiBadgeClass(rating) {
     if (r.includes('garbage') || r.includes('trash')) return 'badge-garbage';
     if (r.includes('avoid') || r.includes('hard pass')) return 'badge-avoid';
     return 'badge-unknown';
-}
-
-function getScoreColor(score) {
-    if (score >= 85) return '#3fb950';
-    if (score >= 70) return '#e3b341';
-    if (score >= 50) return '#f0883e';
-    if (score >= 30) return '#f85149';
-    return '#8b949e';
 }
 
 // ---------------------------------------------------------------------------
