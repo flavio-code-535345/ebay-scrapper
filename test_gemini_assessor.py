@@ -1272,6 +1272,88 @@ class TestAssessDealsBatchDeadline:
 
 
 # ---------------------------------------------------------------------------
+# _fetch_image_parts_for_deals — regression tests for a real latency bug: a
+# batch's images (up to 3 per deal x 5 deals = 15) used to be fetched one at
+# a time inside _build_batch_contents, entirely unbounded by the batch's own
+# deadline/timeout since it all happened before the API call even started.
+# Worst case (15 x the 5s per-image timeout = 75s) was large enough to eat
+# most of a search's whole deadline on a single batch before it ever reached
+# Gemini — surfacing in production as specific batches (whichever one drew
+# the slow-to-fetch images) coming back with no rating at all.
+# ---------------------------------------------------------------------------
+
+
+class TestFetchImagePartsForDeals:
+    def _make_assessor(self):
+        a = GeminiAssessor()
+        a._images_supported = True
+        return a
+
+    def test_fetches_concurrently_not_sequentially(self):
+        """15 images (5 deals x 3 each), each taking 0.2s, must finish in
+        well under the 3.0s a fully sequential fetch would take."""
+        a = self._make_assessor()
+        deals = [{"image_urls": [f"http://x/{i}-{j}.jpg" for j in range(3)]} for i in range(5)]
+
+        def slow_fetch(url):
+            time.sleep(0.2)
+            return f"part:{url}"
+
+        with mock.patch.object(a, "_fetch_image_part", side_effect=slow_fetch):
+            t0 = time.monotonic()
+            result = a._fetch_image_parts_for_deals(deals)
+            elapsed = time.monotonic() - t0
+
+        assert len(result) == 5
+        assert elapsed < 1.0, f"images do not appear to be fetched concurrently (took {elapsed:.2f}s)"
+
+    def test_preserves_per_deal_image_order_despite_concurrent_completion(self):
+        """Deal N's images must come back in their original URL order even
+        though different deals'/images' fetches complete in whatever order
+        the thread pool happens to finish them in."""
+        a = self._make_assessor()
+        deals = [
+            {"image_urls": ["http://x/a1.jpg", "http://x/a2.jpg", "http://x/a3.jpg"]},
+            {"image_urls": ["http://x/b1.jpg"]},
+        ]
+        # Deliberately make earlier URLs slower so completion order is
+        # scrambled relative to submission order.
+        delays = {"http://x/a1.jpg": 0.15, "http://x/a2.jpg": 0.05, "http://x/a3.jpg": 0.10, "http://x/b1.jpg": 0.01}
+
+        def fetch(url):
+            time.sleep(delays[url])
+            return url  # stand in for a fetched Part
+
+        with mock.patch.object(a, "_fetch_image_part", side_effect=fetch):
+            result = a._fetch_image_parts_for_deals(deals)
+
+        assert result[0] == ["http://x/a1.jpg", "http://x/a2.jpg", "http://x/a3.jpg"]
+        assert result[1] == ["http://x/b1.jpg"]
+
+    def test_skips_failed_fetches(self):
+        """A None return (fetch failed) is dropped, not kept as a placeholder."""
+        a = self._make_assessor()
+        deals = [{"image_urls": ["http://x/good.jpg", "http://x/bad.jpg"]}]
+
+        def fetch(url):
+            return None if "bad" in url else url
+
+        with mock.patch.object(a, "_fetch_image_part", side_effect=fetch):
+            result = a._fetch_image_parts_for_deals(deals)
+
+        assert result[0] == ["http://x/good.jpg"]
+
+    def test_images_not_supported_skips_fetch_entirely(self):
+        a = self._make_assessor()
+        a._images_supported = False
+        deals = [{"image_urls": ["http://x/a.jpg"]}]
+        with mock.patch.object(a, "_fetch_image_part") as mock_fetch:
+            result = a._fetch_image_parts_for_deals(deals)
+        assert result == {}
+        mock_fetch.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Top-3 value games logic (frontend helper parity test)
 # ---------------------------------------------------------------------------
 
