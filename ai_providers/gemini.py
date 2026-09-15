@@ -36,6 +36,14 @@ _GEMINI_REQUEST_TIMEOUT = 35
 _MODEL_NAME = "gemini-3.5-flash-lite"
 _MAX_IMAGES = 3
 _IMAGE_FETCH_TIMEOUT = 5
+# A batch of 5 deals × up to 3 images each is up to 15 image downloads.
+# Fetched sequentially (the original design) that's up to 15 × 5s = 75s in
+# the worst case — entirely unbounded by the batch's own deadline/timeout,
+# since it all happens before the API call (and its timeout) even starts.
+# That's large enough to plausibly eat most of a search's whole deadline on
+# just the FIRST batch, before it ever reaches Gemini — worth bounding with
+# real concurrency rather than raising a timeout number.
+_IMAGE_FETCH_MAX_WORKERS = 8
 _BATCH_DELAY_SECONDS = 4.5  # respect 15 RPM free-tier limit
 # How many batch calls may be in flight at once. Submissions are still paced
 # _BATCH_DELAY_SECONDS apart (bounding the *request-start* rate to the same
@@ -236,6 +244,34 @@ class GeminiAssessor(BaseAssessor):
 
     # ── Prompt construction (Gemini-specific — uses self._types.Part) ─────
 
+    def _fetch_image_parts_for_deals(self, deals: list[dict]) -> dict[int, list]:
+        """Fetch every deal's images concurrently.
+
+        Returns ``{deal_index: [Part, ...]}`` — each deal's own images stay
+        in their original order even though the underlying HTTP fetches run
+        concurrently and may complete in any order; a deal with no
+        successfully-fetched images is simply absent from the result.
+        """
+        if not self._images_supported:
+            return {}
+        jobs: list[tuple[int, str]] = [
+            (i, url) for i, deal in enumerate(deals) for url in (deal.get("image_urls") or [])[:_MAX_IMAGES]
+        ]
+        if not jobs:
+            return {}
+        results: dict[int, list] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(_IMAGE_FETCH_MAX_WORKERS, len(jobs))) as pool:
+            # Submit in job order, then collect in that SAME order (not
+            # completion order) so each deal's image list stays correctly
+            # ordered — the pattern used throughout this module for
+            # concurrency without losing a meaningful original ordering.
+            futures = [(i, pool.submit(self._fetch_image_part, url)) for i, url in jobs]
+            for i, fut in futures:
+                part = fut.result()
+                if part is not None:
+                    results.setdefault(i, []).append(part)
+        return results
+
     def _build_contents(self, deal: dict) -> list:
         title = deal.get("title", "Unknown")
         price = deal.get("price", "?")
@@ -287,12 +323,7 @@ class GeminiAssessor(BaseAssessor):
             prompt_lines.append(f"\nDescription:\n{description[:1500]}")
         text_prompt = "\n".join(prompt_lines)
         parts: list = [self._types.Part.from_text(text=text_prompt)]
-        if self._images_supported:
-            image_urls: list[str] = deal.get("image_urls", [])
-            for url in image_urls[:_MAX_IMAGES]:
-                image_part = self._fetch_image_part(url)
-                if image_part is not None:
-                    parts.append(image_part)
+        parts.extend(self._fetch_image_parts_for_deals([deal]).get(0, []))
         return parts
 
     def _build_batch_contents(self, deals: list[dict]) -> list:
@@ -302,6 +333,10 @@ class GeminiAssessor(BaseAssessor):
             "Return a JSON array of analysis objects, one per listing in order.\n"
         )
         parts.append(self._types.Part.from_text(text=intro))
+        # Fetch every deal's images up front, concurrently, instead of one
+        # URL at a time inside the loop below — see _IMAGE_FETCH_MAX_WORKERS'
+        # comment for why a sequential fetch here was a real latency bug.
+        image_parts_by_deal = self._fetch_image_parts_for_deals(deals)
         for idx, deal in enumerate(deals, 1):
             title = deal.get("title", "Unknown")
             price = deal.get("price", "?")
@@ -342,12 +377,7 @@ class GeminiAssessor(BaseAssessor):
             if image_issues_line:
                 item_text += image_issues_line
             parts.append(self._types.Part.from_text(text=item_text))
-            if self._images_supported:
-                image_urls: list[str] = deal.get("image_urls", [])
-                for url in image_urls[:_MAX_IMAGES]:
-                    img_part = self._fetch_image_part(url)
-                    if img_part is not None:
-                        parts.append(img_part)
+            parts.extend(image_parts_by_deal.get(idx - 1, []))
         parts.append(
             self._types.Part.from_text(
                 text=(
