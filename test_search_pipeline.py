@@ -3,7 +3,17 @@
 import time
 from datetime import UTC, datetime, timedelta
 
-from search.pipeline import SourceJob, dedupe, fetch_all, game_count, is_german_location, run_search, select
+from search.pipeline import (
+    AUCTION_MAX_TIME_LEFT,
+    SourceJob,
+    apply_filters,
+    dedupe,
+    fetch_all,
+    game_count,
+    is_german_location,
+    run_search,
+    select,
+)
 from search.query import plan_search
 
 _NOW = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
@@ -15,7 +25,7 @@ def _deal(title="Xbox 360 Spiele Sammlung", url="https://www.ebay.de/itm/1000000
 
 
 def _fn(deals, errors=(), delay=0.0):
-    def search(query, max_results=50):
+    def search(query, max_results=50, **kwargs):
         time.sleep(delay)
         return [dict(d) for d in deals], list(errors)
 
@@ -88,6 +98,14 @@ class TestDedupe:
         b = _deal(url="https://www.ebay.de/itm/100000002", price=35.0)
         assert len(dedupe([(self._job(), [a, b])])) == 2
 
+    def test_end_time_reported_by_another_leg_is_kept(self):
+        """An auction with a Buy-It-Now option also shows up in the Buy-It-Now
+        leg, whose sort order hides the time left; the auction leg has it."""
+        bin_leg = _deal(url="https://www.ebay.de/itm/800701145155", listing_type="auction")
+        auction_leg = dict(bin_leg, auction_end=_NOW.isoformat())
+        (merged,) = dedupe([(self._job(), [bin_leg]), (self._job("ebay_auctions"), [auction_leg])])
+        assert merged["auction_end"] == _NOW.isoformat()
+
     def test_source_and_listing_type_defaults(self):
         (ka,) = dedupe([(self._job("kleinanzeigen"), [_deal(url="https://x/1")])])
         (auction,) = dedupe([(self._job("ebay_auctions"), [_deal(url="https://x/2")])])
@@ -148,9 +166,59 @@ class TestFilters:
         assert [d["url"] for d in outcome.selected] == ["https://x/2"]
         assert outcome.removed["sports_only"] == 2
 
+    def test_auctions_must_end_within_two_days(self):
+        def auction(n, ends_in):
+            end = None if ends_in is None else (_NOW + ends_in).isoformat()
+            return _deal(url=f"https://www.ebay.de/itm/30000000{n}", listing_type="auction", auction_end=end)
+
+        deals = [
+            _deal(url="https://www.ebay.de/itm/300000000", listing_type="fixed"),
+            auction(1, timedelta(hours=5)),
+            auction(2, timedelta(hours=47)),
+            auction(3, timedelta(hours=49)),  # ends too late
+            auction(4, timedelta(days=6)),  # ends too late
+            auction(5, timedelta(hours=-1)),  # already over
+            auction(6, None),  # end time unknown
+        ]
+        kept, removed = apply_filters(deals, _XBOX_PLAN, set(), now=_NOW)
+        assert [d["url"][-1] for d in kept] == ["0", "1", "2"]
+        assert removed["auction_ends_late"] == 4
+
+    def test_api_end_date_format_accepted(self):
+        deal = _deal(listing_type="auction", auction_end="2026-09-26T09:00:00.000Z")
+        kept, _ = apply_filters([deal], _XBOX_PLAN, set(), now=_NOW)
+        assert kept == [deal]
+
     def test_german_location_helper(self):
         assert is_german_location("") and is_german_location("Berlin, DE") and is_german_location("Deutschland")
         assert not is_german_location("New York, US")
+
+
+class TestAuctionLeg:
+    def _calls(self, ebay_is_api):
+        calls = []
+
+        def auctions(query, max_results=50, **kwargs):
+            calls.append((query, kwargs))
+            return [], []
+
+        run_search(
+            _XBOX_PLAN,
+            ebay_search=_fn([]),
+            ebay_is_api=ebay_is_api,
+            auction_search=auctions,
+            kleinanzeigen_search=None,
+            skipped=set(),
+            budget_s=2,
+        )
+        return calls
+
+    def test_each_engine_searches_auctions_with_its_own_query_and_the_cutoff(self):
+        assert self._calls(ebay_is_api=True) == [(_XBOX_PLAN.ebay_api[0], {"ends_within": AUCTION_MAX_TIME_LEFT})]
+        assert self._calls(ebay_is_api=False) == [(_XBOX_PLAN.ebay_web[0], {"ends_within": AUCTION_MAX_TIME_LEFT})]
+
+    def test_cutoff_is_two_days(self):
+        assert timedelta(days=2) == AUCTION_MAX_TIME_LEFT
 
 
 class TestSelection:

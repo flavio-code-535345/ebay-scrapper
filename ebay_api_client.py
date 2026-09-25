@@ -12,6 +12,7 @@ import re
 import threading
 import time
 from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 
 import requests
 
@@ -318,8 +319,11 @@ class EbayApiClient:
         logger.info("Returning %d normalised deals (%d errors)", len(deals), len(errors))
         return deals, errors
 
-    def search_auctions(self, query: str, max_results: int = 30) -> tuple[list[dict], list[str]]:
-        """Search eBay for AUCTION listings ending soonest."""
+    def search_auctions(
+        self, query: str, max_results: int = 30, ends_within: timedelta | None = None
+    ) -> tuple[list[dict], list[str]]:
+        """Search eBay for AUCTION listings ending soonest — with *ends_within*,
+        only those ending within that time from now (filtered by eBay)."""
         errors: list[str] = []
         if not self.is_configured:
             return [], ["eBay API credentials not configured"]
@@ -334,6 +338,9 @@ class EbayApiClient:
             f"deliveryCountry:{self.delivery_country},"
             f"buyingOptions:{{AUCTION}}"
         )
+        if ends_within is not None:
+            cutoff = datetime.now(UTC) + ends_within
+            api_filter += f",itemEndDate:[..{cutoff.strftime('%Y-%m-%dT%H:%M:%S.000Z')}]"
         url = self._base_url + self._SEARCH_PATH
         params = {
             "q": query,
@@ -680,6 +687,9 @@ class EbayApiClient:
         # ── Listing date ───────────────────────────────────────────────────
         # itemCreationDate is an ISO-8601 string like "2024-03-01T10:00:00.000Z".
         listing_date: str | None = (item.get("itemCreationDate") or "").strip() or None
+        is_auction = "AUCTION" in (item.get("buyingOptions") or [])
+        # When bidding ends (same format); only meaningful for auctions.
+        auction_end = ((item.get("itemEndDate") or "").strip() or None) if is_auction else None
 
         return {
             "title": title or "Unknown",
@@ -690,7 +700,8 @@ class EbayApiClient:
             "url": url,
             "listing_id": listing_id,
             "source": "ebay",
-            "listing_type": "auction" if "AUCTION" in (item.get("buyingOptions") or []) else "fixed",
+            "listing_type": "auction" if is_auction else "fixed",
+            "auction_end": auction_end,
             "shipping": shipping,
             "shipping_cost": shipping_cost,
             "is_trending": is_trending,

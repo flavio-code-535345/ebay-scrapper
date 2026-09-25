@@ -1,6 +1,6 @@
 """Tests for scraper.py — eBay.de HTML results scraper.
 
-Parser tests run against real captured eBay markup (fixtures/ebay_srp_scard.html),
+Parser tests run against real captured eBay markup (fixtures/ebay_srp_*.html),
 not hand-written HTML: the previous hand-written fixture kept these tests green
 for months after eBay's real markup had moved on.
 """
@@ -15,9 +15,12 @@ import requests
 from bs4 import BeautifulSoup
 
 from models import Condition
-from scraper import EbayScraper, _parse_eur_amount
+from scraper import EbayScraper, _parse_eur_amount, _parse_time_left
 
 _FIXTURE = (Path(__file__).parent / "fixtures" / "ebay_srp_scard.html").read_bytes()
+# Auctions only, ending soonest first — the one sort order whose cards show the time left.
+_AUCTIONS_FIXTURE = (Path(__file__).parent / "fixtures" / "ebay_srp_auctions.html").read_bytes()
+_NOW = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -109,6 +112,45 @@ class TestParseRealResultsPage:
         deals, _ = scraper.parse_results_page(_FIXTURE, max_results=2)
         assert len(deals) == 2
 
+    def test_newest_first_page_has_no_auction_end(self, deals):
+        """This sort order shows no time left, so no end time is invented."""
+        assert all(d["auction_end"] is None for d in deals.values())
+
+
+class TestAuctionEndTimes:
+    @pytest.fixture
+    def auctions(self, scraper):
+        deals, errors = scraper.parse_results_page(_AUCTIONS_FIXTURE, now=_NOW)
+        assert errors == []
+        return {d["listing_id"]: d for d in deals}
+
+    def test_every_time_left_format_becomes_an_end_time(self, auctions):
+        assert {k: d["auction_end"] for k, d in auctions.items()} == {
+            "ebay:366676623707": "2026-09-25T12:14:00+00:00",  # Noch 14 Min
+            "ebay:800700626891": "2026-09-25T17:00:00+00:00",  # Noch 5 Std
+            "ebay:267791170519": "2026-09-26T01:38:00+00:00",  # Noch 13 Std 38 Min
+            "ebay:298689575398": "2026-09-26T13:00:00+00:00",  # Noch 1 T 1 Std
+            "ebay:800690204853": "2026-09-27T13:00:00+00:00",  # Noch 2 T 1 Std
+            "ebay:800701145155": "2026-09-29T19:00:00+00:00",  # Noch 4 T 7 Std
+            "ebay:178521733310": "2026-09-30T12:00:00+00:00",  # Noch 5 T
+        }
+
+    def test_bid_row_with_time_left_is_still_an_auction(self, auctions):
+        """In this sort the bids row reads "3 Gebote · Restzeit Noch 14 Min (Heute 05:54)";
+        an exact "N Gebote" match missed every one of them."""
+        assert all(d["listing_type"] == "auction" for d in auctions.values())
+        d = auctions["ebay:366676623707"]
+        assert d["price"] == 5.5
+        assert d["shipping_cost"] == 5.19
+        assert d["title"] == "Xbox 360 Kinect Spielepaket: Mass Effect 3, Dance Central 1+2, Zumba, Adventures"
+
+    def test_time_left_parsing(self):
+        assert _parse_time_left("3 Gebote · Restzeit Noch 1 T 1 Std (Sa, 06:42)") == timedelta(days=1, hours=1)
+        assert _parse_time_left("Noch 52 Sek") == timedelta(seconds=52)
+        assert _parse_time_left("Noch 2 Tage 3 Std.") == timedelta(days=2, hours=3)
+        assert _parse_time_left("3 Gebote") is None
+        assert _parse_time_left("Noch nicht bewertet") is None
+
 
 class TestEdgeCases:
     def test_price_range_listing_skipped(self, scraper):
@@ -199,11 +241,34 @@ class TestSearchRequest:
         params = mock_get.call_args.kwargs["params"]
         assert params["_nkw"] == "xbox 360 (sammlung,konvolut) -fifa"  # eBay's OR/exclusion syntax passed through
         assert params["_sop"] == "10"  # newly listed ("12" is best match)
+        assert params["LH_BIN"] == "1"  # Buy It Now; auctions come from search_auctions()
         assert params["LH_PrefLoc"] == "1"  # located in Germany
         assert params["_sacat"] == "1249"  # Videospiele & Konsolen
         assert params["_ipg"] == "120"
         assert len(deals) == 6
         assert errors == []
+
+    def test_auction_search_sorts_by_end_time_and_applies_the_cutoff(self, scraper):
+        resp = MagicMock(ok=True, status_code=200, content=_AUCTIONS_FIXTURE)
+        with (
+            patch.object(scraper.session, "get", return_value=resp) as mock_get,
+            patch.object(scraper, "_rate_limit"),
+        ):
+            deals, errors = scraper.search_auctions("xbox 360 konvolut", ends_within=timedelta(days=2))
+            everything, _ = scraper.search_auctions("xbox 360 konvolut")
+        params = mock_get.call_args.kwargs["params"]
+        assert params["_sop"] == "1"  # ending soonest — the only sort that shows the time left
+        assert params["LH_Auction"] == "1"
+        assert params["LH_PrefLoc"] == "1"
+        assert errors == []
+        # Up to "Noch 1 T 1 Std"; "Noch 2 T 1 Std", "4 T 7 Std" and "5 T" are past the cutoff.
+        assert [d["listing_id"] for d in deals] == [
+            "ebay:366676623707",
+            "ebay:800700626891",
+            "ebay:267791170519",
+            "ebay:298689575398",
+        ]
+        assert len(everything) == 7
 
     def test_one_retry_after_a_403(self, scraper):
         """eBay often refuses a request while setting cookies, then serves it
@@ -275,3 +340,15 @@ def test_live_ebay_search():
     assert all(d["price"] > 0 for d in deals)
     assert sum(d["condition"] != "Unknown" for d in deals) >= len(deals) // 2
     assert all(d["listing_date"] for d in deals)
+
+
+@pytest.mark.live
+def test_live_ebay_auction_search():
+    """Opt-in drift detector: auctions from the real ebay.de carry an end time."""
+    deals, errors = EbayScraper().search_auctions("xbox 360 (sammlung,konvolut,paket)", max_results=60)
+    if not deals and errors and "EBAY_CLIENT_ID" in errors[0]:
+        pytest.skip(f"eBay's bot protection blocks this network: {errors[0]}")
+    assert deals, errors
+    assert all(d["listing_type"] == "auction" and d["auction_end"] for d in deals)
+    ends = [datetime.fromisoformat(d["auction_end"]) for d in deals]
+    assert ends == sorted(ends)  # ending soonest first

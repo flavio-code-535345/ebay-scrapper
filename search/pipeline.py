@@ -6,8 +6,9 @@ Stages (each a small pure function, tested on its own):
                 becomes an error in its report instead of stalling the search
   dedupe      → one entry per listing (stable listing ID across URL shapes,
                 then normalized title+price for cross-posted listings)
-  apply_filters → skipped listings, non-German items, sports-only bundles,
-                listings for a different platform than the one searched
+  apply_filters → skipped listings, non-German items, auctions that don't end
+                within two days, sports-only bundles, listings for a
+                different platform than the one searched
   select      → score (query match, freshness, price per game) and fill the
                 AI slots so every source that has relevant results is heard,
                 instead of whichever source was merged first crowding it out
@@ -16,13 +17,14 @@ Stages (each a small pure function, tested on its own):
 from __future__ import annotations
 
 import concurrent.futures
+import functools
 import logging
 import math
 import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from ai_providers.base import (
     _BUNDLE_TITLE_KEYWORDS_RE,
@@ -36,6 +38,12 @@ from search.query import SearchPlan, platforms_named
 logger = logging.getLogger(__name__)
 
 SearchFn = Callable[..., tuple[list[dict], list[str]]]
+
+# Auctions are only worth showing when bidding closes soon: the current bid of
+# an auction with a week to go says little about what it will sell for, and
+# nobody wants to wait that long. Auctions ending later — or whose end time
+# no source reported — are dropped.
+AUCTION_MAX_TIME_LEFT = timedelta(days=2)
 
 # Shared by every search: a pool that is never torn down mid-request, so a
 # source that overruns the budget keeps running in the background instead of
@@ -133,20 +141,27 @@ def listing_key(deal: dict) -> str:
 
 
 def dedupe(results: list[tuple[SourceJob, list[dict]]]) -> list[dict]:
-    seen_keys: set[str] = set()
+    by_key: dict[str, dict] = {}
     seen_title_price: set[str] = set()
     merged: list[dict] = []
     for job, deals in results:
         for deal in deals:
             key = listing_key(deal)
-            if not key or key in seen_keys:
+            if not key:
+                continue
+            if key in by_key:
+                # e.g. an auction with a Buy-It-Now option: the newest-first
+                # Buy-It-Now leg can't see its end time, the auction leg can.
+                kept = by_key[key]
+                if deal.get("auction_end") and not kept.get("auction_end"):
+                    kept["auction_end"] = deal["auction_end"]
                 continue
             price = deal.get("price") or 0
             norm_title = _NON_ALNUM_RE.sub(" ", (deal.get("title") or "").lower()).strip()
             title_price = f"{norm_title}|{price:.2f}" if price else ""
             if title_price and title_price in seen_title_price:
                 continue
-            seen_keys.add(key)
+            by_key[key] = deal
             if title_price:
                 seen_title_price.add(title_price)
             deal.setdefault("source", "kleinanzeigen" if job.source == "kleinanzeigen" else "ebay")
@@ -192,6 +207,25 @@ def is_sports_only(deal: dict) -> bool:
     return len(tokens) < 3
 
 
+def _parse_iso(raw) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def auction_ends_too_late(deal: dict, now: datetime) -> bool:
+    """An auction that won't end within :data:`AUCTION_MAX_TIME_LEFT`, has
+    already ended, or has no known end time. Fixed-price listings never are."""
+    if deal.get("listing_type") != "auction":
+        return False
+    end = _parse_iso(deal.get("auction_end"))
+    return end is None or not now < end <= now + AUCTION_MAX_TIME_LEFT
+
+
 def is_other_platform(deal: dict, platform: str | None) -> bool:
     """The title names only platforms other than the one searched for."""
     if not platform:
@@ -200,14 +234,19 @@ def is_other_platform(deal: dict, platform: str | None) -> bool:
     return bool(named) and platform not in named
 
 
-def apply_filters(deals: list[dict], plan: SearchPlan, skipped: set[str]) -> tuple[list[dict], dict[str, int]]:
-    removed = {"skipped": 0, "not_germany": 0, "sports_only": 0, "other_platform": 0}
+def apply_filters(
+    deals: list[dict], plan: SearchPlan, skipped: set[str], now: datetime | None = None
+) -> tuple[list[dict], dict[str, int]]:
+    now = now or datetime.now(UTC)
+    removed = {"skipped": 0, "not_germany": 0, "auction_ends_late": 0, "sports_only": 0, "other_platform": 0}
     kept = []
     for deal in deals:
         if deal.get("url") in skipped or listing_key(deal) in skipped:
             removed["skipped"] += 1
         elif deal.get("source") != "kleinanzeigen" and not is_german_location(deal.get("item_location")):
             removed["not_germany"] += 1
+        elif auction_ends_too_late(deal, now):
+            removed["auction_ends_late"] += 1
         elif is_sports_only(deal):
             removed["sports_only"] += 1
         elif is_other_platform(deal, plan.platform):
@@ -242,12 +281,8 @@ def game_count(title: str) -> int | None:
 
 
 def _freshness(deal: dict, now: datetime) -> float:
-    raw = deal.get("listing_date")
-    if not raw:
-        return 0.4
-    try:
-        listed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except ValueError:
+    listed = _parse_iso(deal.get("listing_date"))
+    if listed is None:
         return 0.4
     age_days = max(0.0, (now - listed).total_seconds() / 86400)
     return math.pow(0.5, age_days / _FRESHNESS_HALF_LIFE_DAYS)
@@ -327,7 +362,10 @@ def run_search(
     ebay_queries = plan.ebay_api if ebay_is_api else plan.ebay_web
     jobs = [SourceJob("ebay", ebay_search, q, 200 if ebay_is_api else 120) for q in ebay_queries]
     if auction_search:
-        jobs += [SourceJob("ebay_auctions", auction_search, q, 50) for q in plan.ebay_api]
+        # Sources filter by end time themselves (fewer wasted result slots);
+        # apply_filters re-checks every auction, whichever leg it came from.
+        ending_soon = functools.partial(auction_search, ends_within=AUCTION_MAX_TIME_LEFT)
+        jobs += [SourceJob("ebay_auctions", ending_soon, q, 100) for q in ebay_queries]
     if kleinanzeigen_search:
         jobs += [SourceJob("kleinanzeigen", kleinanzeigen_search, q, 25) for q in plan.kleinanzeigen]
 
