@@ -63,6 +63,19 @@ class TestParseListingDate:
         assert parse_listing_date("Vor 30 Min. eingestellt", "scraper", now=_NOW) == _NOW - timedelta(minutes=30)
         assert parse_listing_date("Vor 1 T. eingestellt", "scraper", now=_NOW) == _NOW - timedelta(days=1)
 
+    def test_scraper_absolute_date_for_older_listings(self):
+        """ "Eingestellt am Sep 20" — German local midnight; eBay mixes English
+        and German month abbreviations."""
+        assert parse_listing_date("Eingestellt am Sep 20", "scraper", now=_NOW) == datetime(2026, 9, 20, tzinfo=_BERLIN)
+        assert parse_listing_date("Eingestellt am Okt 3", "scraper", now=_NOW) == datetime(2025, 10, 3, tzinfo=_BERLIN)
+
+    def test_scraper_absolute_date_rolls_back_a_year(self):
+        """No year is shown: a date later than today means last year."""
+        january = datetime(2027, 1, 5, 12, 0, tzinfo=UTC)
+        assert parse_listing_date("Eingestellt am Dez 30", "scraper", now=january) == datetime(
+            2026, 12, 30, tzinfo=_BERLIN
+        )
+
     def test_scraper_non_age_text_is_none(self):
         """Anything that isn't a relative age is never turned into a date."""
         assert parse_listing_date("2024-01-01T00:00:00Z", "scraper") is None

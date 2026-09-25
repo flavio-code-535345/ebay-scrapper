@@ -50,7 +50,11 @@ _BIDS_RE = re.compile(r"^(\d+)\s+gebote?$", re.IGNORECASE)
 # but not "Lieferung an Abholstation möglich" or "Kostenloser Rückversand" (returns).
 _SHIPPING_RE = re.compile(r"^(?:\+\s*(?:ca\.\s*)?eur\s*([\d.,]+)|gratis|kostenlos\w*)\b.*(?:lieferung|versand)", re.I)
 _FOREIGN_LOCATION_RE = re.compile(r"^aus\s+(.+)$", re.IGNORECASE)
-_AGE_ROW_RE = re.compile(r"^vor\s+\d+\s*\w+\.?\s+eingestellt$", re.IGNORECASE)
+# "Vor 5 Std. eingestellt" (newer) or "Eingestellt am Sep 20" (older). Matched
+# against every text node in the card: eBay serves more than one card layout.
+_AGE_TEXT_RE = re.compile(r"^(vor\s+\d+\s*\w+\.?\s+eingestellt|eingestellt\s+am\s+\S+\s+\d{1,2})$", re.IGNORECASE)
+# Badges some card layouts put inside the title element.
+_TITLE_BADGE_RE = re.compile(r"^(neues angebot|new listing|gesponsert|sponsored)\s*[:\-–]?\s*", re.IGNORECASE)
 _SELLER_RATING_RE = re.compile(r"(\d{1,3}(?:[.,]\d+)?)\s*%\s*positiv", re.IGNORECASE)
 _POPULARITY_RE = re.compile(r"^(\d+)\+?\s+(verkauft|beobachter)", re.IGNORECASE)
 _IMAGE_SIZE_RE = re.compile(r"/s-l\d+\.")
@@ -112,14 +116,21 @@ class EbayScraper:
             "_ipg": "120" if max_results > 60 else "60",
             "rt": "nc",
         }
-        self._rate_limit()
         logger.info("eBay scraper: searching %r", query)
-        try:
-            response = self.session.get(_SEARCH_URL, params=params, timeout=_REQUEST_TIMEOUT)
-        except requests.exceptions.Timeout:
-            return [], [f"eBay search timed out after {_REQUEST_TIMEOUT}s"]
-        except (requests.exceptions.ConnectionError, ConnectionError) as exc:
-            return [], [f"eBay connection error: {exc}"]
+        # eBay often answers a request 403 while setting session cookies, then
+        # serves the same request normally once those cookies come back — so
+        # a refusal gets exactly one retry on this (cookie-keeping) session.
+        for attempt in (1, 2):
+            self._rate_limit()
+            try:
+                response = self.session.get(_SEARCH_URL, params=params, timeout=_REQUEST_TIMEOUT)
+            except requests.exceptions.Timeout:
+                return [], [f"eBay search timed out after {_REQUEST_TIMEOUT}s"]
+            except (requests.exceptions.ConnectionError, ConnectionError) as exc:
+                return [], [f"eBay connection error: {exc}"]
+            if response.status_code != 403:
+                break
+            logger.info("eBay scraper: HTTP 403 on attempt %d", attempt)
 
         if response.status_code in (403, 429):
             logger.warning("eBay scraper: HTTP %d (bot protection)", response.status_code)
@@ -169,6 +180,8 @@ class EbayScraper:
             for noise in title_el.select(".clipped"):
                 noise.decompose()
         title = _text(title_el)
+        while (badge := _TITLE_BADGE_RE.match(title)) and badge.end() < len(title):
+            title = title[badge.end() :]
         if not title or title.lower() == "shop on ebay":
             return None
 
@@ -183,10 +196,10 @@ class EbayScraper:
         if not listing_num:
             return None
 
-        primary_rows = card.select(".su-card-container__attributes__primary .s-card__attribute-row")
+        rows = card.select(".s-card__attribute-row")
         # A price *range* ("EUR 17,44 bis EUR 186,09") is a multi-variation
         # listing — the buyer picks one item — not a single-lot deal.
-        if any(" bis " in _text(r) for r in primary_rows if r.select_one(".s-card__price")):
+        if any(" bis " in _text(r) for r in rows if r.select_one(".s-card__price")):
             return None
         price = _parse_eur_amount(_text(card.select_one(".s-card__price"))) or 0.0
 
@@ -199,11 +212,11 @@ class EbayScraper:
 
         listing_type = "fixed"
         shipping, shipping_cost = "", None
-        listing_date = None
         item_location = ""
         seller_count = ""
         is_trending = False
-        for text in (_text(r) for r in primary_rows):
+        seller_rating = 0.0
+        for text in (_text(r) for r in rows):
             if _BIDS_RE.match(text):
                 listing_type = "auction"
             elif not shipping and "rück" not in text.lower() and (m := _SHIPPING_RE.match(text)):
@@ -212,21 +225,19 @@ class EbayScraper:
                     shipping = f"€{shipping_cost:.2f}" if shipping_cost is not None else text
                 else:
                     shipping, shipping_cost = "Free", 0.0
-            elif _AGE_ROW_RE.match(text):
-                parsed = parse_listing_date(text, "scraper")
-                listing_date = parsed.isoformat() if parsed else None
             elif m := _FOREIGN_LOCATION_RE.match(text):
                 item_location = m.group(1)
             elif m := _POPULARITY_RE.match(text):
                 is_trending = True
                 if m.group(2).lower() == "verkauft":
                     seller_count = text
-
-        seller_rating = 0.0
-        for row in card.select(".su-card-container__attributes__secondary .s-card__attribute-row"):
-            if m := _SELLER_RATING_RE.search(_text(row)):
+            elif not seller_rating and (m := _SELLER_RATING_RE.search(text)):
                 seller_rating = float(m.group(1).replace(",", "."))
-                break
+
+        listing_date = None
+        age_text = next((s for s in (t.strip() for t in card.find_all(string=True)) if _AGE_TEXT_RE.match(s)), None)
+        if age_text and (parsed := parse_listing_date(age_text, "scraper")):
+            listing_date = parsed.isoformat()
 
         image_urls: list[str] = []
         for img in card.select("img.s-card__image"):

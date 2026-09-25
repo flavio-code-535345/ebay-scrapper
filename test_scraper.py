@@ -145,6 +145,36 @@ class TestEdgeCases:
         assert deals[0]["is_trending"] is True
         assert deals[0]["seller_count"] == "11+ verkauft"
 
+    def test_title_badge_stripped(self, scraper):
+        """Some card layouts eBay serves put a "Neues Angebot" badge inside the title."""
+
+        def add_badge(card):
+            title = card.select_one(".s-card__title")
+            title.insert(0, BeautifulSoup('<span class="su-styled-text">Neues Angebot</span>', "html.parser"))
+
+        deals, _ = scraper.parse_results_page(_page_with_card(add_badge))
+        assert deals[0]["title"] == "DJ Hero 2 Turntable Bundle inkl. DJ Hero 1 & 2 - Xbox 360 - Mischpult"
+
+    def test_absolute_listing_date_for_older_listings(self, scraper):
+        def listed_on(card):
+            age = next(s for s in card.find_all(string=True) if "eingestellt" in s)
+            age.replace_with("Eingestellt am Sep 20")
+
+        deals, _ = scraper.parse_results_page(_page_with_card(listed_on))
+        listed = datetime.fromisoformat(deals[0]["listing_date"])
+        assert (listed.month, listed.day) in ((9, 19), (9, 20))  # German midnight, stored in UTC
+
+    def test_listing_age_found_outside_the_usual_container(self, scraper):
+        """The age text is located anywhere in the card, not only under one wrapper."""
+
+        def move_age(card):
+            age_row = next(r for r in card.select(".s-card__attribute-row") if "eingestellt" in r.get_text())
+            age_row.extract()
+            card.select_one(".su-card-container__header").append(age_row)
+
+        deals, _ = scraper.parse_results_page(_page_with_card(move_age))
+        assert deals[0]["listing_date"] is not None
+
     def test_page_without_results_list_is_reported(self, scraper):
         deals, errors = scraper.parse_results_page(b"<html><title>Pardon Our Interruption</title></html>")
         assert deals == []
@@ -174,6 +204,29 @@ class TestSearchRequest:
         assert params["_ipg"] == "120"
         assert len(deals) == 6
         assert errors == []
+
+    def test_one_retry_after_a_403(self, scraper):
+        """eBay often refuses a request while setting cookies, then serves it
+        once they come back — observed live, roughly every other request."""
+        refused = MagicMock(ok=False, status_code=403, reason="Forbidden")
+        with (
+            patch.object(scraper.session, "get", side_effect=[refused, self._ok_response()]) as mock_get,
+            patch.object(scraper, "_rate_limit"),
+        ):
+            deals, errors = scraper.search("xbox")
+        assert mock_get.call_count == 2
+        assert len(deals) == 6
+        assert errors == []
+
+    def test_only_one_retry(self, scraper):
+        refused = MagicMock(ok=False, status_code=403, reason="Forbidden")
+        with (
+            patch.object(scraper.session, "get", return_value=refused) as mock_get,
+            patch.object(scraper, "_rate_limit"),
+        ):
+            deals, errors = scraper.search("xbox")
+        assert mock_get.call_count == 2
+        assert deals == []
 
     @pytest.mark.parametrize("status", [403, 429])
     def test_bot_protection_refusal_explains_the_api_alternative(self, scraper, status):

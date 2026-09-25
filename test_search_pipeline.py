@@ -141,9 +141,12 @@ class TestFilters:
         deals = [
             _deal(title="FIFA 19 Xbox 360", url="https://x/1"),
             _deal(title="Xbox 360 Sammlung FIFA Halo Gears Fable Mass Effect", url="https://x/2"),
+            # Seen live: bundle words and platform names aren't "other games".
+            _deal(title="FIFA Sammlung Konvolut Xbox 360 X360", url="https://x/3", price=32.0),
         ]
         outcome = self._run(deals)
         assert [d["url"] for d in outcome.selected] == ["https://x/2"]
+        assert outcome.removed["sports_only"] == 2
 
     def test_german_location_helper(self):
         assert is_german_location("") and is_german_location("Berlin, DE") and is_german_location("Deutschland")

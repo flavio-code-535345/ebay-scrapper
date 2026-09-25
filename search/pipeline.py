@@ -170,6 +170,9 @@ def is_german_location(location: str | None) -> bool:
 
 _SPORTS_NOISE_RE = re.compile(r"\b(je\s+stk|stk|pro|jede|und|mit|für|oder|stück|wahl|aus)\b")
 _QUANTITY_RE = re.compile(r"\d+\s*[€x×]|\b\d+\b")
+_SPORTS_FILLER_WORDS = frozenset(
+    {"die", "der", "das", "ein", "sie", "von", "spiele", "spiel", "games", "game", "pal", "ovp", "teile", "stk"}
+)
 
 
 def is_sports_only(deal: dict) -> bool:
@@ -179,8 +182,13 @@ def is_sports_only(deal: dict) -> bool:
     if not _detect_sports_kinect_deal(deal):
         return False
     cleaned = _SPORTS_KINECT_KEYWORDS_RE.sub(" ", (deal.get("title") or "").lower())
+    # Bundle words and platform names say nothing about *which* games are in
+    # it — "FIFA Sammlung Konvolut PS4" is still sports-only.
+    cleaned = _BUNDLE_TITLE_KEYWORDS_RE.sub(" ", cleaned)
+    for pattern, _ in _PLATFORM_MAP:
+        cleaned = pattern.sub(" ", cleaned)
     cleaned = _QUANTITY_RE.sub(" ", _SPORTS_NOISE_RE.sub(" ", cleaned))
-    tokens = [t for t in cleaned.split() if len(t) > 2 and t not in ("die", "der", "das", "ein", "sie", "von")]
+    tokens = [t for t in cleaned.split() if len(t) > 2 and t not in _SPORTS_FILLER_WORDS]
     return len(tokens) < 3
 
 

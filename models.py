@@ -153,11 +153,32 @@ def _parse_kleinanzeigen_date(raw: str, now: datetime) -> datetime | None:
     return None
 
 
-def _parse_ebay_relative_age(raw: str, now: datetime) -> datetime | None:
+# Older listings show an absolute day instead: "Eingestellt am Sep 20"
+# (eBay mixes English and German month abbreviations).
+_EBAY_LISTED_ON_RE = re.compile(r"eingestellt\s+am\s+([a-zäöü]{3})[a-zäöü]*\.?\s+(\d{1,2})\b", re.IGNORECASE)
+_ENGLISH_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+_MONTHS = {
+    **{m: i for i, m in enumerate(_ENGLISH_MONTHS, 1)},
+    **{"mär": 3, "mrz": 3, "mai": 5, "okt": 10, "dez": 12},
+}
+
+
+def _parse_ebay_listing_age(raw: str, now: datetime) -> datetime | None:
     m = _EBAY_RELATIVE_AGE_RE.search(raw)
-    if not m:
+    if m:
+        return now - int(m.group(1)) * _EBAY_AGE_UNITS[m.group(2).lower()]
+    m = _EBAY_LISTED_ON_RE.search(raw)
+    month = _MONTHS.get(m.group(1).lower()) if m else None
+    if not month:
         return None
-    return now - int(m.group(1)) * _EBAY_AGE_UNITS[m.group(2).lower()]
+    today = now.astimezone(_BERLIN)
+    try:
+        listed = datetime(today.year, month, int(m.group(2)), tzinfo=_BERLIN)
+    except ValueError:
+        return None
+    if listed > today:  # no year is shown; "Dez 30" seen in January means last year
+        listed = listed.replace(year=today.year - 1)
+    return listed.astimezone(UTC)
 
 
 def parse_listing_date(raw: str | None, source: str, *, now: datetime | None = None) -> datetime | None:
@@ -165,7 +186,8 @@ def parse_listing_date(raw: str | None, source: str, *, now: datetime | None = N
 
     ``source`` is one of ``"api"`` (eBay Browse API — ISO-8601),
     ``"kleinanzeigen"`` (German local-time text), or ``"scraper"`` (eBay's
-    result cards: a coarse relative age like "Vor 5 Std. eingestellt"). Text
+    result cards: a coarse relative age like "Vor 5 Std. eingestellt", or
+    "Eingestellt am Sep 20" for older listings). Text
     that doesn't match the source's known format returns None — never a
     fabricated date. ``now`` exists for deterministic tests.
     """
@@ -175,7 +197,7 @@ def parse_listing_date(raw: str | None, source: str, *, now: datetime | None = N
     if source == "kleinanzeigen":
         return _parse_kleinanzeigen_date(raw, now)
     if source == "scraper":
-        return _parse_ebay_relative_age(raw, now)
+        return _parse_ebay_listing_age(raw, now)
     try:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
