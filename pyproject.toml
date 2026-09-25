@@ -19,7 +19,9 @@ include = ["ai_providers*"]
 [tool.pytest.ini_options]
 testpaths = ["."]
 python_files = ["test_*.py"]
-addopts = "-q --tb=short"
+# Live tests hit the real eBay/Kleinanzeigen sites — opt in with `pytest -m live`.
+addopts = "-q --tb=short -m 'not live'"
+markers = ["live: hits real external sites (opt in with -m live; never run in CI)"]
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",

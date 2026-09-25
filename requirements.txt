@@ -7,3 +7,6 @@ beautifulsoup4>=4.12.0,<5
 gunicorn>=22.0.0,<24
 # >=1.51.0 required for Gemini 3.x model API features (e.g. media_resolution)
 google-genai>=1.51.0,<2
+# IANA time-zone database for zoneinfo (German local listing times) — Windows
+# and slim container images don't ship one of their own.
+tzdata>=2024.1

@@ -1,7 +1,11 @@
-#!/usr/bin/env python3
-"""
-eBay Web Scraper Engine
-Handles fetching and parsing eBay listings (defaults to ebay.de)
+"""eBay.de HTML search-results scraper — the fallback engine when no Browse API
+credentials are configured.
+
+Parses eBay's current result-card markup (``ul.srp-results > li.s-card``).
+eBay fronts these pages with bot protection that, depending on the network,
+may refuse any non-browser client outright (HTTP 403); when that happens this
+scraper says so plainly and points at the official Browse API
+(``EBAY_CLIENT_ID``/``EBAY_CLIENT_SECRET``), which is the reliable path.
 """
 
 import logging
@@ -14,108 +18,76 @@ import time
 import requests
 from bs4 import BeautifulSoup
 
-from models import normalize_condition
+from models import canonical_listing_id, normalize_condition, parse_listing_date
 
 logger = logging.getLogger(__name__)
 
-# German condition keywords used on ebay.de for best-effort text matching
-_DE_CONDITION_KEYWORDS = [
-    "Neu",
-    "Gebraucht",
-    "Generalüberholt",
-    "Akzeptabler Zustand",
-    "Sehr guter Zustand",
-    "Guter Zustand",
-    "Für Ersatzteile",
-    "Zustand:",
-]
+_SEARCH_URL = "https://www.ebay.de/sch/i.html"
+_REQUEST_TIMEOUT = 15
+# eBay's "Videospiele & Konsolen" category — the same one the Browse API client searches.
+_VIDEO_GAMES_CATEGORY = "1249"
 
-# German shipping keywords
-_DE_SHIPPING_KEYWORDS = ["versand", "lieferung", "kostenlos", "gratis", "free"]
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
 
-# German / eBay trending / popularity keywords
-_DE_TRENDING_KEYWORDS = {"beliebt", "sehr beliebt", "angesagt", "hot", "trending"}
-
-# Maximum text length thresholds used to avoid accidentally matching large wrapper text
-_MAX_CONDITION_TEXT_LEN = 80
-_MAX_SELLER_TEXT_LEN = 120
-_MAX_SHIPPING_TEXT_LEN = 100
-
-# Text phrases (lower-case) that indicate a listing has variant/dropdown selectors.
-# Listings with these phrases are NOT fixed-price bundles and are excluded.
-_VARIANT_TEXT_PATTERNS = [
-    # German
-    "mehrere ausführungen",
-    "ausführung wählen",
-    "farbe wählen",
-    "größe wählen",
-    "modell wählen",
-    "variante wählen",
-    "auswahl treffen",
-    "variation verfügbar",
-    "varianten verfügbar",
-    # English (fallback for mixed-language results)
-    "available in multiple",
-    "choose your",
-    "select a color",
-    "select a size",
-    "select your",
-    "color:",
-    "size:",
-    "style:",
-]
-
-# Maximum text length when scanning for variant text patterns.
-_MAX_VARIANT_TEXT_LEN = 80
-
-# eBay injects short badge/label spans directly inside the title element.
-# These must be stripped out to recover the actual listing title.
-# All entries must be lower-cased for case-insensitive comparison.
-_TITLE_NOISE_PHRASES = frozenset(
-    {
-        "neues angebot",  # "New Listing" badge – German
-        "new listing",  # "New Listing" badge – English
-        "gesponsert",  # "Sponsored" badge – German
-        "sponsored",  # "Sponsored" badge – English
-        "top-rated plus",
-        "top-bewerteter anbieter",
-    }
+_BLOCKED_HINT = (
+    "eBay's bot protection refused this automated request — it blocks non-browser clients on some networks. "
+    "Set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET to use the official eBay Browse API instead."
 )
+
+# Card text patterns (all German, as served by ebay.de).
+_CONDITION_ROW_RE = re.compile(
+    r"^(neu|gebraucht|generalüberholt|hervorragend|sehr gut|gut|akzeptabel|nur ersatzteile|defekt)\b", re.IGNORECASE
+)
+_BIDS_RE = re.compile(r"^(\d+)\s+gebote?$", re.IGNORECASE)
+# "+EUR 9,68 Lieferung", "+ ca. EUR 12,27 Versand", "Gratis 2-3 Tage Lieferung" —
+# but not "Lieferung an Abholstation möglich" or "Kostenloser Rückversand" (returns).
+_SHIPPING_RE = re.compile(r"^(?:\+\s*(?:ca\.\s*)?eur\s*([\d.,]+)|gratis|kostenlos\w*)\b.*(?:lieferung|versand)", re.I)
+_FOREIGN_LOCATION_RE = re.compile(r"^aus\s+(.+)$", re.IGNORECASE)
+_AGE_ROW_RE = re.compile(r"^vor\s+\d+\s*\w+\.?\s+eingestellt$", re.IGNORECASE)
+_SELLER_RATING_RE = re.compile(r"(\d{1,3}(?:[.,]\d+)?)\s*%\s*positiv", re.IGNORECASE)
+_POPULARITY_RE = re.compile(r"^(\d+)\+?\s+(verkauft|beobachter)", re.IGNORECASE)
+_IMAGE_SIZE_RE = re.compile(r"/s-l\d+\.")
+
+
+def _parse_eur_amount(text: str) -> float | None:
+    """Parse the first amount in an eBay price string ("EUR 1.234,56", "$20.00")."""
+    m = re.search(r"\d[\d.,]*", text or "")
+    if not m:
+        return None
+    num = m.group(0).rstrip(".,")
+    if "," in num and "." in num:
+        num = num.replace(".", "").replace(",", ".") if num.rfind(",") > num.rfind(".") else num.replace(",", "")
+    elif "," in num:
+        num = num.replace(",", ".")
+    try:
+        return float(num)
+    except ValueError:
+        return None
+
+
+def _text(el) -> str:
+    return el.get_text(" ", strip=True) if el else ""
 
 
 class EbayScraper:
     def __init__(self):
-        self.base_url = "https://www.ebay.de/sch/i.html"
-        self.headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/131.0.0.0 Safari/537.36"
-            ),
-            "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        }
         self.session = requests.Session()
-        _proxy = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or ""
-        _proxy_https = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or ""
-        if _proxy or _proxy_https:
-            self.session.proxies = {
-                "http": _proxy or _proxy_https,
-                "https": _proxy_https or _proxy,
-            }
+        self.session.headers.update(_HEADERS)
+        proxy = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or ""
+        proxy_https = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or ""
+        if proxy or proxy_https:
+            self.session.proxies = {"http": proxy or proxy_https, "https": proxy_https or proxy}
             logger.info("EbayScraper: HTTP proxy configured (%s)", self.session.proxies)
-
         self._last_request = 0.0
-        # app.py's search pipeline now fires per-query requests to this
-        # scraper from a thread pool instead of one at a time. Confirmed by
-        # hand: firing several queries at eBay simultaneously (no spacing)
-        # gets most of them 403'd, where the same queries spaced out by a
-        # second or two all succeed — eBay's anti-bot heuristic reacts to
-        # bursts, not to steady request volume. This lock-guarded gate
-        # serializes concurrent callers into randomized, human-ish spacing
-        # (previously this was a `time.sleep()` *after* each request
-        # returned, which only throttled sequential calls — it did nothing
-        # once calls could start concurrently).
+        # Concurrent callers are serialized into randomized, human-ish spacing:
+        # eBay's anti-bot heuristic reacts to bursts, not steady volume.
         self._rate_limit_lock = threading.Lock()
 
     def _rate_limit(self) -> None:
@@ -127,539 +99,160 @@ class EbayScraper:
             self._last_request = time.monotonic()
 
     def search(self, query: str, max_results: int = 50) -> tuple[list[dict], list[str]]:
-        """Search eBay for items matching query.
+        """Search ebay.de, newest listings first, items located in Germany.
 
-        Returns a tuple of (deals, errors) where errors is a list of
-        human-readable strings describing any problems encountered.
+        *query* may use eBay's search syntax — ``(a,b,c)`` OR groups and
+        ``-word`` exclusions — which the web search honors.
         """
-        errors: list[str] = []
+        params = {
+            "_nkw": query,
+            "_sop": "10",  # newly listed first ("12" is best match)
+            "LH_PrefLoc": "1",  # item located in Germany
+            "_sacat": _VIDEO_GAMES_CATEGORY,
+            "_ipg": "120" if max_results > 60 else "60",
+            "rt": "nc",
+        }
         self._rate_limit()
-
+        logger.info("eBay scraper: searching %r", query)
         try:
-            params = {
-                "_nkw": query,
-                "_sop": "12",  # Sort by newly listed
-                "LH_ItemCondition": "3000|3000|1000",  # All conditions
-                # LH_ItemLocation=1 restricts search results to items physically
-                # located in Germany (the same country as the ebay.de domain).
-                # This ensures that deals originate from German sellers/warehouses
-                # and not from international sellers who ship to Germany.
-                "LH_ItemLocation": "1",
-                "rt": "nc",
-            }
+            response = self.session.get(_SEARCH_URL, params=params, timeout=_REQUEST_TIMEOUT)
+        except requests.exceptions.Timeout:
+            return [], [f"eBay search timed out after {_REQUEST_TIMEOUT}s"]
+        except (requests.exceptions.ConnectionError, ConnectionError) as exc:
+            return [], [f"eBay connection error: {exc}"]
 
-            logger.info("Searching eBay for %r (max_results=%d)", query, max_results)
+        if response.status_code in (403, 429):
+            logger.warning("eBay scraper: HTTP %d (bot protection)", response.status_code)
+            return [], [f"eBay HTTP {response.status_code}: {_BLOCKED_HINT}"]
+        if not response.ok:
+            return [], [f"eBay HTTP {response.status_code}: {response.reason}"]
 
+        return self.parse_results_page(response.content, max_results)
+
+    def parse_results_page(self, html: bytes | str, max_results: int = 50) -> tuple[list[dict], list[str]]:
+        """Parse a search-results page into deals. Separate from :meth:`search`
+        so it can be tested against captured real pages."""
+        soup = BeautifulSoup(html, "html.parser")
+        results_list = soup.select_one("ul.srp-results")
+        if results_list is None:
+            title = _text(soup.title) or "(no <title>)"
+            return [], [f"eBay returned an unexpected page ({title!r}) — no results list. {_BLOCKED_HINT}"]
+
+        # Direct children only: eBay's "Shop on eBay" placeholder cards live
+        # outside the results list, and ad/pagination blocks in it aren't s-cards.
+        cards = results_list.select(":scope > li.s-card")
+        deals: list[dict] = []
+        failed = 0
+        for card in cards:
+            if len(deals) >= max_results:
+                break
             try:
-                response = self.session.get(self.base_url, params=params, headers=self.headers, timeout=10)
-            except requests.exceptions.Timeout:
-                msg = "HTTP request timed out after 10 seconds"
-                logger.error(msg)
-                errors.append(msg)
-                return [], errors
-            except (requests.exceptions.ConnectionError, ConnectionError) as exc:
-                msg = f"Connection error: {exc}"
-                logger.error(msg)
-                errors.append(msg)
-                return [], errors
+                deal = self._parse_card(card)
+            except Exception as exc:
+                failed += 1
+                logger.warning("eBay scraper: failed to parse a result card: %s", exc, exc_info=True)
+                continue
+            if deal:
+                deals.append(deal)
 
-            logger.info("HTTP %d %s", response.status_code, response.reason)
+        errors: list[str] = []
+        if failed:
+            errors.append(f"{failed} eBay result card(s) could not be parsed and were skipped.")
+        if cards and not deals and failed:
+            errors.append("eBay returned results but none could be parsed — the page markup has likely changed.")
+        logger.info("eBay scraper: %d cards → %d deals", len(cards), len(deals))
+        return deals, errors
 
-            if not response.ok:
-                msg = f"HTTP {response.status_code}: {response.reason}"
-                logger.error("eBay returned an error – %s", msg)
-                errors.append(msg)
-                if response.status_code == 403:
-                    errors.append(
-                        "Access denied – eBay may be blocking automated requests. "
-                        "Try again later or use a different network."
-                    )
-                elif response.status_code == 429:
-                    errors.append(
-                        "Rate limited – too many requests sent in a short time. "
-                        "Wait a few minutes before searching again."
-                    )
-                return [], errors
-
-            soup = BeautifulSoup(response.content, "html.parser")
-            deals: list[dict] = []
-
-            # ── Selector strategy ─────────────────────────────────────────────
-            # eBay uses <li class="s-item …"> inside <ul class="srp-results …">.
-            # eBay periodically changes or adds class names, so we try a cascade
-            # of increasingly broad selectors and log which one fired.
-
-            # 1. Primary: class-based s-item selector (covers li AND div variants)
-            items = soup.select("li.s-item, div.s-item")
-            selector_used = "li.s-item / div.s-item"
-
-            if not items:
-                # 2. Fallback A: any direct <li> children of the srp-results
-                #    container that contain a product link.  This handles the
-                #    case where eBay removed or renamed the s-item class while
-                #    keeping the overall srp-results wrapper intact.
-                srp_container = soup.find(class_="srp-results")
-                if srp_container:
-                    candidate_lis = srp_container.find_all("li", recursive=False)
-                    items = [
-                        li
-                        for li in candidate_lis
-                        if li.find("a", class_="s-item__link") or li.find("a", href=lambda h: h and "/itm/" in h)
-                    ]
-                    if items:
-                        selector_used = "srp-results > li (fallback A)"
-                        logger.warning(
-                            "Primary 's-item' selector returned 0 results; "
-                            "fell back to 'srp-results > li' — eBay likely changed "
-                            "the item class name.  This is a markup/selector change, "
-                            "NOT a connectivity or ban problem."
-                        )
-
-            if not items:
-                # 3. Fallback B: any element (any tag) carrying the s-item__wrapper
-                #    class, which has been stable across several eBay redesigns.
-                items = soup.select(".s-item__wrapper")
-                if items:
-                    selector_used = ".s-item__wrapper (fallback B)"
-                    logger.warning(
-                        "Fell back to '.s-item__wrapper' selector — eBay may have "
-                        "changed their markup.  This is a selector/markup issue, NOT "
-                        "a connectivity or ban problem."
-                    )
-
-            logger.info(
-                "BeautifulSoup found %d raw item elements (selector: %s)",
-                len(items),
-                selector_used,
-            )
-
-            if not items:
-                # Gather diagnostic context so developers can tell whether the
-                # page loaded at all vs. the selectors simply no longer match.
-                srp_container = soup.find(class_="srp-results")
-                page_title = soup.title.string.strip() if soup.title and soup.title.string else "(no <title>)"
-                html_preview = response.text[:300].replace("\n", " ")
-
-                if srp_container:
-                    diag = (
-                        "An 'srp-results' container was found on the page, which means "
-                        "eBay returned a valid search results page. None of the known "
-                        "item selectors ('li.s-item', 'div.s-item', 'srp-results > li', "
-                        "'.s-item__wrapper') matched any elements — eBay has likely "
-                        "changed their item markup.  This is a selector/markup issue, "
-                        "NOT a connectivity or ban problem."
-                    )
-                else:
-                    diag = (
-                        f"No 'srp-results' container and no item elements were found. "
-                        f'Page title: "{page_title}". '
-                        f"eBay may have significantly restructured their search results page "
-                        f"or returned an unexpected page (CAPTCHA, login wall, etc.)."
-                    )
-
-                msg = (
-                    "BeautifulSoup found 0 item elements after trying all known "
-                    "selectors ('li.s-item', 'srp-results > li', '.s-item__wrapper'). "
-                    "eBay has likely changed their HTML structure — this is a markup/"
-                    "selector issue, not a connectivity or ban problem. "
-                    "The scraper's selectors need to be updated to match the new page layout."
-                )
-                logger.warning(msg)
-                logger.debug("Zero-item diagnostic: %s HTML preview: %r", diag, html_preview)
-                errors.append(msg)
-                errors.append(diag)
-
-            parse_errors = 0
-            for item in items[:max_results]:
-                try:
-                    deal = self._parse_item(item)
-                    if deal:
-                        deals.append(deal)
-                except Exception as exc:
-                    parse_errors += 1
-                    logger.warning("Error parsing item element: %s", exc, exc_info=True)
-                    continue
-
-            if parse_errors:
-                errors.append(f"{parse_errors} item(s) could not be parsed and were skipped.")
-
-            logger.info("Returning %d deals (%d errors)", len(deals), len(errors))
-            return deals, errors
-
-        except Exception as exc:
-            msg = f"Unexpected error during search: {exc}"
-            logger.error(msg, exc_info=True)
-            errors.append(msg)
-            return [], errors
-
-    def _parse_item(self, item_element) -> dict:
-        """Parse individual item element into deal dictionary.
-
-        Uses a cascade of selectors for each field so that parsing continues
-        to work when eBay tweaks their class names between the well-known
-        `s-item__*` names and any new variants they introduce.
-        """
-        try:
-            # Extract title – eBay uses <h3> in newer layouts, <h2> in older ones;
-            # using a CSS class selector avoids the tag dependency entirely.
-            # eBay also injects badge spans (e.g. "Neues Angebot", "Gesponsert")
-            # as child elements inside the title wrapper – strip those out so only
-            # the real listing name is kept.
-            title_elem = (
-                item_element.select_one(".s-item__title")
-                or item_element.select_one('[data-testid="item-card-title"]')  # newer eBay layout
-                or item_element.find("h3")
-                or item_element.find("h2")
-            )
-            if title_elem:
-                # Join all non-empty text nodes, skipping known eBay badge labels.
-                title_parts = []
-                for s in title_elem.strings:
-                    stripped = s.strip()
-                    if stripped and stripped.lower() not in _TITLE_NOISE_PHRASES:
-                        title_parts.append(stripped)
-                title = " ".join(title_parts).strip()
-                if not title:
-                    title = "Unknown"
-            else:
-                title = "Unknown"
-
-            # Skip eBay's placeholder cards (English and German variants).
-            _skip = {"shop on ebay", "zu ebay", "results matching fewer words"}
-            if title.lower() in _skip or title.lower().startswith("ergebnisse für"):
-                return None
-
-            # Skip dropdown/variant listings – these are NOT fixed-price bundles.
-            if self._is_dropdown_variant(item_element):
-                logger.debug("Skipping dropdown/variant listing: %r", title)
-                return None
-
-            # Extract price – try stable class first, then any element containing
-            # a currency symbol (€ for ebay.de, $ for .com).
-            price_elem = item_element.find(class_="s-item__price")
-            if not price_elem:
-                price_elem = item_element.find("span", string=lambda s: s and ("€" in s or "EUR" in s or "$" in s))
-            price_text = price_elem.text.strip() if price_elem else "€0,00"
-            price = self._parse_price(price_text)
-
-            # Extract condition (Zustand) with multiple fallback strategies.
-            condition = self._extract_condition(item_element)
-
-            # Extract seller rating with multiple fallback strategies.
-            seller_rating = self._extract_seller_rating(item_element)
-
-            # Extract item URL – try the dedicated link class first, then any
-            # anchor that points to an individual eBay listing page (/itm/).
-            link_elem = item_element.find("a", class_="s-item__link") or item_element.find(
-                "a", href=lambda h: h and "/itm/" in h
-            )
-            item_url = link_elem.get("href", "") if link_elem else ""
-
-            # Extract shipping cost (Versand) with multiple fallback strategies.
-            shipping = self._extract_shipping(item_element)
-
-            # Check if item is trending / popular (Beliebt).
-            is_trending = self._extract_trending(item_element)
-
-            # Extract listing image URLs for AI/visual analysis.
-            image_urls = self._extract_image_urls(item_element)
-
-            # Detect any image quality issues (no extra HTTP requests needed).
-            image_issues = self._detect_image_issues(image_urls)
-
-            # Extract item location (Standort) — used to confirm the item is in DE.
-            item_location = self._extract_item_location(item_element)
-
-            return {
-                "title": title,
-                "price": price,
-                "condition": condition,
-                "condition_normalized": normalize_condition(condition),
-                "seller_rating": seller_rating,
-                "url": item_url,
-                "shipping": shipping,
-                "is_trending": is_trending,
-                # Physical location of the item (e.g. "DE" or city name).
-                # With LH_ItemLocation=1 all results should be Germany-based.
-                "item_location": item_location,
-                "image_urls": image_urls,
-                "image_issues": image_issues,
-                # eBay's search-results page exposes no listing date at all —
-                # never fabricate one (see models.parse_listing_date, source
-                # "scraper", which always returns None for the same reason).
-                "listing_date": None,
-                "timestamp": time.time(),
-            }
-
-        except Exception as exc:
-            logger.warning("Error in _parse_item: %s", exc, exc_info=True)
+    def _parse_card(self, card) -> dict | None:
+        title_el = card.select_one(".s-card__title")
+        if title_el is not None:
+            for noise in title_el.select(".clipped"):
+                noise.decompose()
+        title = _text(title_el)
+        if not title or title.lower() == "shop on ebay":
             return None
 
-    # ── Field-level extraction helpers ────────────────────────────────────────
-
-    def _extract_condition(self, item_element) -> str:
-        """Extract item condition (Zustand) using a cascade of strategies."""
-        # 1. Known class names (stable across several eBay layouts)
-        elem = (
-            item_element.find(class_="SECONDARY_INFO")
-            or item_element.select_one('[class*="SECONDARY_INFO"]')
-            or item_element.find(class_="s-item__subtitle")
-            or item_element.select_one('[class*="subtitle"]')
-            or item_element.select_one('[class*="condition"]')
-            or item_element.select_one('[class*="Condition"]')
+        link = card.select_one(".su-card-container__header a.s-card__link[href]") or card.select_one(
+            "a.s-card__link[href]"
         )
-        if elem:
-            text = elem.text.strip()
-            if text:
-                logger.debug("condition via class: %r", text)
-                return text
+        href = link.get("href", "") if link else ""
+        listing_num = card.get("data-listingid", "")
+        if not (listing_num.isdigit() and len(listing_num) >= 9):
+            canonical = canonical_listing_id(href)
+            listing_num = canonical.split(":", 1)[1] if canonical else ""
+        if not listing_num:
+            return None
 
-        # 2. Text-based search for German condition keywords
-        for node in item_element.find_all(["span", "div", "li"]):
-            text = node.text.strip()
-            # Guard against pulling in large wrapper text
-            if len(text) > _MAX_CONDITION_TEXT_LEN:
-                continue
-            for kw in _DE_CONDITION_KEYWORDS:
-                if text.lower().startswith(kw.lower()):
-                    logger.debug("condition via keyword %r: %r", kw, text)
-                    return text
+        primary_rows = card.select(".su-card-container__attributes__primary .s-card__attribute-row")
+        # A price *range* ("EUR 17,44 bis EUR 186,09") is a multi-variation
+        # listing — the buyer picks one item — not a single-lot deal.
+        if any(" bis " in _text(r) for r in primary_rows if r.select_one(".s-card__price")):
+            return None
+        price = _parse_eur_amount(_text(card.select_one(".s-card__price"))) or 0.0
 
-        logger.warning("Could not extract condition for item; defaulting to 'Unknown'")
-        return "Unknown"
+        condition = "Unknown"
+        for sub in card.select(".s-card__subtitle"):
+            sub_text = " ".join(_text(sub).split())
+            if _CONDITION_ROW_RE.match(sub_text):
+                condition = sub_text
+                break
 
-    def _extract_seller_rating(self, item_element) -> float:
-        """Extract seller rating percentage using a cascade of strategies."""
-        # 1. Known class names
-        seller_elem = (
-            item_element.find(class_="s-item__seller-info-text")
-            or item_element.find(class_="s-item__seller-info")
-            or item_element.select_one('[class*="seller-info"]')
-            or item_element.select_one('[class*="sellerInfo"]')
-        )
-        if seller_elem:
-            rating = self._parse_seller_rating(seller_elem.text)
-            if rating > 0:
-                logger.debug("seller rating via class: %.1f%%", rating)
-                return rating
-
-        # 2. Regex search for a percentage value in any short span/div.
-        for node in item_element.find_all(["span", "div"]):
-            text = node.text.strip()
-            if len(text) > _MAX_SELLER_TEXT_LEN or "%" not in text:
-                continue
-            match = re.search(r"(\d{1,3}(?:[.,]\d+)?)\s*%", text)
-            if match:
-                try:
-                    rating = float(match.group(1).replace(",", "."))
-                    if 0 < rating <= 100:
-                        logger.debug("seller rating via regex: %.1f%%", rating)
-                        return rating
-                except ValueError:
-                    pass
-
-        logger.warning("Could not extract seller rating for item; defaulting to 0.0%%")
-        return 0.0
-
-    def _extract_shipping(self, item_element) -> str:
-        """Extract shipping cost (Versand) using a cascade of strategies."""
-        # 1. Known class names
-        shipping_elem = (
-            item_element.find(class_="s-item__shipping")
-            or item_element.find(class_="s-item__logisticsCost")
-            or item_element.select_one('[class*="shipping"]')
-            or item_element.select_one('[class*="logisticsCost"]')
-            or item_element.select_one('[class*="Shipping"]')
-        )
-        if shipping_elem:
-            text = shipping_elem.text.strip()
-            if text:
-                logger.debug("shipping via class: %r", text)
-                return text
-
-        # 2. Text-based search for German shipping keywords
-        for node in item_element.find_all(["span", "div"]):
-            text = node.text.strip()
-            if len(text) > _MAX_SHIPPING_TEXT_LEN:
-                continue
-            text_lower = text.lower()
-            for kw in _DE_SHIPPING_KEYWORDS:
-                if kw in text_lower:
-                    logger.debug("shipping via keyword %r: %r", kw, text)
-                    return text
-
-        logger.warning("Could not extract shipping info for item; defaulting to 'Nicht angegeben'")
-        return "Nicht angegeben"
-
-    def _extract_trending(self, item_element) -> bool:
-        """Detect trending / popular status using a cascade of strategies."""
-        # 1. Known class names
-        if (
-            item_element.find(class_="SHOP_NEW_TAG")
-            or item_element.find(class_="s-item__trending-price")
-            or item_element.select_one('[class*="trending"]')
-            or item_element.select_one('[class*="TRENDING"]')
-            or item_element.select_one('[class*="hot"]')
-            or item_element.select_one('[class*="popular"]')
-        ):
-            return True
-
-        # 2. Text-based search for German popularity keywords
-        for node in item_element.find_all(["span", "div", "mark", "strong"]):
-            text = node.text.strip().lower()
-            if text in _DE_TRENDING_KEYWORDS:
-                logger.debug("trending via keyword: %r", text)
-                return True
-
-        return False
-
-    def _extract_image_urls(self, item_element) -> list[str]:
-        """Extract listing image URLs from the item element.
-
-        eBay lazy-loads images using ``data-src`` / ``s-src`` attributes;
-        this method checks both standard and lazy-load variants.
-        """
-        urls: list[str] = []
-        seen: set = set()
-
-        for img in item_element.find_all("img"):
-            for attr in ("src", "data-src", "s-src"):
-                url = img.get(attr, "").strip()
-                if (
-                    url
-                    and url.startswith("http")
-                    and url not in seen
-                    # Skip eBay placeholder / spacer images (GIF files)
-                    and not url.lower().endswith(".gif")
-                    and "s-l" in url  # eBay image CDN pattern (e.g. s-l500, s-l1600)
-                ):
-                    seen.add(url)
-                    urls.append(url)
-                    break  # one URL per <img> tag is enough
-
-        if urls:
-            logger.debug("Extracted %d image URL(s) for listing", len(urls))
-        return urls
-
-    def _is_dropdown_variant(self, item_element) -> bool:
-        """Return True if the listing has dropdown/variant selectors.
-
-        Variant/option listings (e.g. "choose colour", "select size") are NOT
-        fixed-price bundles and should be excluded from deal results.  We use a
-        set of CSS-class signals and text patterns that eBay injects into search-
-        result cards for multi-variation listings.
-        """
-        # 1. CSS class signals used by eBay to mark variation/variant listings.
-        if (
-            item_element.find(class_="s-item__variations")
-            or item_element.find(class_="s-item__variants-button")
-            or item_element.select_one('[class*="variations"]')
-            or item_element.select_one('[class*="variant"]')
-        ):
-            logger.debug("Dropdown/variant detected via CSS class")
-            return True
-
-        # 2. Rendered <select> dropdown elements inside the card.
-        if item_element.find("select"):
-            logger.debug("Dropdown/variant detected via <select> element")
-            return True
-
-        # 3. Text-based signals (German + English) for short inline elements.
-        for node in item_element.find_all(["span", "div", "a"]):
-            text = node.get_text(strip=True).lower()
-            if not text or len(text) > _MAX_VARIANT_TEXT_LEN:
-                continue
-            for phrase in _VARIANT_TEXT_PATTERNS:
-                if phrase in text:
-                    logger.debug("Dropdown/variant detected via text phrase %r: %r", phrase, text)
-                    return True
-
-        return False
-
-    def _detect_image_issues(self, image_urls: list[str]) -> list[str]:
-        """Detect potential image quality issues from the URL list alone.
-
-        Returns a (possibly empty) list of human-readable issue identifiers.
-        No extra HTTP requests are made; issues are inferred from URL metadata.
-
-        Possible identifiers returned:
-        - ``"no_images"``   – the listing has no product images at all.
-        """
-        if not image_urls:
-            return ["no_images"]
-
-        return []
-
-    def _extract_item_location(self, item_element) -> str:
-        """Extract the physical item location (Standort) from an eBay listing card.
-
-        eBay.de search results include a small "Standort:" label followed by the
-        seller's location (city or country).  With the ``LH_ItemLocation=1``
-        search parameter active, all returned items should already be located in
-        Germany — this field is extracted for display purposes on deal cards.
-
-        Returns a best-effort location string (e.g. ``"Berlin, Deutschland"``) or
-        an empty string when no location data is found on the card.
-        """
-        # 1. Known class names used by eBay for item location on search cards.
-        for cls in ("s-item__location", "s-item__itemLocation"):
-            elem = item_element.find(class_=cls)
-            if elem:
-                text = elem.get_text(strip=True)
-                if text:
-                    logger.debug("item_location via class %r: %r", cls, text)
-                    return text
-
-        # 2. Text search: look for "Standort:" label in short elements.
-        for node in item_element.find_all(["span", "div"]):
-            text = node.get_text(strip=True)
-            if len(text) > 80:
-                continue
-            lower = text.lower()
-            if lower.startswith("standort:") or lower.startswith("item location:"):
-                location = text.split(":", 1)[-1].strip()
-                if location:
-                    logger.debug("item_location via text: %r", location)
-                    return location
-
-        return ""
-
-    # ── Value parsers ──────────────────────────────────────────────────────────
-
-    def _parse_price(self, price_str: str) -> float:
-        """Extract numeric price from a string, handling EUR/€ and German
-        number formatting (period as thousands separator, comma as decimal)."""
-        try:
-            # Strip currency labels and surrounding whitespace
-            clean = price_str.replace("EUR", "").replace("€", "").replace("$", "").strip()
-            # Take only the first price token (handles ranges like "10,00 bis 20,00")
-            clean = clean.split()[0]
-            # Detect German number format: has both '.' and ',' with ',' last
-            if "," in clean and "." in clean:
-                last_comma = clean.rindex(",")
-                last_dot = clean.rindex(".")
-                if last_comma > last_dot:
-                    # German: "1.234,56" → remove '.', replace ',' with '.'
-                    clean = clean.replace(".", "").replace(",", ".")
+        listing_type = "fixed"
+        shipping, shipping_cost = "", None
+        listing_date = None
+        item_location = ""
+        seller_count = ""
+        is_trending = False
+        for text in (_text(r) for r in primary_rows):
+            if _BIDS_RE.match(text):
+                listing_type = "auction"
+            elif not shipping and "rück" not in text.lower() and (m := _SHIPPING_RE.match(text)):
+                if m.group(1):
+                    shipping_cost = _parse_eur_amount(m.group(1))
+                    shipping = f"€{shipping_cost:.2f}" if shipping_cost is not None else text
                 else:
-                    # English: "1,234.56" → remove ','
-                    clean = clean.replace(",", "")
-            elif "," in clean:
-                # Only comma: German decimal "12,99" → "12.99"
-                clean = clean.replace(",", ".")
-            # Remove any remaining non-numeric characters except '.' and '-'
-            clean = re.sub(r"[^\d.\-]", "", clean)
-            return float(clean)
-        except Exception:
-            return 0.0
+                    shipping, shipping_cost = "Free", 0.0
+            elif _AGE_ROW_RE.match(text):
+                parsed = parse_listing_date(text, "scraper")
+                listing_date = parsed.isoformat() if parsed else None
+            elif m := _FOREIGN_LOCATION_RE.match(text):
+                item_location = m.group(1)
+            elif m := _POPULARITY_RE.match(text):
+                is_trending = True
+                if m.group(2).lower() == "verkauft":
+                    seller_count = text
 
-    def _parse_seller_rating(self, seller_str: str) -> float:
-        """Extract seller rating percentage from a seller info string."""
-        try:
-            if "%" in seller_str:
-                match = re.search(r"(\d{1,3}(?:[.,]\d+)?)\s*%", seller_str)
-                if match:
-                    return float(match.group(1).replace(",", "."))
-            return 0.0
-        except Exception:
-            return 0.0
+        seller_rating = 0.0
+        for row in card.select(".su-card-container__attributes__secondary .s-card__attribute-row"):
+            if m := _SELLER_RATING_RE.search(_text(row)):
+                seller_rating = float(m.group(1).replace(",", "."))
+                break
+
+        image_urls: list[str] = []
+        for img in card.select("img.s-card__image"):
+            url = img.get("data-defer-load") or img.get("src") or ""
+            if "i.ebayimg.com" not in url:
+                continue
+            url = _IMAGE_SIZE_RE.sub("/s-l500.", url)
+            if url not in image_urls:
+                image_urls.append(url)
+
+        return {
+            "title": title,
+            "price": price,
+            "condition": condition,
+            "condition_normalized": normalize_condition(condition),
+            "seller_rating": seller_rating,
+            "url": f"https://www.ebay.de/itm/{listing_num}",
+            "listing_id": f"ebay:{listing_num}",
+            "shipping": shipping,
+            "shipping_cost": shipping_cost,
+            "is_trending": is_trending,
+            "item_location": item_location,
+            "description": "",
+            "seller_count": seller_count,
+            "listing_date": listing_date,
+            "listing_type": listing_type,
+            "image_urls": image_urls,
+            "image_issues": [] if image_urls else ["no_images"],
+        }

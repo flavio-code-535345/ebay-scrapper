@@ -1,8 +1,13 @@
 """Tests for models.py — shared deal schema, condition normalization, date parsing, sort key."""
 
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
-from models import Condition, normalize_condition, parse_listing_date, sort_key_for_deal
+from models import Condition, canonical_listing_id, normalize_condition, parse_listing_date, sort_key_for_deal
+
+_BERLIN = ZoneInfo("Europe/Berlin")
+# A fixed "now" (summer time, UTC+2) so date tests don't depend on the clock.
+_NOW = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
 
 
 class TestNormalizeCondition:
@@ -39,16 +44,29 @@ class TestNormalizeCondition:
         assert normalize_condition("NEU") == Condition.NEW
         assert normalize_condition("very good") == Condition.VERY_GOOD
 
+    def test_ebay_card_condition_strings(self):
+        """eBay's current result cards: '<condition> | <seller type>'."""
+        assert normalize_condition("Gebraucht | Privat") == Condition.USED
+        assert normalize_condition("Neu (Sonstige) | Gewerblich") == Condition.NEW_OTHER
+        assert normalize_condition("Nur Ersatzteile | Privat") == Condition.FOR_PARTS
+        assert normalize_condition("Gut - Refurbished") == Condition.REFURBISHED
+
 
 class TestParseListingDate:
     def test_none_or_empty(self):
         assert parse_listing_date(None, "api") is None
         assert parse_listing_date("", "kleinanzeigen") is None
 
-    def test_scraper_source_always_none(self):
-        """The HTML scraper's search page exposes no listing date at all —
-        never fabricate one even if a raw value somehow showed up."""
+    def test_scraper_relative_age(self):
+        """eBay's newest-first result cards show a coarse relative age."""
+        assert parse_listing_date("Vor 2 Std. eingestellt", "scraper", now=_NOW) == _NOW - timedelta(hours=2)
+        assert parse_listing_date("Vor 30 Min. eingestellt", "scraper", now=_NOW) == _NOW - timedelta(minutes=30)
+        assert parse_listing_date("Vor 1 T. eingestellt", "scraper", now=_NOW) == _NOW - timedelta(days=1)
+
+    def test_scraper_non_age_text_is_none(self):
+        """Anything that isn't a relative age is never turned into a date."""
         assert parse_listing_date("2024-01-01T00:00:00Z", "scraper") is None
+        assert parse_listing_date("Sofort-Kaufen", "scraper") is None
 
     def test_api_iso8601(self):
         dt = parse_listing_date("2024-03-01T10:00:00.000Z", "api")
@@ -60,28 +78,27 @@ class TestParseListingDate:
     def test_api_unparsable_returns_none(self):
         assert parse_listing_date("not a date", "api") is None
 
-    def test_kleinanzeigen_today(self):
-        dt = parse_listing_date("Heute, 19:30", "kleinanzeigen")
-        assert dt is not None
-        now = datetime.now(UTC)
-        assert dt.year == now.year and dt.month == now.month and dt.day == now.day
-        assert dt.hour == 19
-        assert dt.minute == 30
+    def test_kleinanzeigen_today_is_german_local_time(self):
+        """'Heute, 19:30' is 19:30 in Germany — 17:30 UTC in summer, not 19:30 UTC."""
+        dt = parse_listing_date("Heute, 19:30", "kleinanzeigen", now=_NOW)
+        assert dt == datetime(2026, 9, 25, 19, 30, tzinfo=_BERLIN)
+        assert dt.utcoffset() == timedelta(0)
+        assert dt.hour == 17
 
     def test_kleinanzeigen_yesterday(self):
-        dt = parse_listing_date("Gestern, 10:15", "kleinanzeigen")
-        assert dt is not None
-        expected_day = (datetime.now(UTC) - timedelta(days=1)).day
-        assert dt.day == expected_day
-        assert dt.hour == 10
-        assert dt.minute == 15
+        dt = parse_listing_date("Gestern, 10:15", "kleinanzeigen", now=_NOW)
+        assert dt == datetime(2026, 9, 24, 10, 15, tzinfo=_BERLIN)
+
+    def test_kleinanzeigen_today_uses_german_calendar_day(self):
+        """Just after midnight in Germany it's still the previous day in UTC —
+        'Heute' must mean the German day."""
+        just_after_german_midnight = datetime(2026, 9, 24, 22, 30, tzinfo=UTC)  # 00:30 on the 25th in Berlin
+        dt = parse_listing_date("Heute, 00:10", "kleinanzeigen", now=just_after_german_midnight)
+        assert dt == datetime(2026, 9, 25, 0, 10, tzinfo=_BERLIN)
 
     def test_kleinanzeigen_absolute_date(self):
         dt = parse_listing_date("05.09.2025", "kleinanzeigen")
-        assert dt is not None
-        assert dt.year == 2025
-        assert dt.month == 9
-        assert dt.day == 5
+        assert dt == datetime(2025, 9, 5, tzinfo=_BERLIN)
 
     def test_kleinanzeigen_unparsable_returns_none(self):
         assert parse_listing_date("some weird text", "kleinanzeigen") is None
@@ -116,3 +133,24 @@ class TestSortKeyForDeal:
         bad = {"ai_deal_rating": "Good", "listing_date": "not a date"}
         undated = {"ai_deal_rating": "Good", "listing_date": None}
         assert sort_key_for_deal(bad) == sort_key_for_deal(undated)
+
+
+class TestCanonicalListingId:
+    def test_same_ebay_listing_across_url_shapes(self):
+        """A Browse-API itemWebUrl and a search-results link with tracking
+        parameters must resolve to the same identity."""
+        api_url = "https://www.ebay.de/itm/206580175564"
+        web_url = "https://www.ebay.de/itm/206580175564?_skw=xbox+360&hash=item30192352cc"
+        slug_url = "https://www.ebay.de/itm/DJ-Hero-2-Turntable/206580175564"
+        assert canonical_listing_id(api_url) == "ebay:206580175564"
+        assert canonical_listing_id(web_url) == "ebay:206580175564"
+        assert canonical_listing_id(slug_url) == "ebay:206580175564"
+
+    def test_kleinanzeigen_ad(self):
+        url = "https://www.kleinanzeigen.de/s-anzeige/xbox-360-spiele-sammlung/3521619922-227-5751"
+        assert canonical_listing_id(url) == "kleinanzeigen:3521619922"
+
+    def test_unrecognised_url(self):
+        assert canonical_listing_id("https://example.com/whatever") is None
+        assert canonical_listing_id("") is None
+        assert canonical_listing_id(None) is None

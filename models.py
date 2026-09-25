@@ -15,6 +15,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import TypedDict
+from zoneinfo import ZoneInfo
 
 
 class Condition(StrEnum):
@@ -57,6 +58,7 @@ _EXACT_CONDITION_LABELS: dict[str, Condition] = {
     "acceptable": Condition.ACCEPTABLE,
     "for parts or not working": Condition.FOR_PARTS,
     "neu": Condition.NEW,
+    "neu (sonstige)": Condition.NEW_OTHER,
     "sehr gut": Condition.VERY_GOOD,
     "gebraucht": Condition.USED,
     "defekt": Condition.FOR_PARTS,
@@ -85,7 +87,8 @@ def normalize_condition(raw: str | None) -> Condition:
     """Map any source's condition string into the shared :class:`Condition` scale."""
     if not raw:
         return Condition.UNKNOWN
-    text = raw.strip().lower()
+    # eBay's result cards append the seller type: "Gebraucht | Privat".
+    text = raw.split("|")[0].strip().lower()
     exact = _EXACT_CONDITION_LABELS.get(text)
     if exact is not None:
         return exact
@@ -102,57 +105,103 @@ def normalize_condition(raw: str | None) -> Condition:
 # which source produced it, and nothing downstream (sorting, display) needs
 # to know the original per-source format.
 
+# Both German sources print wall-clock times in German local time, not UTC.
+# Needs the IANA database — shipped by the `tzdata` package on platforms (like
+# Windows and slim containers) that don't have one of their own.
+_BERLIN = ZoneInfo("Europe/Berlin")
+
 _KLEINANZEIGEN_TODAY_RE = re.compile(r"^heute,?\s*(\d{1,2}):(\d{2})$", re.IGNORECASE)
 _KLEINANZEIGEN_YESTERDAY_RE = re.compile(r"^gestern,?\s*(\d{1,2}):(\d{2})$", re.IGNORECASE)
 _KLEINANZEIGEN_ABS_DATE_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$")
 
+# eBay's result cards (newest-first sort) say e.g. "Vor 30 Min. eingestellt",
+# "Vor 5 Std. eingestellt", "Vor 1 T. eingestellt".
+_EBAY_RELATIVE_AGE_RE = re.compile(r"vor\s+(\d+)\s*(min|std|t|tg|tag|tagen|w|wo|woche|wochen)\b\.?", re.IGNORECASE)
+_EBAY_AGE_UNITS: dict[str, timedelta] = {
+    "min": timedelta(minutes=1),
+    "std": timedelta(hours=1),
+    "t": timedelta(days=1),
+    "tg": timedelta(days=1),
+    "tag": timedelta(days=1),
+    "tagen": timedelta(days=1),
+    "w": timedelta(weeks=1),
+    "wo": timedelta(weeks=1),
+    "woche": timedelta(weeks=1),
+    "wochen": timedelta(weeks=1),
+}
 
-def _parse_kleinanzeigen_date(raw: str) -> datetime | None:
-    """Parse Kleinanzeigen's relative/absolute German date text.
 
-    Handles the two formats the listing page actually shows: "Heute, 19:30" /
-    "Gestern, 10:15" for recent ads, and "05.09.2025" for older ones. Anything
-    else (a format Kleinanzeigen changed, or unparsable text) returns None
-    rather than guessing.
-    """
+def _parse_kleinanzeigen_date(raw: str, now: datetime) -> datetime | None:
+    """Parse Kleinanzeigen's date text ("Heute, 19:30", "Gestern, 10:15",
+    "05.09.2025") as German local time. Anything else returns None rather than
+    a guess."""
     text = raw.strip()
-    m = _KLEINANZEIGEN_TODAY_RE.match(text)
-    if m:
-        hour, minute = int(m.group(1)), int(m.group(2))
-        return datetime.now(UTC).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    m = _KLEINANZEIGEN_YESTERDAY_RE.match(text)
-    if m:
-        hour, minute = int(m.group(1)), int(m.group(2))
-        yesterday = datetime.now(UTC) - timedelta(days=1)
-        return yesterday.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    today = now.astimezone(_BERLIN)
+    for pattern, days_back in ((_KLEINANZEIGEN_TODAY_RE, 0), (_KLEINANZEIGEN_YESTERDAY_RE, 1)):
+        m = pattern.match(text)
+        if m:
+            day = today - timedelta(days=days_back)
+            local = day.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+            return local.astimezone(UTC)
     m = _KLEINANZEIGEN_ABS_DATE_RE.match(text)
     if m:
-        day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
         try:
-            return datetime(year, month, day, tzinfo=UTC)
+            local = datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)), tzinfo=_BERLIN)
         except ValueError:
             return None
+        return local.astimezone(UTC)
     return None
 
 
-def parse_listing_date(raw: str | None, source: str) -> datetime | None:
+def _parse_ebay_relative_age(raw: str, now: datetime) -> datetime | None:
+    m = _EBAY_RELATIVE_AGE_RE.search(raw)
+    if not m:
+        return None
+    return now - int(m.group(1)) * _EBAY_AGE_UNITS[m.group(2).lower()]
+
+
+def parse_listing_date(raw: str | None, source: str, *, now: datetime | None = None) -> datetime | None:
     """Parse a source-specific listing-date string into a UTC ``datetime``.
 
-    ``source`` is one of ``"api"`` (eBay Browse API — already ISO-8601),
-    ``"kleinanzeigen"`` (relative/absolute German text), or ``"scraper"``
-    (the HTML scraper exposes no listing date on its search-results page at
-    all — always returns None for it, never a fabricated value).
+    ``source`` is one of ``"api"`` (eBay Browse API — ISO-8601),
+    ``"kleinanzeigen"`` (German local-time text), or ``"scraper"`` (eBay's
+    result cards: a coarse relative age like "Vor 5 Std. eingestellt"). Text
+    that doesn't match the source's known format returns None — never a
+    fabricated date. ``now`` exists for deterministic tests.
     """
     if not raw:
         return None
+    now = now or datetime.now(UTC)
     if source == "kleinanzeigen":
-        return _parse_kleinanzeigen_date(raw)
+        return _parse_kleinanzeigen_date(raw, now)
     if source == "scraper":
-        return None
+        return _parse_ebay_relative_age(raw, now)
     try:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+# ── Canonical listing identity ──────────────────────────────────────────────
+# The same eBay listing reaches us through different URL shapes (the Browse
+# API's itemWebUrl vs. a search-results link with tracking parameters), so
+# URL equality under-deduplicates. The numeric listing ID is stable.
+
+_EBAY_ITEM_ID_RE = re.compile(r"/itm/(?:[^/?#]+/)?(\d{9,})")
+_KLEINANZEIGEN_AD_ID_RE = re.compile(r"/s-anzeige/[^/]+/(\d+)-")
+
+
+def canonical_listing_id(url: str | None) -> str | None:
+    """Return ``"ebay:<id>"`` / ``"kleinanzeigen:<id>"`` for a listing URL, or None."""
+    if not url:
+        return None
+    m = _EBAY_ITEM_ID_RE.search(url)
+    if m and "ebay." in url:
+        return f"ebay:{m.group(1)}"
+    m = _KLEINANZEIGEN_AD_ID_RE.search(url)
+    if m:
+        return f"kleinanzeigen:{m.group(1)}"
+    return None
 
 
 def sort_key_for_deal(deal: dict) -> tuple[int, int, float]:
@@ -195,7 +244,9 @@ class Deal(TypedDict, total=False):
     condition_normalized: str
     seller_rating: float
     url: str
+    listing_id: str  # "ebay:<id>" / "kleinanzeigen:<id>" — see canonical_listing_id
     shipping: str
+    shipping_cost: float | None  # EUR; 0.0 = free, None = unknown / pickup only
     shipping_note: str
     is_trending: bool
     item_location: str

@@ -1,40 +1,28 @@
-"""Tests for kleinanzeigen_scraper.py — Kleinanzeigen.de HTML scraper.
+"""Tests for kleinanzeigen_scraper.py — Kleinanzeigen.de search scraper.
 
-Closes the project's biggest test-coverage gap (kleinanzeigen_scraper.py was
-at 15% coverage with no dedicated test file at all).
+Parser tests run against a real captured results page
+(fixtures/kleinanzeigen_srp.html). The previous tests used hand-written HTML
+built from the scraper's own (by then dead) selectors, so they stayed green
+while the live scraper returned nothing at all.
 """
 
+import threading
+import time
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
+import requests
+from bs4 import BeautifulSoup
 
-from kleinanzeigen_scraper import KleinanzeigenScraper
+import kleinanzeigen_scraper as ka
+from kleinanzeigen_scraper import KleinanzeigenScraper, _devalue, _parse_price
+from models import Condition
 
-_SAMPLE_HTML = """\
-<html><body>
-<ul id="srp-results">
-<article class="aditem">
-  <a class="ellipsis" href="/s-anzeige/xbox-360-spielesammlung/123">
-    <h2 class="ellipsis">Xbox 360 Spielesammlung 10 Spiele</h2>
-  </a>
-  <p class="aditem-main--middle--price">25 € VB</p>
-  <div class="aditem-main--top--left">Berlin</div>
-  <div class="aditem-main--top--right">Heute, 19:30</div>
-  <p class="aditem-main--middle--description">Sehr guter Zustand, alle Spiele funktionieren.</p>
-  <img src="https://img.kleinanzeigen.de/api/v1/prod-ads/images/aa/aa1.jpg" />
-</article>
-<article class="aditem">
-  <a class="ellipsis" href="/s-anzeige/ps4-konsole/456">
-    <h2 class="ellipsis">PS4 Konsole mit Controller</h2>
-  </a>
-  <p class="aditem-main--middle--price">120 €</p>
-  <div class="aditem-main--top--left">Hamburg</div>
-  <div class="aditem-main--top--right">05.09.2025</div>
-  <p class="aditem-main--middle--description">Neu, originalverpackt.</p>
-</article>
-</ul>
-</body></html>
-"""
+_FIXTURE = (Path(__file__).parent / "fixtures" / "kleinanzeigen_srp.html").read_text(encoding="utf-8")
+_BERLIN = ZoneInfo("Europe/Berlin")
 
 
 @pytest.fixture
@@ -42,275 +30,194 @@ def scraper():
     return KleinanzeigenScraper()
 
 
-class TestSearch:
-    def test_empty_query_returns_error(self, scraper):
-        deals, errors = scraper.search("")
+@pytest.fixture
+def deals(scraper):
+    deals, errors = scraper.parse_results_page(_FIXTURE)
+    assert errors == []
+    return {d["listing_id"]: d for d in deals}
+
+
+def _without_structured_data(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    for island in soup.select("astro-island"):
+        island.decompose()
+    return str(soup)
+
+
+class TestStructuredDataParsing:
+    def test_real_ads_parsed_and_sponsored_slot_skipped(self, deals):
+        # The fixture holds 7 result entries, one of them an empty sponsored-ad slot.
+        assert len(deals) == 6
+
+    def test_ad_fields(self, deals):
+        d = deals["kleinanzeigen:3521619922"]
+        assert d["title"] == "Resident Evil Revelations Xbox 360 Sealed Sammlung in OVP FSK16"
+        assert d["url"] == (
+            "https://www.kleinanzeigen.de/s-anzeige/resident-evil-revelations-xbox-360-sealed-sammlung-in-ovp-fsk16/"
+            "3521619922-227-5751"
+        )
+        assert d["price"] == 45.0
+        assert d["shipping_note"] == "VB"
+        assert d["item_location"] == "92421 Schwandorf"
+        assert d["description"].startswith("Biete hier diesen Top Titel an.")
+        assert d["condition_normalized"] == Condition.NEW  # "OVP" in the title
+
+    def test_umlauts_decoded(self, deals):
+        assert deals["kleinanzeigen:3521611226"]["title"].startswith("Große Sammlung")
+
+    def test_german_thousands_separator(self, deals):
+        assert deals["kleinanzeigen:3522355374"]["price"] == 1200.0  # "1.200 €"
+
+    def test_negotiable_without_amount(self, deals):
+        d = deals["kleinanzeigen:3521611226"]  # price text is just "VB"
+        assert d["price"] == 0.0
+        assert d["shipping_note"] == "VB"
+
+    def test_shipping_is_real_availability_info(self, deals):
+        assert deals["kleinanzeigen:3521619922"]["shipping"] == "Versand möglich"
+        assert deals["kleinanzeigen:3521143176"]["shipping"] == "Nur Abholung"
+        assert all(d["shipping_cost"] is None for d in deals.values())
+
+    def test_relative_date_is_german_local_time(self, deals):
+        """ "Gestern, 23:18" on the page means 23:18 in Germany."""
+        listed = datetime.fromisoformat(deals["kleinanzeigen:3522355374"]["listing_date"]).astimezone(_BERLIN)
+        assert (listed.hour, listed.minute) == (23, 18)
+
+    def test_absolute_date(self, deals):
+        listed = datetime.fromisoformat(deals["kleinanzeigen:3521143176"]["listing_date"]).astimezone(_BERLIN)
+        assert (listed.year, listed.month, listed.day, listed.hour) == (2026, 9, 23, 0)
+
+    def test_full_size_images(self, deals):
+        urls = deals["kleinanzeigen:3522355374"]["image_urls"]
+        assert len(urls) == 2
+        assert all(u.startswith("https://img.kleinanzeigen.de/") and u.endswith("?rule=$_59.AUTO") for u in urls)
+
+    def test_no_fabricated_seller_rating(self, deals):
+        """Search results show no seller rating; the old scraper invented 85/90/100."""
+        assert all(d["seller_rating"] == 0.0 for d in deals.values())
+
+    def test_max_results(self, scraper):
+        deals, _ = scraper.parse_results_page(_FIXTURE, max_results=2)
+        assert len(deals) == 2
+
+
+class TestHtmlFallback:
+    def test_html_cards_match_structured_data(self, scraper, deals):
+        """Without the embedded data, the HTML cards must yield the same deals."""
+        fallback, errors = scraper.parse_results_page(_without_structured_data(_FIXTURE))
+        assert errors == []
+        fields = ("title", "price", "shipping", "shipping_note", "listing_date", "item_location", "url")
+        for d in fallback:
+            assert {f: d[f] for f in fields} == {f: deals[d["listing_id"]][f] for f in fields}
+        assert len(fallback) == len(deals)
+
+    def test_wanted_ads_skipped(self, scraper):
+        soup = BeautifulSoup(_without_structured_data(_FIXTURE), "html.parser")
+        first = soup.select_one("article[data-adid]")
+        first.append(BeautifulSoup("<span>Gesuch</span>", "html.parser"))
+        deals, _ = scraper.parse_results_page(str(soup))
+        assert first["data-adid"] not in {d["listing_id"].split(":")[1] for d in deals}
+
+    def test_unparseable_page_with_results_is_reported(self, scraper):
+        html = '<span id="srp-breadcrumb-summary">1 - 25 von 127 Ergebnissen</span><div>new markup</div>'
+        deals, errors = scraper.parse_results_page(html)
         assert deals == []
-        assert "query is required" in errors[0]
+        assert "markup has likely changed" in errors[0]
 
-    def test_blocked_returns_error(self, scraper):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 403
-        with patch.object(scraper._session, "get", return_value=mock_resp):
-            deals, errors = scraper.search("test")
-        assert deals == []
-        assert "blocked or captcha" in errors[0]
-
-    def test_rate_limited_returns_error(self, scraper):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 429
-        with patch.object(scraper._session, "get", return_value=mock_resp):
-            deals, errors = scraper.search("test")
-        assert deals == []
-        assert "429" in errors[0]
-
-    def test_http_error_returns_error(self, scraper):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 500
-        mock_resp.ok = False
-        with patch.object(scraper._session, "get", return_value=mock_resp):
-            deals, errors = scraper.search("test")
-        assert deals == []
-        assert "500" in errors[0]
-
-    def test_request_exception_returns_error(self, scraper):
-        import requests
-
-        with patch.object(scraper._session, "get", side_effect=requests.RequestException("boom")):
-            deals, errors = scraper.search("test")
-        assert deals == []
-        assert "boom" in errors[0]
-
-    def test_no_articles_found_returns_empty_no_error(self, scraper):
-        """A page with no matching article elements returns cleanly, not as an error."""
-        mock_resp = MagicMock()
-        mock_resp.ok = True
-        mock_resp.status_code = 200
-        mock_resp.text = "<html><body>no results</body></html>"
-        with patch.object(scraper._session, "get", return_value=mock_resp):
-            deals, errors = scraper.search("test")
+    def test_genuinely_empty_results_are_not_an_error(self, scraper):
+        deals, errors = scraper.parse_results_page("<html><body>Keine Ergebnisse</body></html>")
         assert deals == []
         assert errors == []
 
-    def test_parses_articles_into_deals(self, scraper):
-        mock_resp = MagicMock()
-        mock_resp.ok = True
-        mock_resp.status_code = 200
-        mock_resp.text = _SAMPLE_HTML
-        with patch.object(scraper._session, "get", return_value=mock_resp):
-            deals, errors = scraper.search("xbox", max_results=10)
-        assert len(deals) == 2
-        assert deals[0]["title"] == "Xbox 360 Spielesammlung 10 Spiele"
-        assert deals[0]["price"] == 25.0
-        assert deals[0]["url"].endswith("/s-anzeige/xbox-360-spielesammlung/123")
-        assert deals[0]["url"].startswith("https://www.kleinanzeigen.de")
 
-    def test_respects_max_results(self, scraper):
-        mock_resp = MagicMock()
-        mock_resp.ok = True
-        mock_resp.status_code = 200
-        mock_resp.text = _SAMPLE_HTML
-        with patch.object(scraper._session, "get", return_value=mock_resp):
-            deals, _errors = scraper.search("xbox", max_results=1)
-        assert len(deals) == 1
+class TestSearchRequest:
+    def _ok(self, content: str = _FIXTURE):
+        return MagicMock(ok=True, status_code=200, content=content.encode("utf-8"))
 
+    def test_searches_video_games_category(self, scraper):
+        with (
+            patch.object(scraper._session, "get", return_value=self._ok()) as get,
+            patch.object(scraper, "_rate_limit"),
+        ):
+            deals, errors = scraper.search("Xbox 360 Spiele Sammlung")
+        assert get.call_args.args[0] == "https://www.kleinanzeigen.de/s-pc-videospiele/xbox-360-spiele-sammlung/k0c227"
+        assert len(deals) == 6
+        assert errors == []
 
-class TestDealSchema:
-    """Every deal must expose the full shared schema, including the fields
-    added by this rewrite (condition_normalized, shipping_note, a properly
-    parsed listing_date instead of raw page text)."""
+    def test_umlaut_query_is_url_encoded(self, scraper):
+        with (
+            patch.object(scraper._session, "get", return_value=self._ok()) as get,
+            patch.object(scraper, "_rate_limit"),
+        ):
+            scraper.search("Spiele für PS4")
+        assert "spiele-f%C3%BCr-ps4" in get.call_args.args[0]
 
-    def _search(self, scraper, html=_SAMPLE_HTML):
-        mock_resp = MagicMock()
-        mock_resp.ok = True
-        mock_resp.status_code = 200
-        mock_resp.text = html
-        with patch.object(scraper._session, "get", return_value=mock_resp):
-            deals, _errors = scraper.search("xbox", max_results=10)
-        return deals
+    def test_empty_query(self, scraper):
+        assert scraper.search("  ") == ([], ["query is required"])
 
-    def test_vb_price_sets_shipping_note_not_shipping(self, scraper):
-        """The 'VB' (Verhandlungsbasis / negotiable) flag is a price
-        attribute, not shipping info — it must not be stuffed into the
-        'shipping' field (which stays empty; Kleinanzeigen exposes no real
-        shipping-cost data on the results page)."""
-        deals = self._search(scraper)
-        assert deals[0]["shipping"] == ""
-        assert deals[0]["shipping_note"] == "VB"
+    def test_ip_ban_pauses_the_source(self, scraper):
+        """After a 403 no further requests go out until the cooldown passes —
+        retrying into an IP ban only extends it."""
+        blocked = MagicMock(ok=False, status_code=403)
+        with patch.object(scraper._session, "get", return_value=blocked) as get, patch.object(scraper, "_rate_limit"):
+            _, first_errors = scraper.search("xbox")
+            deals, second_errors = scraper.search("xbox")
+        assert get.call_count == 1
+        assert deals == []
+        assert "pausing" in first_errors[0]
+        assert "paused" in second_errors[0]
 
-    def test_non_vb_price_has_no_shipping_note(self, scraper):
-        deals = self._search(scraper)
-        assert deals[1]["shipping"] == ""
-        assert deals[1]["shipping_note"] == ""
-
-    def test_condition_normalized_present(self, scraper):
-        from models import Condition
-
-        deals = self._search(scraper)
-        assert "condition_normalized" in deals[0]
-        # deals[1]'s description says "Neu, originalverpackt."
-        assert deals[1]["condition_normalized"] == Condition.NEW
-
-    def test_listing_date_relative_text_parsed_to_iso(self, scraper):
-        """'Heute, 19:30' must be parsed into a real ISO-8601 timestamp, not
-        left as raw page text — the old behavior silently broke the
-        newest-first sort for every Kleinanzeigen deal."""
-        deals = self._search(scraper)
-        from datetime import datetime
-
-        parsed = datetime.fromisoformat(deals[0]["listing_date"])
-        assert parsed.hour == 19
-        assert parsed.minute == 30
-
-    def test_listing_date_absolute_text_parsed_to_iso(self, scraper):
-        deals = self._search(scraper)
-        from datetime import datetime
-
-        parsed = datetime.fromisoformat(deals[1]["listing_date"])
-        assert parsed.year == 2025
-        assert parsed.month == 9
-        assert parsed.day == 5
-
-    def test_unparsable_date_is_none_not_raw_text(self, scraper):
-        html = _SAMPLE_HTML.replace('<div class="aditem-main--top--right">Heute, 19:30</div>', "")
-        deals = self._search(scraper, html)
-        assert deals[0]["listing_date"] is None
-
-    def test_image_issues_reflects_presence_of_images(self, scraper):
-        deals = self._search(scraper)
-        assert deals[0]["image_issues"] == []  # has an <img>
-        assert deals[1]["image_issues"] == ["no_images"]  # no <img> in fixture
-
-    def test_seller_count_and_is_trending_are_documented_stubs(self, scraper):
-        """Kleinanzeigen exposes neither on its results page — these stay
-        fixed stubs rather than guessed-at values."""
-        deals = self._search(scraper)
-        assert deals[0]["seller_count"] == ""
-        assert deals[0]["is_trending"] is False
+    def test_request_exception(self, scraper):
+        with (
+            patch.object(scraper._session, "get", side_effect=requests.RequestException("boom")),
+            patch.object(scraper, "_rate_limit"),
+        ):
+            deals, errors = scraper.search("xbox")
+        assert deals == []
+        assert "boom" in errors[0]
 
 
 class TestRateLimit:
-    def test_rate_limit_serializes_concurrent_callers(self, scraper):
-        """_rate_limit must hold its lock for the whole check-sleep-update
-        sequence so concurrent callers can't both pass the elapsed-time
-        check together and burst the target site."""
-        import threading
-        import time
+    def test_concurrent_callers_are_spaced_apart(self, scraper, monkeypatch):
+        monkeypatch.setattr(ka, "_REQUEST_SPACING_S", 0.3)
+        stamps = []
+        barrier = threading.Barrier(2, timeout=2)
 
-        call_times = []
-        lock_calls = threading.Barrier(2, timeout=2)
+        def call():
+            barrier.wait()
+            scraper._rate_limit()
+            stamps.append(time.monotonic())
 
-        original_rate_limit = scraper._rate_limit
-
-        def tracked_rate_limit():
-            lock_calls.wait()
-            original_rate_limit()
-            call_times.append(time.monotonic())
-
-        threads = [threading.Thread(target=tracked_rate_limit) for _ in range(2)]
+        threads = [threading.Thread(target=call) for _ in range(2)]
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=5)
-
-        assert len(call_times) == 2
-        assert abs(call_times[1] - call_times[0]) >= 1.0  # _REQUEST_DELAY = 1.5s, minus scheduling slack
-
-
-class TestExtractPrice:
-    def test_german_format_with_vb(self, scraper):
-        html = '<p class="aditem-main--middle--price">1.234,56 € VB</p>'
-        from bs4 import BeautifulSoup
-
-        article = BeautifulSoup(html, "html.parser")
-        price, is_vb = scraper._extract_price(article)
-        assert price == 1234.56
-        assert is_vb is True
-
-    def test_plain_integer_price(self, scraper):
-        html = '<p class="aditem-main--middle--price">35 €</p>'
-        from bs4 import BeautifulSoup
-
-        article = BeautifulSoup(html, "html.parser")
-        price, is_vb = scraper._extract_price(article)
-        assert price == 35.0
-        assert is_vb is False
-
-    def test_zu_verschenken_has_no_numeric_price(self, scraper):
-        html = '<p class="aditem-main--middle--price">Zu verschenken</p>'
-        from bs4 import BeautifulSoup
-
-        article = BeautifulSoup(html, "html.parser")
-        price, _is_vb = scraper._extract_price(article)
-        assert price == 0.0
-
-    def test_no_price_element(self, scraper):
-        html = "<article></article>"
-        from bs4 import BeautifulSoup
-
-        article = BeautifulSoup(html, "html.parser")
-        price, is_vb = scraper._extract_price(article)
-        assert price == 0.0
-        assert is_vb is False
-
-    def test_out_of_range_price_rejected(self, scraper):
-        html = '<p class="aditem-main--middle--price">999999999 €</p>'
-        from bs4 import BeautifulSoup
-
-        article = BeautifulSoup(html, "html.parser")
-        price, _is_vb = scraper._extract_price(article)
-        assert price == 0.0
+        assert len(stamps) == 2
+        assert abs(stamps[1] - stamps[0]) >= 0.25
 
 
-class TestExtractCondition:
-    def test_neu_keyword(self, scraper):
-        assert scraper._extract_condition("Neu, OVP", "") == "Neu"
+class TestHelpers:
+    def test_parse_price(self):
+        assert _parse_price("1.200 €") == (1200.0, False)
+        assert _parse_price("45 € VB") == (45.0, True)
+        assert _parse_price("VB") == (0.0, True)
+        assert _parse_price("1.234,50 €") == (1234.5, False)
+        assert _parse_price("Zu verschenken") == (0.0, False)
+        assert _parse_price("999999999 €") == (0.0, False)
 
-    def test_sehr_gut_keyword(self, scraper):
-        assert scraper._extract_condition("Sehr guter Zustand", "") == "Sehr gut"
-
-    def test_gebraucht_keyword(self, scraper):
-        assert scraper._extract_condition("gebraucht, voll funktionsfähig", "") == "Gebraucht"
-
-    def test_defekt_keyword(self, scraper):
-        assert scraper._extract_condition("Defekt, für Bastler", "") == "Defekt"
-
-    def test_no_keyword_returns_empty(self, scraper):
-        assert scraper._extract_condition("", "") == ""
+    def test_devalue(self):
+        raw = [0, {"a": [0, 1], "b": [1, [[0, "x"], [0, "y"]]], "c": [0, {"d": [0, None]}]}]
+        assert _devalue(raw) == {"a": 1, "b": ["x", "y"], "c": {"d": None}}
 
 
-class TestExtractRating:
-    def test_top_text_badge(self, scraper):
-        html = '<article><span class="rating">TOP Anbieter</span></article>'
-        from bs4 import BeautifulSoup
-
-        article = BeautifulSoup(html, "html.parser")
-        assert scraper._extract_rating(article) == 100.0
-
-    def test_no_rating_signal(self, scraper):
-        html = "<article></article>"
-        from bs4 import BeautifulSoup
-
-        article = BeautifulSoup(html, "html.parser")
-        assert scraper._extract_rating(article) == 0.0
-
-
-class TestParseArticle:
-    def test_missing_link_returns_none(self, scraper):
-        html = "<article><h2>No link here</h2></article>"
-        from bs4 import BeautifulSoup
-
-        article = BeautifulSoup(html, "html.parser").find("article")
-        assert scraper._parse_article(article) is None
-
-    def test_missing_title_returns_none(self, scraper):
-        html = '<article><a class="ellipsis" href="/s-anzeige/x/1"></a></article>'
-        from bs4 import BeautifulSoup
-
-        article = BeautifulSoup(html, "html.parser").find("article")
-        assert scraper._parse_article(article) is None
-
-    def test_exception_in_parsing_returns_none_not_raises(self, scraper):
-        """A malformed/unexpected article element must not blow up the whole
-        search — _parse_article swallows exceptions and returns None."""
-        assert scraper._parse_article(object()) is None
+@pytest.mark.live
+def test_live_kleinanzeigen_search():
+    """Opt-in drift detector (`pytest -m live`): hits the real kleinanzeigen.de."""
+    deals, errors = KleinanzeigenScraper().search("xbox 360 spiele sammlung", max_results=10)
+    assert deals, errors
+    assert all(d["title"] and d["url"].startswith("https://www.kleinanzeigen.de/s-anzeige/") for d in deals)
+    assert sum(d["price"] > 0 for d in deals) >= len(deals) // 2
+    assert all(d["listing_date"] for d in deals)
+    newest = max(datetime.fromisoformat(d["listing_date"]) for d in deals)
+    assert datetime.now(UTC) - newest < timedelta(days=30)

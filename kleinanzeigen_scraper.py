@@ -1,11 +1,23 @@
-"""Kleinanzeigen.de scraper — HTML parser for classifieds listings."""
+"""Kleinanzeigen.de search scraper.
+
+Primary parser: the structured data every results page embeds for its own
+analytics — an Astro island whose props carry ``resultAds[]`` (id, title,
+price, date, location, shipping availability, images, ...). That's far more
+stable than the page's utility-class HTML, which is the fallback.
+
+Kleinanzeigen IP-bans aggressively ("IP-Bereich vorübergehend gesperrt",
+HTTP 403, after roughly six requests a minute), so requests are spaced well
+apart and a ban pauses this source instead of retrying into it.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
 import time
+import urllib.parse
 
 import requests
 from bs4 import BeautifulSoup
@@ -14,282 +26,255 @@ from models import normalize_condition, parse_listing_date
 
 logger = logging.getLogger(__name__)
 
-_KLEINANZEIGEN_BASE = "https://www.kleinanzeigen.de"
-_SEARCH_URL = f"{_KLEINANZEIGEN_BASE}/s-{{}}/k0"
+_BASE = "https://www.kleinanzeigen.de"
+# Category 227 = "Videospiele"; the leading slug is cosmetic (the site ignores it).
+_SEARCH_URL = _BASE + "/s-pc-videospiele/{slug}/k0c227"
 _REQUEST_TIMEOUT = 20
-_REQUEST_DELAY = 1.5
+_REQUEST_SPACING_S = 5.0
+_BAN_COOLDOWN_S = 600.0
+_MAX_IMAGES = 3
 
-# Kleinanzeigen uses hashed class names. Match by known patterns.
-_ARTICLE_SELECTORS = [
-    "article.aditem",
-    "li.ad-listitem",
-    '[class*="aditem"]',
-    '[class*="AdItem"]',
-    "ul[id*='srp'] > li",
-    "ul[class*='srp'] > li",
-]
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+}
 
-_LINK_SELECTORS = [
-    'a[class*="ellipsis"]',
-    "article a[href]",
-    "li a[href]",
-    'a[href*="/s-anzeige/"]',
-    "a[href*='s-anzeige']",
-]
+_VB_RE = re.compile(r"\b(vb|verhandlungsbasis)\b", re.IGNORECASE)
+_AMOUNT_RE = re.compile(r"\d[\d.]*(?:,\d+)?")
+_WANTED_TITLE_RE = re.compile(r"^\s*(suche|gesucht)\b", re.IGNORECASE)
+_DATE_TEXT_RE = re.compile(r"^(heute|gestern)\b|^\d{1,2}\.\d{1,2}\.\d{4}$", re.IGNORECASE)
+_POSTCODE_RE = re.compile(r"^\d{5}\b")
+_RESULT_COUNT_RE = re.compile(r"von\s+([\d.]+)")
+_IMAGE_RULE_RE = re.compile(r"\?rule=\$_\d+\.AUTO")
 
-_PRICE_SELECTORS = [
-    '[class*="aditem-main--middle--price"]:not(s):not(del):not(strike)',
-    '[class*="Price"]:not(s):not(del):not(strike)',
-    "p[class*='metr']:not(s):not(del):not(strike)",
-    "span[class*='price']:not(s):not(del):not(strike)",
-    "p[class*='price']:not(s):not(del):not(strike)",
-]
 
-_LOCATION_SELECTORS = [
-    '[class*="aditem-main--top--left"]',
-    "[class*='top']",
-    '[class*="Top"]',
-    "span[class*='loc']",
-]
+def _devalue(node):
+    """Unwrap Astro's serialized props, where every value is a ``[type, value]``
+    pair (type 1 = array of further pairs, anything else = plain value)."""
+    if isinstance(node, list) and len(node) == 2 and isinstance(node[0], int):
+        kind, value = node
+        return [_devalue(v) for v in value] if kind == 1 else _devalue(value)
+    if isinstance(node, dict):
+        return {k: _devalue(v) for k, v in node.items()}
+    return node
 
-_DESCRIPTION_SELECTORS = [
-    '[class*="aditem-main--middle--description"]',
-    '[class*="Description"]',
-    "p[class*='desc']",
-    "span[class*='desc']",
-]
 
-_RATING_SELECTORS = [
-    'span[class*="rating"], span[class*="Rating"]',
-    'span[class*="top"]',
-    '[class*="Bewertung"]',
-]
+def _parse_price(text: str) -> tuple[float, bool]:
+    """Parse a German price string ("1.200 €", "45 € VB", "VB") → (amount, is_vb)."""
+    text = text or ""
+    is_vb = bool(_VB_RE.search(text))
+    m = _AMOUNT_RE.search(text)
+    if not m:
+        return 0.0, is_vb
+    try:
+        value = float(m.group(0).replace(".", "").replace(",", "."))
+    except ValueError:
+        return 0.0, is_vb
+    return (value, is_vb) if 0 < value <= 500_000 else (0.0, is_vb)
 
-_VB_PATTERN = re.compile(r"\b(vb|verhandlungsbasis|verhandelbar|preis\s*vorschlag)\b", re.IGNORECASE)
-_PRICE_RE = re.compile(r"[\d.,\s]+")
+
+def _infer_condition(title: str, description: str) -> str:
+    """Kleinanzeigen's result list shows no condition field — infer one from text."""
+    combined = f"{title} {description}".lower()
+    if any(w in combined for w in ("defekt", "kaputt", "bastler", "ersatzteile")):
+        return "Defekt"
+    if any(w in combined for w in ("neu", "ovp", "originalverpackt", "unbenutzt")):
+        return "Neu"
+    if any(w in combined for w in ("sehr gut", "top zustand", "einwandfrei")):
+        return "Sehr gut"
+    if any(w in combined for w in ("gut", "gebraucht")):
+        return "Gebraucht"
+    return ""
+
+
+def _full_size_image(url: str) -> str:
+    return _IMAGE_RULE_RE.sub("?rule=$_59.AUTO", url)
+
+
+def _build_deal(
+    *,
+    ad_id: str,
+    title: str,
+    url: str,
+    price_text: str,
+    description: str,
+    date_text: str,
+    location: str,
+    shipping_available: bool,
+    image_urls: list[str],
+) -> dict:
+    price, is_vb = _parse_price(price_text)
+    condition = _infer_condition(title, description)
+    parsed_date = parse_listing_date(date_text, "kleinanzeigen")
+    return {
+        "title": title[:300],
+        "price": price,
+        "condition": condition,
+        "condition_normalized": normalize_condition(condition),
+        # Kleinanzeigen shows no seller rating on search results.
+        "seller_rating": 0.0,
+        "url": url,
+        "listing_id": f"kleinanzeigen:{ad_id}",
+        "shipping": "Versand möglich" if shipping_available else "Nur Abholung",
+        # Shipping is arranged per ad; its cost isn't on the results page.
+        "shipping_cost": None,
+        "shipping_note": "VB" if is_vb else "",
+        "is_trending": False,
+        "item_location": location,
+        "description": description[:2000],
+        "seller_count": "",
+        "listing_date": parsed_date.isoformat() if parsed_date else None,
+        "image_urls": image_urls[:_MAX_IMAGES],
+        "image_issues": [] if image_urls else ["no_images"],
+    }
 
 
 class KleinanzeigenScraper:
     def __init__(self) -> None:
         self._session = requests.Session()
-        self._session.headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-                ),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-            }
-        )
+        self._session.headers.update(_HEADERS)
         self._last_request = 0.0
-        # The app's search pipeline now fires per-query requests to this
-        # scraper from a thread pool (see app.py's _run_search_jobs); the
-        # naive check-then-sleep-then-update sequence below is not atomic,
-        # so without this lock concurrent callers could all pass the
-        # elapsed-time check together and hit Kleinanzeigen in a burst,
-        # defeating the whole point of rate-limiting a third-party site we
-        # don't have an API agreement with. Holding the lock for the full
-        # wait serializes callers into a properly spaced-out sequence.
+        self._blocked_until = 0.0
+        # Held for the whole check-sleep-update sequence so concurrent callers
+        # are serialized into properly spaced requests instead of a burst.
         self._rate_limit_lock = threading.Lock()
 
     def _rate_limit(self) -> None:
         with self._rate_limit_lock:
             elapsed = time.monotonic() - self._last_request
-            if elapsed < _REQUEST_DELAY:
-                time.sleep(_REQUEST_DELAY - elapsed)
+            if elapsed < _REQUEST_SPACING_S:
+                time.sleep(_REQUEST_SPACING_S - elapsed)
             self._last_request = time.monotonic()
 
     def search(self, query: str, max_results: int = 50) -> tuple[list[dict], list[str]]:
         if not query or not query.strip():
             return [], ["query is required"]
-        errors: list[str] = []
-        all_deals: list[dict] = []
+        remaining_ban = self._blocked_until - time.monotonic()
+        if remaining_ban > 0:
+            return [], [f"Kleinanzeigen is blocking this server's IP — paused for {remaining_ban / 60:.0f} more min."]
 
-        search_url = _SEARCH_URL.format(requests.utils.quote(query.strip()))
+        slug = urllib.parse.quote(re.sub(r"\s+", "-", query.strip().lower()), safe="-")
+        url = _SEARCH_URL.format(slug=slug)
         self._rate_limit()
         try:
-            resp = self._session.get(search_url, timeout=_REQUEST_TIMEOUT)
-            if resp.status_code == 429 or resp.status_code == 403:
-                logger.warning("Kleinanzeigen: blocked (HTTP %d) — skipping.", resp.status_code)
-                return [], [f"Kleinanzeigen returned {resp.status_code} — blocked or captcha"]
-            if not resp.ok:
-                logger.warning("Kleinanzeigen: HTTP %d", resp.status_code)
-                return [], [f"Kleinanzeigen HTTP {resp.status_code}"]
+            resp = self._session.get(url, timeout=_REQUEST_TIMEOUT)
         except requests.RequestException as exc:
-            logger.warning("Kleinanzeigen: request failed: %s", exc)
             return [], [f"Kleinanzeigen request error: {exc}"]
 
-        soup = BeautifulSoup(resp.text, "html.parser")
-        articles = []
-        for sel in _ARTICLE_SELECTORS:
-            articles = soup.select(sel)
-            if articles:
-                break
+        if resp.status_code in (403, 429):
+            self._blocked_until = time.monotonic() + _BAN_COOLDOWN_S
+            logger.warning("Kleinanzeigen: HTTP %d — pausing this source for %.0fs", resp.status_code, _BAN_COOLDOWN_S)
+            return [], [
+                f"Kleinanzeigen HTTP {resp.status_code}: it rate-limits by IP — "
+                f"pausing Kleinanzeigen searches for {_BAN_COOLDOWN_S / 60:.0f} min."
+            ]
+        if not resp.ok:
+            return [], [f"Kleinanzeigen HTTP {resp.status_code}"]
 
-        if not articles:
-            return all_deals, errors
+        # The server sends no charset, which would make requests decode as
+        # ISO-8859-1 ("Große" → "GroÃŸe"); the page is UTF-8.
+        return self.parse_results_page(resp.content.decode("utf-8", errors="replace"), max_results)
 
-        for article in articles[:max_results]:
-            deal = self._parse_article(article)
-            if deal:
-                all_deals.append(deal)
+    def parse_results_page(self, html: str, max_results: int = 50) -> tuple[list[dict], list[str]]:
+        """Parse a search-results page into deals. Separate from :meth:`search`
+        so it can be tested against captured real pages."""
+        soup = BeautifulSoup(html, "html.parser")
+        deals = self._parse_structured(soup)
+        if deals is None:
+            logger.info("Kleinanzeigen: no embedded result data — falling back to HTML cards")
+            deals = self._parse_html(soup)
+        deals = deals[:max_results]
 
-        return all_deals, errors
+        errors: list[str] = []
+        if not deals:
+            summary = soup.select_one("#srp-breadcrumb-summary")
+            m = _RESULT_COUNT_RE.search(summary.get_text(" ", strip=True)) if summary else None
+            if m and int(m.group(1).replace(".", "")) > 0:
+                errors.append(
+                    "Kleinanzeigen returned results but none could be parsed — its markup has likely changed."
+                )
+        logger.info("Kleinanzeigen: parsed %d deals", len(deals))
+        return deals, errors
 
-    # ── Parsing ────────────────────────────────────────────────────────
+    # ── Primary: embedded structured data ───────────────────────────────────
 
-    def _parse_article(self, article) -> dict | None:
-        try:
-            link_el = self._select_first(article, _LINK_SELECTORS)
-            if not link_el:
-                return None
-            href = link_el.get("href", "")
-            if not href:
-                return None
-            if href.startswith("/"):
-                href = _KLEINANZEIGEN_BASE + href
-
-            title = self._extract_title(article, link_el)
-            if not title:
-                return None
-
-            price, is_vb = self._extract_price(article)
-            location = self._extract_text(article, _LOCATION_SELECTORS)
-            description = self._extract_text(article, _DESCRIPTION_SELECTORS)
-            rating = self._extract_rating(article)
-            condition = self._extract_condition(description, title)
-            date_el = article.select_one('[class*="aditem-main--top--right"]') or article.select_one("[class*='date']")
-            listing_date_raw = date_el.get_text(strip=True) if date_el else ""
-            parsed_date = parse_listing_date(listing_date_raw, "kleinanzeigen")
-
-            # Extract images from the article
-            images = []
-            for img in article.select("img[src], img[data-src]"):
-                src = img.get("src") or img.get("data-src") or ""
-                if src and "kleinanzeigen" in src:
-                    images.append(src)
-            for img in article.select("img[srcset]"):
-                srcset = img.get("srcset", "")
-                for part in srcset.split(","):
-                    part_url = part.strip().split(" ")[0]
-                    if part_url and "kleinanzeigen" in part_url:
-                        images.append(part_url)
-
-            return {
-                "title": title[:300],
-                "price": price,
-                "condition": condition,
-                "condition_normalized": normalize_condition(condition),
-                "seller_rating": rating,
-                "url": href,
-                # Kleinanzeigen doesn't expose real shipping-cost info on the
-                # search-results page — "shipping" stays empty rather than
-                # being overloaded with the price-negotiability flag (that
-                # used to live here as "VB"), which is a different concept
-                # and now has its own field below.
-                "shipping": "",
-                "shipping_note": "VB" if is_vb else "",
-                "is_trending": False,
-                "item_location": location,
-                "description": description[:2000],
-                "seller_count": "",
-                "listing_date": parsed_date.isoformat() if parsed_date else None,
-                "image_urls": images[:3],
-                "image_issues": [] if images else ["no_images"],
-            }
-        except Exception:
-            return None
-
-    # ── Extractors ─────────────────────────────────────────────────────
-
-    @staticmethod
-    def _select_first(element, selectors: list[str]):
-        for sel in selectors:
-            found = element.select_one(sel)
-            if found:
-                return found
+    def _parse_structured(self, soup) -> list[dict] | None:
+        for island in soup.select("astro-island[props]"):
+            raw = island.get("props", "")
+            if "resultAds" not in raw:
+                continue
+            try:
+                ads = _devalue(json.loads(raw)).get("resultAds")
+            except (ValueError, AttributeError):
+                continue
+            if isinstance(ads, list):
+                return [d for d in (self._deal_from_preview(ad) for ad in ads) if d]
         return None
 
-    @staticmethod
-    def _extract_text(element, selectors: list[str]) -> str:
-        el = KleinanzeigenScraper._select_first(element, selectors)
-        return el.get_text(strip=True) if el else ""
+    def _deal_from_preview(self, ad: dict) -> dict | None:
+        preview = ad.get("organicAdPreview") if isinstance(ad, dict) else None
+        if not preview:
+            return None  # sponsored-ad slot
+        title = (preview.get("title") or "").strip()
+        tags = [str(t) for t in (preview.get("attributes") or []) + (preview.get("appliedFeatures") or [])]
+        if not title or "Gesuch" in tags or _WANTED_TITLE_RE.match(title):
+            return None
+        images = []
+        for img in preview.get("imageList") or []:
+            src = (img or {}).get("xLargeUrl") or (img or {}).get("adTableThumbnailPrioUrl")
+            if src:
+                images.append(_full_size_image(src))
+        location = " ".join(p for p in (preview.get("locationName"), preview.get("parentLocationName")) if p)
+        return _build_deal(
+            ad_id=str(preview.get("id", "")),
+            title=title,
+            url=_BASE + (preview.get("seoLink") or ""),
+            price_text=preview.get("price") or "",
+            description=(preview.get("description") or "").strip(),
+            date_text=preview.get("sortingDate") or "",
+            location=location,
+            shipping_available=bool(preview.get("shippingAvailableValue")),
+            image_urls=images,
+        )
 
-    @staticmethod
-    def _extract_title(article, link_el) -> str:
-        for sel in ['[class*="ellipsis"]', "h2", "h3", "a"]:
-            title_el = link_el.select_one(sel) if link_el else None
-            if title_el:
-                return title_el.get_text(strip=True)
-        return link_el.get_text(strip=True) if link_el else ""
+    # ── Fallback: HTML result cards ─────────────────────────────────────────
 
-    def _extract_price(self, article) -> tuple[float, bool]:
-        price_text = self._extract_text(article, _PRICE_SELECTORS)
-        if not price_text:
-            return 0.0, False
-        is_vb = bool(_VB_PATTERN.search(price_text))
-        raw = price_text.replace("\xa0", " ").replace("€", "").strip()
-        raw = _VB_PATTERN.sub("", raw).strip()
+    def _parse_html(self, soup) -> list[dict]:
+        deals = []
+        for article in soup.select("article[data-adid]"):
+            try:
+                deal = self._deal_from_article(article)
+            except Exception as exc:
+                logger.warning("Kleinanzeigen: failed to parse an ad card: %s", exc)
+                continue
+            if deal:
+                deals.append(deal)
+        return deals
 
-        # Find the numeric part: handle "1.234,56" (DE) or "1,234.56" (EN) or "1234,56" or "35"
-        m = re.search(r"[\d.,\s]+", raw)
-        if not m:
-            return 0.0, is_vb
-        num_str = m.group(0).strip().replace(" ", "")
-
-        # Determine format by looking at the last 3 characters
-        last_comma = num_str.rfind(",")
-        last_dot = num_str.rfind(".")
-        if last_comma > last_dot and last_comma == len(num_str) - 3:
-            # German: "1.234,56" → comma is decimal
-            num_str = num_str.replace(".", "").replace(",", ".")
-        elif last_dot > last_comma and last_dot == len(num_str) - 3:
-            # English: "1,234.56" → dot is decimal
-            num_str = num_str.replace(",", "")
-        elif last_comma > last_dot:
-            # "1234,56" → comma is decimal
-            num_str = num_str.replace(",", ".")
-        elif last_dot > last_comma:
-            # "1234.56" → dot is decimal
-            pass
-        else:
-            # No separators or ambiguous: remove all non-digits
-            num_str = re.sub(r"[^0-9]", "", num_str)
-
-        try:
-            val = float(num_str)
-            if val <= 0 or val > 500000:
-                return 0.0, is_vb
-            return val, is_vb
-        except ValueError:
-            return 0.0, is_vb
-
-    def _extract_rating(self, article) -> float:
-        for sel in _RATING_SELECTORS:
-            el = article.select_one(sel)
-            if el:
-                text = el.get_text(strip=True).lower()
-                if "top" in text:
-                    return 100.0
-                if "ok" in text or "okay" in text:
-                    return 85.0
-                if "zuverlässig" in text:
-                    return 90.0
-        # Check for "TOP" badge images
-        top_img = article.select_one('img[alt*="TOP"], img[alt*="Bewertung"]')
-        if top_img:
-            return 100.0
-        return 0.0
-
-    def _extract_condition(self, description: str, title: str) -> str:
-        combined = f"{title} {description}".lower()
-        if any(w in combined for w in ("neu", "ovp", "originalverpackt", "unbenutzt")):
-            return "Neu"
-        if any(w in combined for w in ("sehr gut", "top zustand", "einwandfrei")):
-            return "Sehr gut"
-        if any(w in combined for w in ("gut", "gebraucht")):
-            return "Gebraucht"
-        if any(w in combined for w in ("defekt", "kaputt", "bastler", "ersatzteile")):
-            return "Defekt"
-        return ""
+    def _deal_from_article(self, article) -> dict | None:
+        link = article.select_one("h3 a[href]")
+        title = link.get_text(" ", strip=True) if link else ""
+        spans = [s.get_text(" ", strip=True) for s in article.select("span")]
+        if not title or "Gesuch" in spans or _WANTED_TITLE_RE.match(title):
+            return None
+        href = link.get("href") or article.get("data-href") or ""
+        prices = [p for p in article.select("p") if "line-through" not in (p.get("class") or [])]
+        price_text = next((p.get_text(" ", strip=True) for p in prices if "€" in p.text or _VB_RE.search(p.text)), "")
+        description_el = link.find_parent("h3").find_next_sibling("p")
+        tags = [t.get_text(" ", strip=True) for t in article.select("span[data-dhl-promotion]")]
+        img = article.select_one("img[src]")
+        return _build_deal(
+            ad_id=article.get("data-adid", ""),
+            title=title,
+            url=href if href.startswith("http") else _BASE + href,
+            price_text=price_text,
+            description=description_el.get_text(" ", strip=True) if description_el else "",
+            date_text=next((s for s in spans if _DATE_TEXT_RE.match(s)), ""),
+            location=next((s for s in spans if _POSTCODE_RE.match(s)), ""),
+            shipping_available="Versand möglich" in tags,
+            image_urls=[_full_size_image(img["src"])] if img else [],
+        )
