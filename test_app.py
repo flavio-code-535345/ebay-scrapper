@@ -28,11 +28,14 @@ def client(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def _reset_globals():
+def _reset_globals(monkeypatch):
     """Reset module-level state between tests."""
     app.assessor.enabled = False
     app.assessor.user_enabled = True
     app.assessor._enricher.ebay_client = None
+    # No test may reach a real site: sources a test doesn't stub return nothing.
+    monkeypatch.setattr(app.scraper, "search_auctions", lambda *args, **kwargs: ([], []))
+    monkeypatch.setattr(app, "kleinanzeigen", None)
     yield
 
 

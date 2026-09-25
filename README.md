@@ -9,7 +9,7 @@ SQLite persistence, and a dark-themed web UI.
 
 - Web UI for search, filters, save/skip, history, and CSV export
 - Official **eBay Browse API** with automatic HTML scraper fallback — fixed-price ("Buy It Now") and
-  auction listings, searched in parallel
+  auction listings, searched in parallel; only auctions ending within the next 2 days are shown
 - Also searches **Kleinanzeigen.de** for matching classified listings
 - **Gemini AI** deal ratings: Must Have / Good / Okay / Avoid / Garbage
 - Deterministic overrides for scams, sports/Kinect lots, broken/untested junk

@@ -278,6 +278,7 @@ class Deal(TypedDict, total=False):
     image_urls: list[str]
     image_issues: list[str]
     source: str
-    listing_type: str
+    listing_type: str  # "fixed" or "auction"
+    auction_end: str | None  # ISO-8601 — when bidding ends; auctions only, None if unknown
     timestamp: float
     is_saved: bool

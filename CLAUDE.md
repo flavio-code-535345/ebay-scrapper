@@ -57,7 +57,10 @@ the Docker multi-arch build/push step only runs on non-PR events (i.e. after mer
    different URL shapes from the API and the web) and by normalized title+price for cross-posted listings.
    `EbayScraper` and `KleinanzeigenScraper` each gate their own outgoing requests behind an instance-level
    lock (`_rate_limit`) so concurrent callers never burst a site.
-4. Filters: previously-skipped listings (by URL *or* listing ID) → Germany-only location → sports/Kinect-only
+4. Filters: previously-skipped listings (by URL *or* listing ID) → Germany-only location → **auctions that
+   don't end within 2 days** (`AUCTION_MAX_TIME_LEFT`; an auction with no known end time is dropped too — each
+   engine's `search_auctions` already asks only for auctions ending by then, this re-checks every auction
+   whichever leg it came from) → sports/Kinect-only
    titles (mixed bundles with ≥3 other meaningful words are kept for Gemini to judge) → **platform guard**
    (a title naming only a different platform than the one searched is dropped; titles naming no platform, or
    the generic "Xbox"/"PlayStation", are kept). Then **ranked, source-diverse selection** of the 30 deals that
@@ -89,7 +92,10 @@ eingestellt" for the scraper — never fabricated), which is what lets `models.s
 deals newest-first ahead of undated ones within each rating tier.
 
 Source specifics worth knowing: `EbayScraper` parses eBay's `ul.srp-results > li.s-card` markup
-(`_sop=10` is newest-first, `LH_PrefLoc=1` is Germany). eBay's bot protection often answers HTTP 403
+(`_sop=10` is newest-first, `LH_PrefLoc=1` is Germany). Like the API client it runs two legs: `search`
+(Buy It Now, `LH_BIN=1`, newest first) and `search_auctions` (`LH_Auction=1`, `_sop=1` ending soonest —
+the only sort order whose cards print the time left, "Noch 1 T 1 Std", which becomes `auction_end`; the
+bracketed end clock beside it is rendered in a US time zone and ignored). eBay's bot protection often answers HTTP 403
 while setting session cookies and serves the request once they come back, so the scraper retries a 403
 exactly once on its cookie-keeping session; if it's still refused, it says so and points at the Browse API,
 which is the reliable path. `KleinanzeigenScraper` parses the structured `resultAds[]` data each results page embeds

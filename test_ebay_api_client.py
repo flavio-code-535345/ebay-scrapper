@@ -1,5 +1,7 @@
 """Tests for ebay_api_client.py — eBay Browse API client."""
 
+import re
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -315,15 +317,24 @@ class TestParseShipping:
 
 
 class TestQueryParams:
-    def _search_params(self, client, method="search"):
+    def _search_params(self, client, method="search", **kwargs):
         mock_resp = MagicMock(ok=True, status_code=200)
         mock_resp.json.return_value = {"total": 0, "itemSummaries": []}
         with (
             patch.object(client, "_get_access_token", return_value="tok"),
             patch.object(client.session, "get", return_value=mock_resp) as mock_get,
         ):
-            getattr(client, method)("xbox 360 (sammlung, konvolut)")
+            getattr(client, method)("xbox 360 (sammlung, konvolut)", **kwargs)
         return mock_get.call_args.kwargs["params"]
+
+    def test_auction_end_cutoff_is_filtered_by_ebay(self, client):
+        params = self._search_params(client, "search_auctions", ends_within=timedelta(days=2))
+        m = re.search(r"itemEndDate:\[\.\.(\S+?)\]", params["filter"])
+        assert m, params["filter"]
+        cutoff = datetime.fromisoformat(m.group(1).replace("Z", "+00:00"))
+        assert abs(cutoff - (datetime.now(UTC) + timedelta(days=2))) < timedelta(minutes=1)
+        assert params["sort"] == "endingSoonest"
+        assert "itemEndDate" not in self._search_params(client, "search_auctions")["filter"]
 
     @pytest.mark.parametrize("method", ["search", "search_auctions"])
     def test_query_sent_verbatim_without_undocumented_minus_terms(self, client, method):
@@ -355,6 +366,18 @@ class TestListingIdentity:
         fixed = client._normalize_item({"title": "T", "itemWebUrl": "https://x", "buyingOptions": ["FIXED_PRICE"]})
         assert auction["listing_type"] == "auction"
         assert fixed["listing_type"] == "fixed"
+
+    def test_auction_end_only_for_auctions(self, client):
+        end = "2026-09-26T09:00:00.000Z"
+        auction = client._normalize_item(
+            {"title": "T", "itemWebUrl": "https://x", "buyingOptions": ["AUCTION"], "itemEndDate": end}
+        )
+        # A Good-'Til-Cancelled Buy-It-Now listing's end date is just its next renewal.
+        fixed = client._normalize_item(
+            {"title": "T", "itemWebUrl": "https://x", "buyingOptions": ["FIXED_PRICE"], "itemEndDate": end}
+        )
+        assert auction["auction_end"] == end
+        assert fixed["auction_end"] is None
 
     def test_auction_search_skips_unusable_items(self, client):
         """An item with neither title nor URL used to crash search_auctions

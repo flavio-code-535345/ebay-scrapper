@@ -14,6 +14,7 @@ import random
 import re
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 
 import requests
 from bs4 import BeautifulSoup
@@ -45,7 +46,16 @@ _BLOCKED_HINT = (
 _CONDITION_ROW_RE = re.compile(
     r"^(neu|gebraucht|generalüberholt|hervorragend|sehr gut|gut|akzeptabel|nur ersatzteile|defekt)\b", re.IGNORECASE
 )
-_BIDS_RE = re.compile(r"^(\d+)\s+gebote?$", re.IGNORECASE)
+# "1 Gebot" — or, when results are sorted by end time, the same row with the
+# time left appended: "3 Gebote · Restzeit Noch 1 T 1 Std (Sa, 06:42)".
+_BIDS_RE = re.compile(r"^(\d+)\s+gebote?\b", re.IGNORECASE)
+# "Noch 14 Min", "Noch 13 Std 38 Min", "Noch 1 T 1 Std", "Noch 5 T". eBay only
+# prints it in the ending-soonest sort. The end clock after it ("(Heute 05:54)")
+# is rendered in a US time zone for non-browser clients, so only this relative
+# part is trustworthy.
+_TIME_LEFT_RE = re.compile(r"\bnoch\s+((?:\d+\s*(?:tage?|tg|t|std|min|sek)\b\.?\s*)+)", re.IGNORECASE)
+_TIME_LEFT_PART_RE = re.compile(r"(\d+)\s*(tage?|tg|t|std|min|sek)\b", re.IGNORECASE)
+_TIME_LEFT_UNITS = {"t": "days", "tg": "days", "tag": "days", "tage": "days", "std": "hours", "min": "minutes"}
 # "+EUR 9,68 Lieferung", "+ ca. EUR 12,27 Versand", "Gratis 2-3 Tage Lieferung" —
 # but not "Lieferung an Abholstation möglich" or "Kostenloser Rückversand" (returns).
 _SHIPPING_RE = re.compile(r"^(?:\+\s*(?:ca\.\s*)?eur\s*([\d.,]+)|gratis|kostenlos\w*)\b.*(?:lieferung|versand)", re.I)
@@ -76,6 +86,18 @@ def _parse_eur_amount(text: str) -> float | None:
         return None
 
 
+def _parse_time_left(text: str) -> timedelta | None:
+    """ "... Noch 1 T 1 Std (Sa, 06:42)" → 1 day 1 hour; None when *text* states no time left."""
+    m = _TIME_LEFT_RE.search(text or "")
+    if not m:
+        return None
+    parts: dict[str, int] = {}
+    for amount, unit in _TIME_LEFT_PART_RE.findall(m.group(1)):
+        key = _TIME_LEFT_UNITS.get(unit.lower(), "seconds")
+        parts[key] = parts.get(key, 0) + int(amount)
+    return timedelta(**parts)
+
+
 def _text(el) -> str:
     return el.get_text(" ", strip=True) if el else ""
 
@@ -103,20 +125,58 @@ class EbayScraper:
             self._last_request = time.monotonic()
 
     def search(self, query: str, max_results: int = 50) -> tuple[list[dict], list[str]]:
-        """Search ebay.de, newest listings first, items located in Germany.
+        """Search ebay.de for Buy-It-Now listings located in Germany, newest first.
 
         *query* may use eBay's search syntax — ``(a,b,c)`` OR groups and
-        ``-word`` exclusions — which the web search honors.
+        ``-word`` exclusions — which the web search honors. Auctions come from
+        :meth:`search_auctions` instead: only its sort order shows how long an
+        auction has left.
         """
         params = {
             "_nkw": query,
             "_sop": "10",  # newly listed first ("12" is best match)
+            "LH_BIN": "1",  # Buy It Now
             "LH_PrefLoc": "1",  # item located in Germany
             "_sacat": _VIDEO_GAMES_CATEGORY,
             "_ipg": "120" if max_results > 60 else "60",
             "rt": "nc",
         }
         logger.info("eBay scraper: searching %r", query)
+        html, errors = self._fetch_results_page(params)
+        if html is None:
+            return [], errors
+        return self.parse_results_page(html, max_results)
+
+    def search_auctions(
+        self, query: str, max_results: int = 50, ends_within: timedelta | None = None
+    ) -> tuple[list[dict], list[str]]:
+        """Search ebay.de auctions located in Germany, ending soonest first.
+
+        Each auction gets an ``auction_end`` computed from the time left its
+        card shows; with *ends_within*, auctions ending later are left out.
+        """
+        params = {
+            "_nkw": query,
+            "_sop": "1",  # ending soonest — the only sort that prints the time left
+            "LH_Auction": "1",
+            "LH_PrefLoc": "1",
+            "_sacat": _VIDEO_GAMES_CATEGORY,
+            "_ipg": "120" if max_results > 60 else "60",
+            "rt": "nc",
+        }
+        logger.info("eBay scraper: searching auctions %r", query)
+        html, errors = self._fetch_results_page(params)
+        if html is None:
+            return [], errors
+        now = datetime.now(UTC)
+        deals, errors = self.parse_results_page(html, max_results, now=now)
+        if ends_within is not None:
+            cutoff = now + ends_within
+            deals = [d for d in deals if d["auction_end"] and datetime.fromisoformat(d["auction_end"]) <= cutoff]
+        return deals, errors
+
+    def _fetch_results_page(self, params: dict) -> tuple[bytes | None, list[str]]:
+        """GET a results page → ``(html, [])``, or ``(None, [error])``."""
         # eBay often answers a request 403 while setting session cookies, then
         # serves the same request normally once those cookies come back — so
         # a refusal gets exactly one retry on this (cookie-keeping) session.
@@ -125,24 +185,27 @@ class EbayScraper:
             try:
                 response = self.session.get(_SEARCH_URL, params=params, timeout=_REQUEST_TIMEOUT)
             except requests.exceptions.Timeout:
-                return [], [f"eBay search timed out after {_REQUEST_TIMEOUT}s"]
+                return None, [f"eBay search timed out after {_REQUEST_TIMEOUT}s"]
             except (requests.exceptions.ConnectionError, ConnectionError) as exc:
-                return [], [f"eBay connection error: {exc}"]
+                return None, [f"eBay connection error: {exc}"]
             if response.status_code != 403:
                 break
             logger.info("eBay scraper: HTTP 403 on attempt %d", attempt)
 
         if response.status_code in (403, 429):
             logger.warning("eBay scraper: HTTP %d (bot protection)", response.status_code)
-            return [], [f"eBay HTTP {response.status_code}: {_BLOCKED_HINT}"]
+            return None, [f"eBay HTTP {response.status_code}: {_BLOCKED_HINT}"]
         if not response.ok:
-            return [], [f"eBay HTTP {response.status_code}: {response.reason}"]
+            return None, [f"eBay HTTP {response.status_code}: {response.reason}"]
+        return response.content, []
 
-        return self.parse_results_page(response.content, max_results)
-
-    def parse_results_page(self, html: bytes | str, max_results: int = 50) -> tuple[list[dict], list[str]]:
+    def parse_results_page(
+        self, html: bytes | str, max_results: int = 50, now: datetime | None = None
+    ) -> tuple[list[dict], list[str]]:
         """Parse a search-results page into deals. Separate from :meth:`search`
-        so it can be tested against captured real pages."""
+        so it can be tested against captured real pages. Relative times on the
+        page ("Vor 5 Std. eingestellt", "Noch 1 T 1 Std") are resolved against *now*."""
+        now = now or datetime.now(UTC)
         soup = BeautifulSoup(html, "html.parser")
         results_list = soup.select_one("ul.srp-results")
         if results_list is None:
@@ -158,7 +221,7 @@ class EbayScraper:
             if len(deals) >= max_results:
                 break
             try:
-                deal = self._parse_card(card)
+                deal = self._parse_card(card, now)
             except Exception as exc:
                 failed += 1
                 logger.warning("eBay scraper: failed to parse a result card: %s", exc, exc_info=True)
@@ -174,7 +237,7 @@ class EbayScraper:
         logger.info("eBay scraper: %d cards → %d deals", len(cards), len(deals))
         return deals, errors
 
-    def _parse_card(self, card) -> dict | None:
+    def _parse_card(self, card, now: datetime) -> dict | None:
         title_el = card.select_one(".s-card__title")
         if title_el is not None:
             for noise in title_el.select(".clipped"):
@@ -216,7 +279,10 @@ class EbayScraper:
         seller_count = ""
         is_trending = False
         seller_rating = 0.0
+        time_left = None
         for text in (_text(r) for r in rows):
+            if time_left is None:
+                time_left = _parse_time_left(text)
             if _BIDS_RE.match(text):
                 listing_type = "auction"
             elif not shipping and "rück" not in text.lower() and (m := _SHIPPING_RE.match(text)):
@@ -236,7 +302,7 @@ class EbayScraper:
 
         listing_date = None
         age_text = next((s for s in (t.strip() for t in card.find_all(string=True)) if _AGE_TEXT_RE.match(s)), None)
-        if age_text and (parsed := parse_listing_date(age_text, "scraper")):
+        if age_text and (parsed := parse_listing_date(age_text, "scraper", now=now)):
             listing_date = parsed.isoformat()
 
         image_urls: list[str] = []
@@ -265,6 +331,11 @@ class EbayScraper:
             "seller_count": seller_count,
             "listing_date": listing_date,
             "listing_type": listing_type,
+            "auction_end": (
+                (now + time_left).replace(microsecond=0).isoformat()
+                if listing_type == "auction" and time_left is not None
+                else None
+            ),
             "image_urls": image_urls,
             "image_issues": [] if image_urls else ["no_images"],
         }
