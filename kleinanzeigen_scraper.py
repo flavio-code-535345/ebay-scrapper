@@ -119,6 +119,7 @@ def _build_deal(
         "seller_rating": 0.0,
         "url": url,
         "listing_id": f"kleinanzeigen:{ad_id}",
+        "source": "kleinanzeigen",
         "shipping": "Versand möglich" if shipping_available else "Nur Abholung",
         # Shipping is arranged per ad; its cost isn't on the results page.
         "shipping_cost": None,

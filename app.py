@@ -4,7 +4,6 @@ Flask REST API for eBay Deal Scraper
 Provides endpoints for searching, history, export, stats and health checks
 """
 
-import concurrent.futures
 import json
 import logging
 import os
@@ -15,10 +14,11 @@ from flask import Flask, Response, jsonify, render_template, request
 
 import database
 from ai_providers import create_assessor
-from ai_providers.base import _SPORTS_KINECT_KEYWORDS_RE, _detect_sports_kinect_deal
 from ebay_api_client import _MARKETPLACE_LOCALE_MAP, EbayApiClient
-from models import sort_key_for_deal
+from models import canonical_listing_id, sort_key_for_deal
 from scraper import EbayScraper
+from search.pipeline import run_search
+from search.query import plan_search
 
 try:
     from kleinanzeigen_scraper import KleinanzeigenScraper
@@ -122,81 +122,10 @@ def _db_ai_user_enabled() -> bool:
     return str(val).lower() == "true" if val is not None else True
 
 
-def _is_german_location(location: str) -> bool:
-    """Return True when *location* is in Germany or is empty/unknown.
-
-    Items with no location data are considered potentially German (to avoid
-    silently dropping valid results when the ``item_location`` field is
-    unavailable, e.g. from the legacy scraper on listings that don't expose
-    location).  Items with an explicit non-German location are filtered out.
-
-    Matching rules (case-insensitive):
-    - Empty string / None → keep (unknown origin, benefit of the doubt)
-    - Ends with ``, DE`` (e.g. ``"Berlin, DE"``) → Germany
-    - Equals ``DE`` exactly → Germany
-    - Contains the word ``Deutschland`` → Germany
-    - Contains the word ``Germany`` → Germany
-    """
-    if not location:
-        return True
-    upper = location.strip().upper()
-    # Exact country code
-    if upper == "DE":
-        return True
-    # "City, DE" format from the eBay Browse API
-    if upper.endswith(", DE"):
-        return True
-    # German or English country names as whole words
-    return "DEUTSCHLAND" in upper or "GERMANY" in upper
-
-
 @app.route("/")
 def index():
     return render_template("index.html")
 
-
-# German eBay synonym groups for query expansion.
-_QUERY_SYNONYMS: list[tuple[str, ...]] = [
-    ("Sammlung", "Konvolut", "Paket", "Bundle", "Lot", "Set", "Spielepaket"),
-    ("Spielesammlung", "Spiele Sammlung", "Games Sammlung"),
-    ("Spiele", "Games", "Titel", "Videospiele"),
-    ("Xbox 360", "XBox360", "X Box 360", "XBOX360"),
-    ("PS4", "PlayStation 4", "PS 4"),
-    ("PS5", "PlayStation 5", "PS 5"),
-    ("PS3", "PlayStation 3", "PS 3"),
-]
-
-
-def _expand_queries(queries: list[str]) -> list[str]:
-    expanded: list[str] = list(queries)
-    seen: set[str] = set(q.lower() for q in queries)
-    for q in queries:
-        q_lower = q.lower()
-        for group in _QUERY_SYNONYMS:
-            for term in group:
-                if term.lower() in q_lower:
-                    for alt in group:
-                        if alt.lower() != term.lower():
-                            new_q = re.sub(re.escape(term), alt, q, flags=re.IGNORECASE)
-                            nl = new_q.lower()
-                            if nl not in seen:
-                                seen.add(nl)
-                                expanded.append(new_q)
-                    break
-    return expanded[:8]
-
-
-# ── Parallel multi-source search ──────────────────────────────────────────
-# Synonym expansion produces up to 8 query variants, each searched against
-# up to 3 sources (eBay, eBay auctions, Kleinanzeigen) — up to 24 independent
-# HTTP round-trips per request. Running them one at a time (the original
-# design) meant a single search could take longer than the Gemini batch
-# assessment that follows it. A thread pool fans them all out concurrently;
-# each provider already returns ``(deals, errors)`` rather than raising for
-# ordinary failures (bad HTTP status, timeout, connection error — see
-# EbayScraper/EbayApiClient/KleinanzeigenScraper), so a flaky source just
-# contributes an error string instead of derailing the others.
-_SEARCH_MAX_WORKERS = 8
 
 # Total wall-clock budget for the WHOLE /api/search request (search phase +
 # Gemini AI assessment), measured from the moment the request starts. Many
@@ -214,6 +143,11 @@ _SEARCH_MAX_WORKERS = 8
 # proxy in front (or with a longer one) that want the fuller AI budget.
 _SEARCH_DEADLINE_S = int(os.environ.get("SEARCH_DEADLINE_SECONDS", "75"))
 
+# The search phase gets at most this long (and never more than 45% of the
+# whole deadline), so a slow or stalled source can't eat the AI's time — its
+# results are dropped and reported instead.
+_SEARCH_PHASE_MAX_S = 35.0
+
 # Cap on how many deals get sent to Gemini for AI assessment per search.
 _MAX_DISPLAY = 30
 
@@ -221,110 +155,11 @@ _MAX_DISPLAY = 30
 _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-.]{0,99}$")
 
 
-def _merge_deal(
-    all_deals: list[dict],
-    seen_urls: set[str],
-    seen_titles: set[str],
-    deal: dict,
-    *,
-    source: str | None = None,
-    listing_type: str | None = None,
-) -> bool:
-    """Merge one *deal* into *all_deals*, de-duplicating by URL and by
-    title+price (for the same listing surfacing under a different URL —
-    e.g. a tracking-parameter variant). Returns True if the deal was added.
-    """
-    url = deal.get("url", "")
-    if "?" in url:
-        url = url.split("?")[0]
-    if not url or url in seen_urls:
-        return False
-    title = (deal.get("title") or "").strip().lower()
-    price = deal.get("price")
-    title_price_key = f"{title}|{price}"
-    if title_price_key in seen_titles and price is not None:
-        return False
-    seen_urls.add(url)
-    if price is not None:
-        seen_titles.add(title_price_key)
-    if source:
-        deal["source"] = source
-    if listing_type:
-        deal["listing_type"] = listing_type
-    all_deals.append(deal)
-    return True
-
-
-def _merge_deals(
-    all_deals: list[dict],
-    seen_urls: set[str],
-    seen_titles: set[str],
-    new_deals: list[dict],
-    *,
-    source: str | None = None,
-    listing_type: str | None = None,
-) -> int:
-    """Merge every deal in *new_deals*; returns how many survived de-dup."""
-    return sum(
-        _merge_deal(all_deals, seen_urls, seen_titles, d, source=source, listing_type=listing_type) for d in new_deals
-    )
-
-
-def _build_search_jobs(queries, search_fn, max_results, ebay_api, kleinanzeigen):
-    """Build one search job per (query, source) combination.
-
-    Each job is ``(query, label, source, listing_type, fn)`` where *fn* is a
-    zero-arg callable returning that provider's ``(deals, errors)`` tuple.
-    *source*/*listing_type* mirror what the old inline loop tagged each
-    branch's deals with (auctions already self-tag ``source="ebay"`` inside
-    :meth:`EbayApiClient.search_auctions`, so that job passes ``source=None``
-    to avoid overriding it).
-    """
-    jobs = []
-    for q in queries:
-        jobs.append((q, "eBay", "ebay", "fixed", lambda q=q: search_fn(q, max_results=max_results)))
-        if ebay_api.is_configured:
-            jobs.append(
-                (
-                    q,
-                    "eBay auctions",
-                    None,
-                    "auction",
-                    lambda q=q: ebay_api.search_auctions(q, max_results=min(max_results, 20)),
-                )
-            )
-        if kleinanzeigen:
-            jobs.append(
-                (
-                    q,
-                    "Kleinanzeigen",
-                    "kleinanzeigen",
-                    None,
-                    lambda q=q: kleinanzeigen.search(q, max_results=min(max_results, 30)),
-                )
-            )
-    return jobs
-
-
-def _run_search_jobs(jobs):
-    """Run every search job concurrently; return results in submission
-    order — query-major, eBay → auctions → Kleinanzeigen per query — the
-    same relative priority the old sequential loop gave for de-dup ties,
-    regardless of which thread actually finishes first.
-    """
-    if not jobs:
-        return []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(_SEARCH_MAX_WORKERS, len(jobs))) as pool:
-        futures = [(q, label, source, listing_type, pool.submit(fn)) for q, label, source, listing_type, fn in jobs]
-        results = []
-        for q, label, source, listing_type, fut in futures:
-            try:
-                deals, errs = fut.result()
-            except Exception as exc:
-                logger.warning("%s search failed for %r: %s", label, q, exc)
-                deals, errs = [], [f"{label} search error: {exc}"]
-            results.append((q, label, source, listing_type, deals, errs))
-    return results
+def _skipped_keys() -> set[str]:
+    """Skipped URLs plus their stable listing IDs, so a skipped listing stays
+    hidden even when a source reports it under a differently-shaped URL."""
+    urls = database.get_skipped_deal_urls()
+    return set(urls) | {key for key in map(canonical_listing_id, urls) if key}
 
 
 @app.route("/api/search", methods=["POST"])
@@ -334,117 +169,38 @@ def search():
     if data is None:
         return jsonify({"error": "Request body must be valid JSON with Content-Type: application/json"}), 400
 
-    # Accept a single "query" (backward-compat) or "queries" (array) for
-    # multi-phrase searches that catch more listing variations.
-    raw_query = data.get("query", "").strip()
+    # Accept a single "query" or a "queries" array (the quick-search chips
+    # send several phrasings; the planner folds them into one plan).
+    raw_query = str(data.get("query") or "").strip()
     raw_queries = data.get("queries")
     if raw_queries and isinstance(raw_queries, list):
-        queries = [str(q).strip() for q in raw_queries if str(q).strip()]
-    elif raw_query:
-        queries = [raw_query]
+        phrases = [str(q).strip() for q in raw_queries if str(q).strip()]
     else:
+        phrases = [raw_query] if raw_query else []
+    if not phrases:
         return jsonify({"error": "query or queries is required"}), 400
 
-    # Auto-expand queries with synonym variations for maximum eBay coverage.
-    queries = _expand_queries(queries)
-    query = queries[0]  # canonical query ref for logging / response payload
-
-    try:
-        max_results = max(1, min(int(data.get("max_results", 50)), 200))
-    except (TypeError, ValueError):
-        return jsonify({"error": "max_results must be a positive integer"}), 400
+    plan = plan_search(phrases)
+    query = plan.label
 
     data_source_setting = _db_data_source()
     search_fn, active_source = _resolve_engine(data_source_setting)
-
-    # Run every (query × source) search concurrently, then merge results in
-    # a fixed order so de-dup ties resolve the same way the old sequential
-    # loop did — see _build_search_jobs / _run_search_jobs above.
-    jobs = _build_search_jobs(queries, search_fn, max_results, ebay_api, kleinanzeigen)
-    job_results = _run_search_jobs(jobs)
-
-    all_deals: list[dict] = []
-    all_errors: list[str] = []
-    seen_urls: set[str] = set()
-    seen_titles: set[str] = set()
-    for q, label, source, listing_type, job_deals, errs in job_results:
-        all_errors.extend(errs)
-        added = _merge_deals(all_deals, seen_urls, seen_titles, job_deals, source=source, listing_type=listing_type)
-        logger.info("%s search for %r returned %d deals (%d new)", label, q, len(job_deals), added)
-
-    deals = all_deals
-    search_errors = all_errors
-    ebay_n = sum(1 for d in deals if d.get("source") == "ebay")
-    kdx_n = sum(1 for d in deals if d.get("source") == "kleinanzeigen")
-    logger.info(
-        "Multi-query (%d phrases): %d deals (%d eBay, %d Kleinanzeigen), %d errors",
-        len(queries),
-        len(deals),
-        ebay_n,
-        kdx_n,
-        len(search_errors),
+    budget_s = min(_SEARCH_PHASE_MAX_S, 0.45 * _SEARCH_DEADLINE_S)
+    outcome = run_search(
+        plan,
+        ebay_search=search_fn,
+        ebay_is_api=active_source == "api",
+        auction_search=ebay_api.search_auctions if ebay_api.is_configured else None,
+        kleinanzeigen_search=kleinanzeigen.search if kleinanzeigen else None,
+        skipped=_skipped_keys(),
+        budget_s=budget_s,
+        limit=_MAX_DISPLAY,
     )
-
-    # Post-filter: exclude deals that the user has previously skipped.
-    skipped_urls = set(database.get_skipped_deal_urls())
-    if skipped_urls:
-        before_skip = len(deals)
-        deals = [d for d in deals if d.get("url") not in skipped_urls]
-        filtered_skip = before_skip - len(deals)
-        if filtered_skip:
-            logger.info("Skip filter removed %d previously-skipped deal(s)", filtered_skip)
-
-    # Post-filter: drop any deal whose item_location is not Germany (DE).
-    # This is a safety net in addition to the API/scraper-level filters
-    # (itemLocationCountry and LH_ItemLocation) and is controlled by the
-    # germany_only setting.  Items with no location data are kept to avoid
-    # silently dropping valid results when the location field is unavailable.
+    search_errors = outcome.errors
     germany_only = _db_germany_only()
-    if germany_only:
-        before = len(deals)
-        deals = [
-            d for d in deals if d.get("source") == "kleinanzeigen" or _is_german_location(d.get("item_location", ""))
-        ]
-        filtered_out = before - len(deals)
-        if filtered_out:
-            logger.info("Germany-only filter removed %d non-German deal(s)", filtered_out)
-
-    # Post-filter: drop sports/Kinect-only deals — these have very low
-    # resale value (FIFA, Forza, Kinect, TopSpin, etc.) and should never
-    # surface as desirable results.  HOWEVER, if the title also contains
-    # clearly non-sports games, keep it and let Gemini score it — the
-    # non-sports titles may still make the bundle profitable.
-    before_sports = len(deals)
-    _filtered = []
-    for d in deals:
-        warning = _detect_sports_kinect_deal(d)
-        if not warning:
-            _filtered.append(d)
-            continue
-        # Check: does the title contain any bundle-indicating quantity of
-        # non-trivial content (≥2 game-like tokens that are NOT sports)?
-        title = (d.get("title") or "").lower()
-        # Strip sports keywords, see what's left.
-        cleaned = _SPORTS_KINECT_KEYWORDS_RE.sub(" ", title)
-        cleaned = re.sub(r"\b(je\s+stk|stk|pro|jede|und|mit|für|oder|stück|wahl|aus)\b", " ", cleaned)
-        cleaned = re.sub(r"\d+\s*[€x×]|\b\d+\b", " ", cleaned)
-        tokens = [t for t in cleaned.split() if len(t) > 2 and t not in ("die", "der", "das", "ein", "sie", "von")]
-        # A bundle likely has ≥3 remaining non-sports / non-noise tokens.
-        if len(tokens) >= 3:
-            _filtered.append(d)
-        else:
-            logger.debug("Sports-only deal removed: %r", (d.get("title") or "")[:80])
-    deals = _filtered
-    filtered_sports = before_sports - len(deals)
-    if filtered_sports:
-        logger.info(
-            "Sports/Kinect filter removed %d deal(s) with low resale value",
-            filtered_sports,
-        )
-
-    # Cap deals before sending to Gemini — no score-based pre-filtering.
-    # All deals that pass the post-filters above are eligible for AI assessment.
-    deals_filtered = deals[:_MAX_DISPLAY]
+    deals_filtered = outcome.selected
+    ebay_n = sum(1 for d in deals_filtered if d.get("source") == "ebay")
+    kdx_n = sum(1 for d in deals_filtered if d.get("source") == "kleinanzeigen")
 
     # AI assessment via Gemini: send only the top filtered deals in a single
     # request to minimise quota consumption rather than calling once per deal.
@@ -537,6 +293,8 @@ def search():
             "ai_timeout_count": timed_out,
             "data_source": active_source,
             "germany_only": germany_only,
+            "candidate_count": outcome.candidates,
+            "sources": [r.as_dict() for r in outcome.sources],
         }
     )
 

@@ -245,6 +245,7 @@ class EbayScraper:
             "seller_rating": seller_rating,
             "url": f"https://www.ebay.de/itm/{listing_num}",
             "listing_id": f"ebay:{listing_num}",
+            "source": "ebay",
             "shipping": shipping,
             "shipping_cost": shipping_cost,
             "is_trending": is_trending,

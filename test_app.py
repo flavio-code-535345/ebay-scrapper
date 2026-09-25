@@ -287,16 +287,16 @@ class TestSearchSortOrder:
             self._fake_deal(url="http://ebay.de/itm/good-newer", listing_date="2024-06-01T00:00:00+00:00"),
             self._fake_deal(url="http://ebay.de/itm/must-have-undated", listing_date=None),
         ]
+        ratings = {"http://ebay.de/itm/good-newer": "Good", "http://ebay.de/itm/must-have-undated": "Must Have"}
+
+        def rate_by_url(deals, deadline=None):
+            # Deals reach the AI best-first (search.pipeline.select), not in
+            # scraper order — rate each by identity, not by position.
+            return [{"ai_deal_rating": ratings[d["url"]], "ai_assessed": True} for d in deals]
+
         with (
             patch.object(app.scraper, "search", return_value=(fake_deals, [])),
-            patch.object(
-                app.assessor,
-                "assess_deals_batch",
-                return_value=[
-                    {"ai_deal_rating": "Good", "ai_assessed": True},
-                    {"ai_deal_rating": "Must Have", "ai_assessed": True},
-                ],
-            ),
+            patch.object(app.assessor, "assess_deals_batch", side_effect=rate_by_url),
         ):
             resp = client.post("/api/search", json={"query": "test"})
         urls = [d["url"] for d in resp.get_json()["deals"]]

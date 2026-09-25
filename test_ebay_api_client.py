@@ -304,14 +304,70 @@ class TestGetLowestMarketPrice:
 
 class TestParseShipping:
     def test_free_shipping(self, client):
-        assert client._parse_shipping([{"shippingCostType": "FREE"}]) == "Free"
+        assert client._parse_shipping([{"shippingCostType": "FREE"}]) == ("Free", 0.0)
 
     def test_no_options(self, client):
-        assert client._parse_shipping([]) == "N/A"
+        assert client._parse_shipping([]) == ("N/A", None)
 
     def test_paid_shipping(self, client):
         opts = [{"shippingCost": {"value": "4.50", "currency": "EUR"}}]
-        assert "€4.50" in client._parse_shipping(opts)
+        assert client._parse_shipping(opts) == ("€4.50", 4.5)
+
+
+class TestQueryParams:
+    def _search_params(self, client, method="search"):
+        mock_resp = MagicMock(ok=True, status_code=200)
+        mock_resp.json.return_value = {"total": 0, "itemSummaries": []}
+        with (
+            patch.object(client, "_get_access_token", return_value="tok"),
+            patch.object(client.session, "get", return_value=mock_resp) as mock_get,
+        ):
+            getattr(client, method)("xbox 360 (sammlung, konvolut)")
+        return mock_get.call_args.kwargs["params"]
+
+    @pytest.mark.parametrize("method", ["search", "search_auctions"])
+    def test_query_sent_verbatim_without_undocumented_minus_terms(self, client, method):
+        """The Browse API caps q at 100 chars and documents no "-word"
+        exclusion; ~85 chars of "-skylanders -lego …" used to be appended to
+        every query, pushing it past the cap."""
+        assert self._search_params(client, method)["q"] == "xbox 360 (sammlung, konvolut)"
+
+    @pytest.mark.parametrize("method", ["search", "search_auctions"])
+    def test_requests_extended_fieldgroup_for_descriptions(self, client, method):
+        """shortDescription only arrives with fieldgroups=EXTENDED."""
+        assert "EXTENDED" in self._search_params(client, method)["fieldgroups"]
+
+
+class TestListingIdentity:
+    def test_legacy_item_id(self, client):
+        deal = client._normalize_item(
+            {"title": "T", "itemWebUrl": "https://www.ebay.de/itm/206580175564", "legacyItemId": "206580175564"}
+        )
+        assert deal["listing_id"] == "ebay:206580175564"
+        assert deal["source"] == "ebay"
+
+    def test_item_id_v1_format(self, client):
+        deal = client._normalize_item({"title": "T", "itemWebUrl": "https://x", "itemId": "v1|206580175564|0"})
+        assert deal["listing_id"] == "ebay:206580175564"
+
+    def test_listing_type_from_buying_options(self, client):
+        auction = client._normalize_item({"title": "T", "itemWebUrl": "https://x", "buyingOptions": ["AUCTION"]})
+        fixed = client._normalize_item({"title": "T", "itemWebUrl": "https://x", "buyingOptions": ["FIXED_PRICE"]})
+        assert auction["listing_type"] == "auction"
+        assert fixed["listing_type"] == "fixed"
+
+    def test_auction_search_skips_unusable_items(self, client):
+        """An item with neither title nor URL used to crash search_auctions
+        (it tagged fields onto the None that _normalize_item returned)."""
+        mock_resp = MagicMock(ok=True, status_code=200)
+        mock_resp.json.return_value = {"itemSummaries": [{"itemId": "x"}, {"title": "Ok", "itemWebUrl": "https://x"}]}
+        with (
+            patch.object(client, "_get_access_token", return_value="tok"),
+            patch.object(client.session, "get", return_value=mock_resp),
+        ):
+            deals, errors = client.search_auctions("xbox")
+        assert len(deals) == 1
+        assert deals[0]["listing_type"] == "auction"
 
 
 class TestExtractPricesFromItems:
