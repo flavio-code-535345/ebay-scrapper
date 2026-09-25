@@ -89,9 +89,10 @@ eingestellt" for the scraper — never fabricated), which is what lets `models.s
 deals newest-first ahead of undated ones within each rating tier.
 
 Source specifics worth knowing: `EbayScraper` parses eBay's `ul.srp-results > li.s-card` markup
-(`_sop=10` is newest-first, `LH_PrefLoc=1` is Germany), but eBay's bot protection refuses non-browser
-clients outright (HTTP 403) on some networks — it then says so and points at the Browse API, which is the
-reliable path. `KleinanzeigenScraper` parses the structured `resultAds[]` data each results page embeds
+(`_sop=10` is newest-first, `LH_PrefLoc=1` is Germany). eBay's bot protection often answers HTTP 403
+while setting session cookies and serves the request once they come back, so the scraper retries a 403
+exactly once on its cookie-keeping session; if it's still refused, it says so and points at the Browse API,
+which is the reliable path. `KleinanzeigenScraper` parses the structured `resultAds[]` data each results page embeds
 (an Astro island), with the `article[data-adid]` cards as fallback; it searches the Videospiele category
 (`c227`), decodes UTF-8 explicitly (the server sends no charset), and pauses itself for 10 minutes after an
 IP-ban 403. Parser tests run against **real captured pages** in `fixtures/` — hand-written HTML is what let
