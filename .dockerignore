@@ -18,6 +18,7 @@ env/
 # Test files — this project's tests live at the repo root as test_*.py,
 # not under tests/ or named *.test.py (those patterns never matched anything)
 test_*.py
+fixtures/
 .coverage
 .coverage.*
 htmlcov/

@@ -15,14 +15,18 @@ from contextlib import suppress
 
 import requests
 
-from models import normalize_condition
+from models import canonical_listing_id, normalize_condition
 
 logger = logging.getLogger(__name__)
 
-# Junk-keyword exclusion list shared by both search() (fixed-price) and
-# search_auctions() — previously two separately-maintained literals that had
-# drifted apart (search_auctions() was missing "-djhero -justdance").
-_JUNK_KEYWORDS = "-skylanders -lego -amiibo -disney -singstar -guitar -rockband -djhero -justdance"
+# The Browse API truncates `q` beyond 100 characters, supports OR groups as
+# "(a, b, c)", and documents no exclusion ("-word") syntax — so queries are
+# built by search/query.py to fit, and junk filtering happens locally.
+MAX_QUERY_LENGTH = 100
+
+# EXTENDED adds shortDescription (and itemLocation.city) to each result —
+# without it, API deals reach the AI with no description text at all.
+_FIELDGROUPS = "MATCHING_ITEMS,EXTENDED"
 
 # Mapping eBay API conditionId → human-readable English label understood by
 # the existing DealAssessor (which scores on 'new', 'refurbished', 'used', etc.)
@@ -181,7 +185,8 @@ class EbayApiClient:
             )
             return [], errors
 
-        search_query = f"{query} {_JUNK_KEYWORDS}"
+        if len(query) > MAX_QUERY_LENGTH:
+            logger.warning("eBay API query is %d chars; eBay truncates beyond %d", len(query), MAX_QUERY_LENGTH)
 
         try:
             token = self._get_access_token()
@@ -225,11 +230,12 @@ class EbayApiClient:
             f"buyingOptions:{{FIXED_PRICE}}"
         )
         params = {
-            "q": search_query,
+            "q": query,
             "limit": min(max(1, max_results), 200),
             "sort": "newlyListed",
             "filter": api_filter,
             "category_ids": "1249",
+            "fieldgroups": _FIELDGROUPS,
         }
 
         headers = {
@@ -323,8 +329,6 @@ class EbayApiClient:
         except Exception as exc:
             return [], [f"eBay auth failed: {exc}"]
 
-        search_query = f"{query} {_JUNK_KEYWORDS}"
-
         api_filter = (
             f"itemLocationCountry:{self.delivery_country},"
             f"deliveryCountry:{self.delivery_country},"
@@ -332,11 +336,12 @@ class EbayApiClient:
         )
         url = self._base_url + self._SEARCH_PATH
         params = {
-            "q": search_query,
+            "q": query,
             "limit": min(max(1, max_results), 200),
             "sort": "endingSoonest",
             "filter": api_filter,
             "category_ids": "1249",
+            "fieldgroups": _FIELDGROUPS,
         }
         headers = {
             "Authorization": f"Bearer {token}",
@@ -361,9 +366,8 @@ class EbayApiClient:
             return [], ["Auction response not valid JSON"]
 
         raw_items = body.get("itemSummaries", [])
-        deals = [self._normalize_item(item) for item in raw_items]  # type: ignore[attr-defined]
+        deals = [d for d in (self._normalize_item(item) for item in raw_items) if d]
         for d in deals:
-            d["source"] = "ebay"
             d["listing_type"] = "auction"
         return deals, errors
 
@@ -599,7 +603,15 @@ class EbayApiClient:
             seller_rating = 0.0
 
         # ── Shipping ───────────────────────────────────────────────────────
-        shipping = self._parse_shipping(item.get("shippingOptions") or [])
+        shipping, shipping_cost = self._parse_shipping(item.get("shippingOptions") or [])
+
+        # ── Identity ───────────────────────────────────────────────────────
+        # itemId is "v1|<legacy id>|<variation>"; the legacy id is the one in
+        # web URLs, so web-scraped and API copies of a listing share it.
+        legacy_id = str(item.get("legacyItemId") or "").strip()
+        if not legacy_id and str(item.get("itemId", "")).count("|") == 2:
+            legacy_id = str(item["itemId"]).split("|")[1]
+        listing_id = f"ebay:{legacy_id}" if legacy_id.isdigit() else canonical_listing_id(url)
 
         # ── Item location ──────────────────────────────────────────────────
         # itemLocation holds the physical location where the item is stored.
@@ -676,7 +688,11 @@ class EbayApiClient:
             "condition_normalized": condition_normalized,
             "seller_rating": seller_rating,
             "url": url,
+            "listing_id": listing_id,
+            "source": "ebay",
+            "listing_type": "auction" if "AUCTION" in (item.get("buyingOptions") or []) else "fixed",
             "shipping": shipping,
+            "shipping_cost": shipping_cost,
             "is_trending": is_trending,
             # Physical location of the item (country code + optional city).
             # Set by itemLocationCountry filter; e.g. "Berlin, DE" or "DE".
@@ -694,16 +710,16 @@ class EbayApiClient:
         }
 
     @staticmethod
-    def _parse_shipping(shipping_options: list) -> str:
-        """Convert Browse API shippingOptions list to a human-readable string."""
+    def _parse_shipping(shipping_options: list) -> tuple[str, float | None]:
+        """Browse API shippingOptions → (display text, cost in listing currency or None if unknown)."""
         if not shipping_options:
-            return "N/A"
+            return "N/A", None
 
         option = shipping_options[0]
         cost_type = (option.get("shippingCostType") or "").upper()
 
         if cost_type in ("FREE", "FREE_SHIPPING"):
-            return "Free"
+            return "Free", 0.0
 
         cost_obj = option.get("shippingCost") or {}
         try:
@@ -712,8 +728,8 @@ class EbayApiClient:
             amount = 0.0
 
         if amount == 0.0:
-            return "Free"
+            return "Free", 0.0
 
         currency = (cost_obj.get("currency") or "EUR").upper()
         symbol = "€" if currency == "EUR" else currency
-        return f"{symbol}{amount:.2f}"
+        return f"{symbol}{amount:.2f}", amount

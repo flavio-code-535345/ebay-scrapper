@@ -126,6 +126,10 @@ ebay-scrapper/
 ├── scraper.py             # Legacy HTML scraper (ebay.de)
 ├── ebay_api_client.py     # Browse API client (OAuth + search + auctions)
 ├── kleinanzeigen_scraper.py # Kleinanzeigen.de HTML scraper
+├── search/
+│   ├── query.py           # Query planner: one OR-grouped request per source
+│   └── pipeline.py        # Concurrent fetch, dedupe, filters, ranked selection
+├── fixtures/              # Real captured result pages the parser tests run on
 ├── ai_providers/
 │   ├── __init__.py        # create_assessor() factory
 │   ├── base.py            # Shared rules, JSON parse

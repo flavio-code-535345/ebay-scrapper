@@ -26,6 +26,7 @@ pytest test_scraper.py                                 # single file
 pytest test_scraper.py::test_name -v                    # single test
 pytest -k "scam"                                        # by keyword, across files
 python -m pytest -v --tb=short --cov --cov-report=term-missing   # what CI runs
+pytest -m live                                         # opt-in: hit the real eBay/Kleinanzeigen sites
 
 # Lint / format (must pass — CI blocks on both)
 ruff check .
@@ -41,21 +42,29 @@ the Docker multi-arch build/push step only runs on non-PR events (i.e. after mer
 
 **Request flow for `/api/search` (the core of the app), in [app.py](app.py):**
 
-1. Accept one `query` or a `queries[]` array; expand each with German synonym groups
-   (`_QUERY_SYNONYMS` — e.g. "Sammlung"/"Konvolut"/"Paket"/"Bundle", console name variants) up to 8 total.
+1. Accept one `query` or a `queries[]` array (quick-search chips send several phrasings) and turn it into
+   a `SearchPlan` ([search/query.py](search/query.py)): eBay's web search *and* Browse API both honor OR
+   groups, so every German bundle synonym fits in **one** request — `xbox 360 (sammlung,konvolut,paket,
+   bundle,spielesammlung,lot,spielepaket)`, trimmed to the API's 100-character `q` cap, with no `-word`
+   terms for the API (undocumented there); the web query adds a few exclusions (`-skylanders -amiibo …`).
+   Kleinanzeigen has no OR support and IP-bans quickly, so it gets at most two plain variants.
 2. Pick a search engine via `_resolve_engine(data_source_setting)`: `"api"` → `EbayApiClient`,
    `"scraper"` → `EbayScraper`, `"auto"` → API if credentials are configured, else scraper.
-3. Run every (query × source) combination — the chosen eBay engine, `EbayApiClient.search_auctions` (if
-   API configured), and `KleinanzeigenScraper` (if importable) — **concurrently** via a thread pool
-   (`_build_search_jobs`/`_run_search_jobs`), then merge results in a fixed, deterministic order
-   (query-major, eBay → auctions → Kleinanzeigen), de-duplicating by normalized URL and by `title|price`
-   (`_merge_deal`/`_merge_deals`). `EbayScraper` and `KleinanzeigenScraper` each gate their own outgoing
-   requests behind an instance-level lock (`_rate_limit`) so concurrent callers still hit those sites with
-   human-ish spacing instead of a simultaneous burst — eBay's anti-bot heuristic reacts to bursts, not
-   steady volume; verified by hand (a naive unthrottled parallel version got most requests HTTP 403'd).
-4. Apply post-filters in order: previously-skipped URLs (from SQLite) → Germany-only location filter
-   (`_is_german_location`) → sports/Kinect filter (drops FIFA/Kinect/etc.-only listings unless the title
-   also has ≥3 non-sports tokens, letting Gemini judge mixed bundles) → cap to 30 deals.
+3. `search.pipeline.run_search` ([search/pipeline.py](search/pipeline.py)) fetches every source
+   **concurrently** under a search-phase budget (`min(_SEARCH_PHASE_MAX_S, 45% of the deadline)`): a
+   source that overruns it is reported (`timed_out`) and dropped rather than stalling the response. It then
+   de-duplicates by stable listing ID (`models.canonical_listing_id` — the same eBay item arrives under
+   different URL shapes from the API and the web) and by normalized title+price for cross-posted listings.
+   `EbayScraper` and `KleinanzeigenScraper` each gate their own outgoing requests behind an instance-level
+   lock (`_rate_limit`) so concurrent callers never burst a site.
+4. Filters: previously-skipped listings (by URL *or* listing ID) → Germany-only location → sports/Kinect-only
+   titles (mixed bundles with ≥3 other meaningful words are kept for Gemini to judge) → **platform guard**
+   (a title naming only a different platform than the one searched is dropped; titles naming no platform, or
+   the generic "Xbox"/"PlayStation", are kept). Then **ranked, source-diverse selection** of the 30 deals that
+   get AI budget: score = query match + freshness + price per game (from counts like "26 Spiele"), and each
+   source bucket (eBay Buy-It-Now, eBay auctions, Kleinanzeigen) first gets an equal share of its own best
+   listings — so one prolific source can't crowd the others out. The response's `sources` array reports each
+   source's queries, count, errors and time, so a dead source is visible instead of silent.
 5. Send the surviving deals to Gemini in **one batched request** (`assessor.assess_deals_batch`) rather
    than per-deal calls, to conserve API quota — passed a `deadline` (request-start + `_SEARCH_DEADLINE_S`,
    env `SEARCH_DEADLINE_SECONDS`, default 75s) so a slow search phase leaves correspondingly less time for
@@ -72,12 +81,22 @@ without it) all expose `search(query, max_results) -> (deals, errors)` and norma
 schema documented in [models.py](models.py) (`Deal` — `title`, `price`, `condition`,
 `condition_normalized`, `seller_rating`, `url`, `shipping`, `shipping_note`, `item_location`,
 `listing_date`, `description`, `seller_count`, …) so the rest of the app — assessors, database, frontend —
-is agnostic to which one produced a result. `condition_normalized` (`models.normalize_condition`) gives a
-cross-source-comparable value without touching the raw `condition` text/enum each source still populates
-as-is; `listing_date` is always a real ISO-8601 string or `None` (`models.parse_listing_date` — the HTML
-scraper's search-results page exposes no date at all, so it's always `None` there, never fabricated), which
-is what lets `models.sort_key_for_deal` sort dated deals newest-first ahead of undated ones within each
-rating tier instead of collapsing every undated deal below every dated one.
+is agnostic to which one produced a result. Each producer stamps its own `source` and `listing_id`.
+`condition_normalized` (`models.normalize_condition`) gives a cross-source-comparable value without touching
+the raw `condition` text each source still populates as-is; `listing_date` is always a real ISO-8601 string
+or `None` (`models.parse_listing_date`: German local time for Kleinanzeigen, eBay's coarse "Vor 5 Std.
+eingestellt" for the scraper — never fabricated), which is what lets `models.sort_key_for_deal` sort dated
+deals newest-first ahead of undated ones within each rating tier.
+
+Source specifics worth knowing: `EbayScraper` parses eBay's `ul.srp-results > li.s-card` markup
+(`_sop=10` is newest-first, `LH_PrefLoc=1` is Germany). eBay's bot protection often answers HTTP 403
+while setting session cookies and serves the request once they come back, so the scraper retries a 403
+exactly once on its cookie-keeping session; if it's still refused, it says so and points at the Browse API,
+which is the reliable path. `KleinanzeigenScraper` parses the structured `resultAds[]` data each results page embeds
+(an Astro island), with the `article[data-adid]` cards as fallback; it searches the Videospiele category
+(`c227`), decodes UTF-8 explicitly (the server sends no charset), and pauses itself for 10 minutes after an
+IP-ban 403. Parser tests run against **real captured pages** in `fixtures/` — hand-written HTML is what let
+both scrapers break silently before; recapture a fixture when a site's markup changes.
 
 **AI assessment layer (`ai_providers/`)** — `create_assessor()` ([ai_providers/__init__.py](ai_providers/__init__.py))
 is the sole entry point; it wires in the concrete provider (currently only `GeminiAssessor`,
