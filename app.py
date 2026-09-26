@@ -192,6 +192,7 @@ def search():
         ebay_is_api=active_source == "api",
         auction_search=ebay_api.search_auctions if active_source == "api" else scraper.search_auctions,
         kleinanzeigen_search=kleinanzeigen.search if kleinanzeigen else None,
+        kleinanzeigen_describe=kleinanzeigen.fetch_description if kleinanzeigen else None,
         skipped=_skipped_keys(),
         budget_s=budget_s,
         limit=_MAX_DISPLAY,

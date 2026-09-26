@@ -5,6 +5,10 @@ analytics — an Astro island whose props carry ``resultAds[]`` (id, title,
 price, date, location, shipping availability, images, ...). That's far more
 stable than the page's utility-class HTML, which is the fallback.
 
+Search results carry only the first ~100 characters of each description;
+:meth:`KleinanzeigenScraper.fetch_description` reads an ad's full text (the
+search pipeline does so for the few bundles that look too cheap to be true).
+
 Kleinanzeigen IP-bans aggressively ("IP-Bereich vorübergehend gesperrt",
 HTTP 403, after roughly six requests a minute), so requests are spaced well
 apart and a ban pauses this source instead of retrying into it.
@@ -33,6 +37,9 @@ _REQUEST_TIMEOUT = 20
 _REQUEST_SPACING_S = 5.0
 _BAN_COOLDOWN_S = 600.0
 _MAX_IMAGES = 3
+# Full descriptions are cached per ad: a repeated search costs no requests.
+_DESCRIPTION_TTL_S = 3600.0
+_DESCRIPTION_CACHE_MAX = 500
 
 _HEADERS = {
     "User-Agent": (
@@ -50,6 +57,7 @@ _DATE_TEXT_RE = re.compile(r"^(heute|gestern)\b|^\d{1,2}\.\d{1,2}\.\d{4}$", re.I
 _POSTCODE_RE = re.compile(r"^\d{5}\b")
 _RESULT_COUNT_RE = re.compile(r"von\s+([\d.]+)")
 _IMAGE_RULE_RE = re.compile(r"\?rule=\$_\d+\.AUTO")
+_AD_URL_RE = re.compile(r"^https://www\.kleinanzeigen\.de/s-anzeige/[^/?#\s]+/(\d+)-\d+-\d+$")
 
 
 def _devalue(node):
@@ -89,6 +97,18 @@ def _infer_condition(title: str, description: str) -> str:
     if any(w in combined for w in ("gut", "gebraucht")):
         return "Gebraucht"
     return ""
+
+
+def parse_ad_description(html: str) -> str | None:
+    """The full description text of an ad page (line breaks kept), or ``None``
+    if the page has no description element."""
+    element = BeautifulSoup(html, "html.parser").select_one("#viewad-description-text")
+    if element is None:
+        return None
+    for br in element.find_all("br"):
+        br.replace_with("\n")
+    lines = (" ".join(line.split()) for line in element.get_text().split("\n"))
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
 def _full_size_image(url: str) -> str:
@@ -143,6 +163,8 @@ class KleinanzeigenScraper:
         # Held for the whole check-sleep-update sequence so concurrent callers
         # are serialized into properly spaced requests instead of a burst.
         self._rate_limit_lock = threading.Lock()
+        self._descriptions: dict[str, tuple[str, float]] = {}  # ad id → (text, fetched at)
+        self._descriptions_lock = threading.Lock()
 
     def _rate_limit(self) -> None:
         with self._rate_limit_lock:
@@ -154,31 +176,68 @@ class KleinanzeigenScraper:
     def search(self, query: str, max_results: int = 50) -> tuple[list[dict], list[str]]:
         if not query or not query.strip():
             return [], ["query is required"]
+        slug = urllib.parse.quote(re.sub(r"\s+", "-", query.strip().lower()), safe="-")
+        html, errors = self._get(_SEARCH_URL.format(slug=slug))
+        if html is None:
+            return [], errors
+        return self.parse_results_page(html, max_results)
+
+    def fetch_description(self, url: str, cached_only: bool = False) -> tuple[str | None, list[str]]:
+        """The full description of the ad at *url* → ``(text, [])``, or ``(None, [error])``.
+
+        Cached per ad for an hour. With *cached_only* no request is made: a
+        cache miss returns ``(None, [])``.
+        """
+        m = _AD_URL_RE.match(url or "")
+        if not m:
+            return None, [f"Not a Kleinanzeigen ad URL: {url!r}"]
+        ad_id = m.group(1)
+        with self._descriptions_lock:
+            hit = self._descriptions.get(ad_id)
+        if hit and time.monotonic() - hit[1] < _DESCRIPTION_TTL_S:
+            return hit[0], []
+        if cached_only:
+            return None, []
+
+        html, errors = self._get(url)
+        if html is None:
+            return None, errors
+        text = parse_ad_description(html)
+        if text is None:
+            return None, ["Kleinanzeigen ad page has no description element — its markup has likely changed."]
+        with self._descriptions_lock:
+            if len(self._descriptions) >= _DESCRIPTION_CACHE_MAX:
+                del self._descriptions[min(self._descriptions, key=lambda k: self._descriptions[k][1])]
+            self._descriptions[ad_id] = (text, time.monotonic())
+        return text, []
+
+    def _get(self, url: str) -> tuple[str | None, list[str]]:
+        """GET a Kleinanzeigen page → ``(html, [])``, or ``(None, [error])``.
+
+        Spaced by :meth:`_rate_limit`; an IP ban pauses every request for
+        ``_BAN_COOLDOWN_S`` instead of retrying into it.
+        """
         remaining_ban = self._blocked_until - time.monotonic()
         if remaining_ban > 0:
-            return [], [f"Kleinanzeigen is blocking this server's IP — paused for {remaining_ban / 60:.0f} more min."]
-
-        slug = urllib.parse.quote(re.sub(r"\s+", "-", query.strip().lower()), safe="-")
-        url = _SEARCH_URL.format(slug=slug)
+            return None, [f"Kleinanzeigen is blocking this server's IP — paused for {remaining_ban / 60:.0f} more min."]
         self._rate_limit()
         try:
             resp = self._session.get(url, timeout=_REQUEST_TIMEOUT)
         except requests.RequestException as exc:
-            return [], [f"Kleinanzeigen request error: {exc}"]
+            return None, [f"Kleinanzeigen request error: {exc}"]
 
         if resp.status_code in (403, 429):
             self._blocked_until = time.monotonic() + _BAN_COOLDOWN_S
             logger.warning("Kleinanzeigen: HTTP %d — pausing this source for %.0fs", resp.status_code, _BAN_COOLDOWN_S)
-            return [], [
+            return None, [
                 f"Kleinanzeigen HTTP {resp.status_code}: it rate-limits by IP — "
                 f"pausing Kleinanzeigen searches for {_BAN_COOLDOWN_S / 60:.0f} min."
             ]
         if not resp.ok:
-            return [], [f"Kleinanzeigen HTTP {resp.status_code}"]
-
+            return None, [f"Kleinanzeigen HTTP {resp.status_code}"]
         # The server sends no charset, which would make requests decode as
-        # ISO-8859-1 ("Große" → "GroÃŸe"); the page is UTF-8.
-        return self.parse_results_page(resp.content.decode("utf-8", errors="replace"), max_results)
+        # ISO-8859-1 ("Große" → "GroÃŸe"); the pages are UTF-8.
+        return resp.content.decode("utf-8", errors="replace"), []
 
     def parse_results_page(self, html: str, max_results: int = 50) -> tuple[list[dict], list[str]]:
         """Parse a search-results page into deals. Separate from :meth:`search`

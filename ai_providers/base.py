@@ -9,14 +9,15 @@ import os
 import re
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any
 
 _PROMPT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts")
 
-with open(os.path.join(_PROMPT_DIR, "system_prompt.txt")) as _f:
+with open(os.path.join(_PROMPT_DIR, "system_prompt.txt"), encoding="utf-8") as _f:
     _SYSTEM_PROMPT = _f.read()
 
-with open(os.path.join(_PROMPT_DIR, "batch_system_prompt.txt")) as _f:
+with open(os.path.join(_PROMPT_DIR, "batch_system_prompt.txt"), encoding="utf-8") as _f:
     _BATCH_SYSTEM_PROMPT = _f.read()
 
 logger = logging.getLogger(__name__)
@@ -552,67 +553,302 @@ def _apply_sports_kinect_override(deal: dict, assessment: dict) -> dict:
     return assessment
 
 
-# ── Bait-and-switch scam detection (deterministic) ────────────────────────
+# ── Listings whose price doesn't buy the bundle they show (deterministic) ──
+#
+# The commonest way a listing looks like a steal and isn't: a bundle title and
+# photo, but the price buys ONE game. Sellers do say so — often only deep in
+# the description ("Stück preis 7euro VB oder komplett paket 120 euro inkl
+# versand"), which is why the search pipeline fetches full Kleinanzeigen
+# descriptions for bundles that look too cheap. The signals:
+#   - per-piece pricing: "Stückpreis", "Einzelpreis", "5 € pro Spiel", "je 3 €"
+#   - prices vary per game: "Spiele ab 2 €", "Preise je nach Spiel", "Preisliste"
+#   - the buyer picks one: "Spiel nach Wahl", "welches Spiel möchtest du"
+#   - sold one by one: "werden einzeln verkauft", "Einzelverkauf"
+#   - many units of one "bundle" listing (the lazy Stückzahl trick, further down)
+# When the text also states what the whole lot costs, that is the bundle's
+# real price (PriceScope.lot_price) and the pipeline re-prices the deal with it.
+#
+# Every text signal is ignored when negated ("nicht einzeln", "kein
+# Stückpreis") or when it is about shipping ("Versand pro Stück 1 €").
 
-# Description-level scam phrases — when the description matches these,
-# it's almost certainly a bait-and-switch even if seller_count is clean.
-_DESC_SCAM_RE = re.compile(
-    r"\b("
-    r"sie\s+wählen|bitte\s+(teilen|mitteilen|nennen|angeben|auswählen)"
-    r"|ein\s+spiel\s+ihrer\s+wahl|ihrer\s+wahl|nach\s+wahl"
-    r"|wunschspiel|nur\s+(ein|1)\s+spiel"
-    r"|bitte\s+im\s+nachrichtenfenster|bitte\s+per\s+nachricht"
-    r"|pro\s+stück|je\s+stück"
-    r"|spiel\s+aussuchen|spiel\s+auswählen"
-    r"|einzeln\s+(verkauf|verkauft|erhältlich|kaufbar)"
-    r"|auswahl\s+(aus|von|treffen)"
-    r")\b",
+# "7euro", "120 €", "5,50€", "€ 15", "15,-", "1.200 €"
+_AMOUNT = r"(?:\d{1,3}(?:\.\d{3})+|\d{1,5})(?:[.,]\d{1,2})?"
+_MONEY = rf"(?:€\s*{_AMOUNT}|{_AMOUNT}\s*(?:€|euros?\b|eur\b|,-))"
+_MONEY_RE = re.compile(rf"€\s*({_AMOUNT})|({_AMOUNT})\s*(?:€|euros?\b|eur\b|,-)", re.IGNORECASE)
+_PIECE = r"(?:st(?:ü|ue)ck|stk\.?|spiel|game|titel|teil|exemplar|disc|artikel)"
+
+_PER_PIECE_RE = re.compile(
+    r"\b(?:st(?:ü|ue)ck|stk)\.?\s*-?\s*preis(?:e)?\b"  # Stückpreis, Stück preis, Stk.-Preis
+    r"|\beinzel\s*-?\s*preis(?:e)?\b"  # Einzelpreis
+    rf"|\b(?:preis\s*)?(?:pro|je|per)\s+{_PIECE}(?!\w)|\bpreis\s*/\s*{_PIECE}(?!\w)"  # pro Stück, Preis/Stück
+    r"|\bpreis\s+(?:gilt\s+|ist\s+|bezieht\s+sich\s+)?(?:nur\s+)?(?:für|auf)\s+(?:ein(?:e[ns]?)?|1|jedes)\s+"
+    r"(?:einzelne[sn]?\s+)?(?:spiel|stück|titel|game)\b"  # Preis gilt für ein Spiel
+    r"|\bprice\s+(?:per|for\s+each|each)\b|\bper\s+(?:piece|item|game)\b|\beach\s+game\b"
+    rf"|{_MONEY}\s*(?:das\s+|/\s*){_PIECE}(?!\w)"  # 5 € das Stück, 5€/Stk
+    rf"|\b(?:je|jeweils|à)\s*{_MONEY}|{_MONEY}\s*jeweils\b",  # je 5 €, à 5€, 5 € jeweils
+    re.IGNORECASE,
+)
+_PRICE_VARIES_RE = re.compile(
+    rf"\bab\s*{_MONEY}"  # Spiele ab 2 €
+    r"|\bpreis(?:e)?\s+(?:je\s+nach|variier\w*|unterschiedlich\w*|siehe|auf\s+anfrage|in\s+der\s+beschreibung"
+    r"|stehen\s+(?:bei|neben|in|auf|unter))"
+    r"|\bpreisliste\b|\bverschiedene\s+preise\b|\bpreise\s+einzeln\b",
+    re.IGNORECASE,
+)
+_BUYER_PICKS_RE = re.compile(
+    r"\b(?:ihrer|deiner|eurer|nach|zur)\s+wahl\b|\bwunsch(?:spiel|titel)\w*"
+    r"|\bspiel\w*\s+(?:bitte\s+)?(?:aus)?(?:suchen|wählen)\b"  # Spiel aussuchen
+    r"|\b(?:sie|du|ihr)\s+(?:können|kannst|könnt|dürfen|darfst)\s+(?:sich\s+|dir\s+|euch\s+)?"
+    r"(?:ein|1|eines|einen)\s+(?:spiel|titel|game)\w*\s+(?:aus)?(?:suchen|wählen)"
+    r"|\b(?:such|wähl)\w*\s+(?:dir|euch|sich)\s+(?:ein|1|eines|einen)\s+(?:spiel|titel|game)"  # such dir ein Spiel aus
+    r"|\bwelche[sn]?\s+(?:spiel|titel|game)\w*\s+(?:(?:du|sie|ihr)\s+(?:möcht|will|wollt|woll|hab|brauch)"
+    r"|(?:möcht|will|wollt|woll|hätt|brauch)\w*\s+(?:du|sie|ihr)\b)"  # welches Spiel möchtest du
+    r"|\bgewünschte[sn]?\s+(?:spiel|titel|game)|\bauswahl\s+treffen\b"
+    r"|\b1\s+(?:spiel|stück|titel)\s+(?:nach\s+wahl|wählen|auswählen|aussuchen)|\b1\s+aus\s+\d+"
+    r"|\bbitte\s+(?:gewünschte\w*\s+)?(?:variante|spiel|titel)?\s*auswählen\b"
+    r"|\byou\s+pick\b|\b(?:choose|pick)\s+(?:1|one|your)\b",
+    re.IGNORECASE,
+)
+# Only in a title: "PS4 Spiele Auswahl", "nur 1 Spiel", "1 aus" — in a
+# description "eine Auswahl an Spielen" / "nur ein Spiel hat Kratzer" are innocent.
+_TITLE_ONLY_PICKS_RE = re.compile(r"\bauswahl\b|\bnur\s+(?:ein|1)\s+spiel\b|\b1\s+aus\b", re.IGNORECASE)
+_SOLD_SINGLY_RE = re.compile(
+    r"\beinzelverk(?:auf|äufe)\b|\beinzeln\s+(?:zu\s+)?(?:verkauf\w*|abzugeben|erhältlich|kaufbar|zu\s+haben)"
+    r"|\bnur\s+einzeln\b|\b(?:spiele|titel)\s+(?:werden\s+|sind\s+)?einzeln\b",
+    re.IGNORECASE,
+)
+# "Einzelverkauf oder komplett", "auch einzeln", "Einzelverkauf möglich" offer
+# both — the listed price may well be the lot's.
+_BOTH_OPTIONS_RE = re.compile(r"\b(?:oder|auch|möglich|komplett\w*|zusammen|gesamt\w*)\b", re.IGNORECASE)
+_NEGATION_RE = re.compile(r"nicht|kein\w*|ohne", re.IGNORECASE)
+_SHIPPING_WORD_RE = re.compile(
+    r"versand|porto|lieferung|verpackung|verschick|päckchen|warensendung|\bdhl\b|\bhermes\b|\bdpd\b|\bgls\b",
+    re.IGNORECASE,
+)
+_SHIPPING_NEXT_WORD_RE = re.compile(r"\s*(?:versand|porto|lieferung)", re.IGNORECASE)
+# A sentence, or a comma-separated part of one (decimal commas are not breaks).
+_CLAUSE_BREAK_RE = re.compile(r"[.!?;\n]\s|\n|(?<!\d),|,(?!\d)")
+
+# What the whole lot costs, when the text says: "komplett paket 120 euro",
+# "Gesamtpreis 120€", "alle 16 Spiele für 120 €", "120 € für alle".
+_LOT_PRICE_RE = re.compile(
+    r"\b(?:komplett\w*|gesamt\w*|pauschal\w*|insgesamt|zusammen|alle(?:s)?|paket\s*-?\s*preis"
+    r"|bundle\s*-?\s*preis|im\s+paket|als\s+(?:paket|set|konvolut))"
+    r"(?:\s+(?:paket|preis|konvolut|set|sammlung|zusammen|\d{1,3}\s+spiele\w*|spiele\w*|für|zu|zum\s+preis\s+von"
+    rf"|nur|abzugeben|verkauf\w*))*\s*[:=]?\s*{_MONEY}"
+    rf"|{_MONEY}\s*(?:für\s+)?(?:alle(?:s)?\b|komplett\b|zusammen\b|(?:das|den|die)\s+(?:ganze|gesamte|komplette)\w*)",
+    re.IGNORECASE,
+)
+_LOT_INCLUDES_SHIPPING_RE = re.compile(
+    r"^\W{0,3}(?:vb\W+)?(?:inkl\w*\.?|incl\w*\.?|mit)\s*(?:versand|porto|vers\b)|^\W{0,3}(?:versandkostenfrei|portofrei)",
+    re.IGNORECASE,
+)
+_MONEY_BEFORE_RE = re.compile(rf"{_MONEY}\s*$", re.IGNORECASE)
+_PER_PIECE_NEXT_RE = re.compile(rf"^\s*(?:pro|je|das|/)\s*{_PIECE}(?!\w)|^\s*jeweils\b", re.IGNORECASE)
+
+# Titles that describe more than one item — per-piece wording on a single
+# controller or game ("Preis pro Stück, 3 vorhanden") is perfectly honest.
+_MULTI_ITEM_TITLE_RE = re.compile(
+    r"\b(?:spiele|spielen|games|videospiele|titel)\b|\b\d{1,3}\s*(?:x\b|stück\b|stk\b)|\bx\s*\d{1,3}\b",
     re.IGNORECASE,
 )
 
-# Title-level scam patterns — these are definitive.
-_TITLE_SCAM_RE = re.compile(
-    r"\b("
-    r"you\s+pick|choose\s+1|auswahl|nur\s+1\s+spiel|1\s+spiel\s+nach\s+wahl"
-    r"|1\s+aus|1\s+stück\s+wählen|bitte\s+auswählen|ihre\s+wahl|nach\s+wahl"
-    r")\b",
+# One game dressed up as a bundle for search: "Battlefield 1 PS4 Spiel
+# Sammlung PS2 PS3 PS5 Konvolut Bundle Top", "Dragon Ball PS4 Spiel aus Sammlung".
+_SINGLE_GAME_TITLE_RE = re.compile(
+    r"\bspiel\s+(?:aus\s+(?:der\s+|meiner\s+|einer\s+)?)?(?:sammlung|konvolut|bundle|paket|lot|collection)\b",
     re.IGNORECASE,
+)
+_SINGLE_GAME_DESC_RE = re.compile(
+    r"\b(?:verkaufe|biete)\s+(?:ich\s+)?(?:hier\s+)?(?:das|dieses|diesen|den|mein|meinen|ein|einen)\s+"
+    r"(?:(?:top|tolle[ns]?|super|seltene[ns]?)\s+)?(?:spiel|game|titel)\b",  # "Biete hier diesen Top Titel an"
+    re.IGNORECASE,
+)
+_MULTI_GAME_DESC_RE = re.compile(
+    r"\b\d{1,3}\s+(?:\w+\s+){0,3}(?:spiele|spielen|games|titel)\b|\bsammlung\s+(?:von|aus|mit)\s+\d", re.IGNORECASE
 )
 
 
-def _detect_bundle_individual_sale_scam(deal: dict) -> str | None:
-    """Check for the 'bundle title + individual-unit sale' scam.
-
-    Returns a warning string, or ``None`` if no scam detected.
-    """
-    title = deal.get("title", "")
-    description = deal.get("description", "")
-    seller_count = deal.get("seller_count", "")
-
-    if not title:
+def _parse_money(text: str) -> float | None:
+    m = _MONEY_RE.search(text or "")
+    if not m:
         return None
+    raw = m.group(1) or m.group(2)
+    if re.fullmatch(r"\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?", raw):
+        raw = raw.replace(".", "")
+    try:
+        value = float(raw.replace(",", "."))
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
-    # Check 1: title-level scam keywords (deterministic — any match = scam).
-    if _BUNDLE_TITLE_KEYWORDS_RE.search(title) and _TITLE_SCAM_RE.search(title):
-        short_title = title[:80] + ("..." if len(title) > 80 else "")
-        return (
-            f"BAIT-AND-SWITCH DETECTED (title keyword): '{short_title}' "
-            f"contains bundle terms AND 'you pick' / 'Auswahl' / 'choose' "
-            f"wording — the listing shows a collection but sells only one game. AVOID."
-        )
 
-    # Check 2: description scam phrases — any match = scam.
-    if description and _BUNDLE_TITLE_KEYWORDS_RE.search(title):
-        desc_match = _DESC_SCAM_RE.search(description)
-        if desc_match:
-            short_title = title[:80] + ("..." if len(title) > 80 else "")
+def _clause_before(text: str, start: int, span: int = 40) -> str:
+    """The part of *text*'s current clause that precedes *start* (at most *span* chars)."""
+    before = text[max(0, start - span) : start]
+    breaks = list(_CLAUSE_BREAK_RE.finditer(before))
+    return before[breaks[-1].end() :] if breaks else before
+
+
+def _is_about_shipping_or_negated(text: str, m: re.Match) -> bool:
+    """ "nicht einzeln", "kein Stückpreis"; "Versand pro Stück", "je 1,50 € Versand"."""
+    words = _clause_before(text, m.start()).split()
+    if any(_NEGATION_RE.fullmatch(w) for w in words[-3:]):
+        return True
+    if "preis" in m.group(0).lower():
+        return False  # "Stückpreis", "Einzelpreis" are never about shipping
+    return bool(_SHIPPING_WORD_RE.search(" ".join(words[-4:])) or _SHIPPING_NEXT_WORD_RE.match(text, m.end()))
+
+
+def _nearby_amount(text: str, m: re.Match) -> float | None:
+    """The per-piece amount stated with a per-piece phrase: in it ("je 5 €"),
+    right before it ("7 € pro Stück") or right after it ("Stückpreis 7euro")."""
+    before = _MONEY_BEFORE_RE.search(_clause_before(text, m.start(), span=15))
+    return (
+        _parse_money(m.group(0))
+        or (_parse_money(before.group(0)) if before else None)
+        or _parse_money(text[m.end() : m.end() + 15].split("\n")[0])
+    )
+
+
+def _find_price_signal(text: str, *, in_title: bool = False) -> tuple[str, str, float | None] | None:
+    """First sign in *text* that the price is not for the whole lot → (kind, evidence, per-piece amount)."""
+    if not text:
+        return None
+    checks = [("per_item", _PER_PIECE_RE), ("price_varies", _PRICE_VARIES_RE), ("buyer_picks", _BUYER_PICKS_RE)]
+    if in_title:
+        checks.append(("buyer_picks", _TITLE_ONLY_PICKS_RE))
+    for kind, pattern in checks:
+        for m in pattern.finditer(text):
+            if _is_about_shipping_or_negated(text, m):
+                continue
+            amount = _nearby_amount(text, m) if kind == "per_item" else None
+            return kind, m.group(0).strip(), amount
+    for m in _SOLD_SINGLY_RE.finditer(text):
+        clause_end = _CLAUSE_BREAK_RE.search(text, m.end())
+        clause = _clause_before(text, m.start(), span=60) + text[m.start() : clause_end.start() if clause_end else None]
+        if _is_about_shipping_or_negated(text, m) or _BOTH_OPTIONS_RE.search(clause):
+            continue
+        return "sold_singly", m.group(0).strip(), None
+    return None
+
+
+def _find_lot_price(text: str) -> tuple[float | None, bool, bool]:
+    """Whole-lot price stated in *text* → (amount, includes shipping, negotiable)."""
+    for m in _LOT_PRICE_RE.finditer(text or ""):
+        after = text[m.end() : m.end() + 30]
+        if _PER_PIECE_NEXT_RE.match(after) or _SHIPPING_WORD_RE.search(_clause_before(text, m.start())):
+            continue  # "alle 20 Spiele 5 € pro Stück", "Versand zusammen 5 €"
+        amount = _parse_money(m.group(0))
+        if amount:
+            is_vb = bool(re.match(r"^\W{0,3}vb\b", after, re.IGNORECASE))
+            return amount, bool(_LOT_INCLUDES_SHIPPING_RE.search(after)), is_vb
+    return None, False, False
+
+
+def looks_like_multi_item(title: str) -> bool:
+    """Does *title* offer more than one item (a bundle, "Spiele", "10x", "5 Stück")?"""
+    return bool(_BUNDLE_TITLE_KEYWORDS_RE.search(title or "") or _MULTI_ITEM_TITLE_RE.search(title or ""))
+
+
+def is_single_game_listing(deal: dict) -> bool:
+    """One game whose title is padded with bundle words for search — "Battlefield
+    1 PS4 Spiel Sammlung PS2 PS3 PS5 Konvolut Bundle" or "… Spiel aus Sammlung" —
+    or whose description says "Ich verkaufe das Spiel …"."""
+    title = deal.get("title") or ""
+    if _MULTI_ITEM_TITLE_RE.search(title):
+        return False
+    description = deal.get("description") or ""
+    if _MULTI_GAME_DESC_RE.search(description):
+        return False
+    if _SINGLE_GAME_TITLE_RE.search(title):
+        return True
+    return bool(_BUNDLE_TITLE_KEYWORDS_RE.search(title) and _SINGLE_GAME_DESC_RE.search(description))
+
+
+def is_offer_placeholder(deal: dict) -> bool:
+    """Kleinanzeigen "1 € VB" / "VB": the amount is a placeholder for "make me an offer"."""
+    return deal.get("shipping_note") == "VB" and (deal.get("price") or 0) <= 1.0
+
+
+@dataclass(frozen=True)
+class PriceScope:
+    """Why a listing's price doesn't buy the whole lot its title shows."""
+
+    kind: str  # "per_item" | "price_varies" | "buyer_picks" | "sold_singly"
+    evidence: str  # the wording found, as the seller wrote it
+    item_price: float | None = None  # per-piece amount, when stated
+    lot_price: float | None = None  # whole-lot price, when stated
+    lot_includes_shipping: bool = False
+    lot_is_negotiable: bool = False
+
+    def explain(self, deal: dict) -> str:
+        price = float(deal.get("price") or 0)
+        quoted = f"'{self.evidence}'"
+        if self.lot_price is not None:
+            shipping = " incl. shipping" if self.lot_includes_shipping else ""
             return (
-                f"BAIT-AND-SWITCH DETECTED (description): Title advertises a bundle "
-                f"('{short_title}') but description contains '{desc_match.group(0)}' which "
-                f"indicates buyer selects/chooses individual items. AVOID."
+                f"Listed €{price:.2f} is the price per game ({quoted}); "
+                f"the whole lot costs €{self.lot_price:.2f}{shipping} according to the description."
             )
+        # "Sammlung von 12 verschiedenen PlayStation 3 Spielen … Pro Spiel 10€"
+        count = bundle_game_count(deal.get("title") or "") or bundle_game_count(
+            (deal.get("description") or "")[:300], first_only=True
+        )
+        unit = self.item_price or price
+        total = f" — all {count} would cost about €{count * unit:.0f}" if count and unit else ""
+        return {
+            "per_item": f"Price is per game, not for the bundle ({quoted}){total}.",
+            "price_varies": f"Price varies per game ({quoted}) — €{price:.2f} is not the price of the whole lot.",
+            "buyer_picks": f"You get ONE game of your choice ({quoted}), not the pictured bundle.",
+            "sold_singly": f"The games are sold individually ({quoted}) — the price is for one game.",
+        }[self.kind]
 
-    # Check 3: seller_count > 1 + bundle title = canonical scam.
+
+_GAME_COUNT_IN_TITLE_RE = re.compile(
+    r"\b(\d{1,3})\s*(?:x\s*)?(?:spiele|spielen|games|titel|stück|stk)\b", re.IGNORECASE
+)
+
+
+def bundle_game_count(title: str, *, first_only: bool = False) -> int:
+    """Games a title claims in total ("10 PS3 Spiele / 6 PS4 Spiele" → 16); 0 if none stated.
+    Platform names are removed first so "Xbox 360 Spiele" isn't read as 360 games.
+    *first_only* reads just the first count — for prose, which repeats itself."""
+    text = title
+    for pattern, _ in _PLATFORM_MAP:
+        text = pattern.sub(" ", text)
+    counts = [int(n) for n in re.findall(r"\b(\d{1,3})\s+(?:[a-zäöü]+\s+){0,3}?spielen?\b", text, re.IGNORECASE)]
+    if not counts:
+        counts = [int(n) for n in _GAME_COUNT_IN_TITLE_RE.findall(text)]
+    counts = [n for n in counts if 2 <= n <= 500][: 1 if first_only else None]
+    return sum(counts)
+
+
+def analyze_price_scope(deal: dict) -> PriceScope | None:
+    """Does the listed price buy the whole lot the title shows? ``None`` if it
+    does (or nothing says otherwise); else why not, with the whole-lot price
+    when the text states one."""
+    title = deal.get("title") or ""
+    if not looks_like_multi_item(title):
+        return None
+    description = deal.get("description") or ""
+    signal = _find_price_signal(title, in_title=True) or _find_price_signal(description)
+    if signal is None:
+        return None
+    kind, evidence, item_price = signal
+    lot_price, includes_shipping, lot_vb = _find_lot_price(f"{title}\n{description}")
+    listed = float(deal.get("price") or 0)
+    if listed and lot_price and listed >= 0.5 * lot_price:
+        return None  # the listed price already is (roughly) the whole lot's
+    if listed and item_price and not lot_price and listed > 1.5 * item_price:
+        return None  # "Einzelpreis 5 €" on a 60 € listing: 60 € is the lot price
+    return PriceScope(kind, evidence, item_price, lot_price, includes_shipping, lot_vb)
+
+
+# Bait-and-switch: a bundle title sold with a plain quantity selector.
+def _multi_unit_warning(deal: dict) -> str | None:
+    title = deal.get("title") or ""
+    seller_count = deal.get("seller_count") or ""
     if not seller_count or not _BUNDLE_TITLE_KEYWORDS_RE.search(title):
         return None
     numbers = [int(n) for n in re.findall(r"\d+", seller_count)]
@@ -631,14 +867,39 @@ def _detect_bundle_individual_sale_scam(deal: dict) -> str | None:
     )
 
 
+def _misleading_listing(deal: dict) -> tuple[str, str] | None:
+    """(headline, warning) when the listing isn't the bundle deal it appears to be."""
+    if not deal.get("title"):
+        return None
+    scope = analyze_price_scope(deal)
+    if scope is not None:
+        return "NOT A BUNDLE PRICE — AVOID", f"{scope.explain(deal)} AVOID."
+    warning = _multi_unit_warning(deal)
+    if warning:
+        return "SCAM RISK — AVOID", warning
+    return None
+
+
+def _detect_bundle_individual_sale_scam(deal: dict) -> str | None:
+    """Warning text when the price doesn't buy the bundle the listing shows, else ``None``.
+
+    Covers per-piece / pick-one / sold-singly wording (see analyze_price_scope)
+    and the multi-unit bait-and-switch. A listing the search pipeline already
+    re-priced with its stated whole-lot price is not flagged: its price is real.
+    """
+    found = _misleading_listing(deal)
+    return found[1] if found else None
+
+
 def _apply_scam_override(deal: dict, assessment: dict) -> dict:
     """Apply the deterministic scam override to *assessment* if warranted.
 
     Always returns *assessment* (mutated in-place if overridden, then returned).
     """
-    warning = _detect_bundle_individual_sale_scam(deal)
-    if warning is None:
+    found = _misleading_listing(deal)
+    if found is None:
         return assessment
+    headline, warning = found
     assessment["ai_potential_scam"] = True
     assessment["ai_deal_rating"] = "Avoid"
     existing_warning = assessment.get("ai_scam_warning", "")
@@ -647,17 +908,11 @@ def _apply_scam_override(deal: dict, assessment: dict) -> dict:
     else:
         assessment["ai_scam_warning"] = warning
     existing_summary = assessment.get("ai_verdict_summary", "")
-    scam_prefix = (
-        "⚠️ **SCAM RISK — AVOID**: This listing shows the classic 'bundle "
-        "title + multiple units available' bait-and-switch pattern. The seller "
-        "almost certainly sends only one game despite the bundle appearance. "
-        "Do NOT purchase unless the seller explicitly confirms you receive the "
-        "full collection."
-    )
+    prefix = f"⚠️ **{headline}**: {warning}"
     if existing_summary:
-        assessment["ai_verdict_summary"] = f"{scam_prefix}\n\n{existing_summary}"
+        assessment["ai_verdict_summary"] = f"{prefix}\n\n{existing_summary}"
     else:
-        assessment["ai_verdict_summary"] = scam_prefix
+        assessment["ai_verdict_summary"] = prefix
     return assessment
 
 

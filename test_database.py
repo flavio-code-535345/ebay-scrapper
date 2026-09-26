@@ -111,6 +111,12 @@ class TestSaveSearch:
         assert fetched[0]["title"] == "Game X"
         assert fetched[0]["price"] == 5.0
 
+    def test_price_note_is_kept(self):
+        """History shows the same "listed price was per game" note the live search did."""
+        note = "Listed €7.00 is the price per game ('Stück preis'); the whole lot costs €120.00."
+        sid = database.save_search("q", [{"title": "Bundle", "price": 120.0, "url": "http://x/1", "price_note": note}])
+        assert database.get_deals_by_search(sid)[0]["price_note"] == note
+
     def test_list_fields_round_trip_as_lists(self):
         """List-typed fields must always come back as lists after a
         save/load round trip — never a raw string, regardless of what shape

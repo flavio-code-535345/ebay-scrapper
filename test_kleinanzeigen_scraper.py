@@ -177,6 +177,61 @@ class TestSearchRequest:
         assert "boom" in errors[0]
 
 
+_AD_URL = "https://www.kleinanzeigen.de/s-anzeige/10-playstation-3-spiele-sammlung-6-ps-4-spiele/3522392115-227-26832"
+_AD_PAGE = (Path(__file__).parent / "fixtures" / "kleinanzeigen_ad.html").read_text(encoding="utf-8")
+_AD_PAGE_NEW_LAYOUT = (Path(__file__).parent / "fixtures" / "kleinanzeigen_ad_new_layout.html").read_text(
+    encoding="utf-8"
+)
+
+
+class TestAdDescription:
+    """Search results cut descriptions at ~100 characters; the ad page has the rest."""
+
+    def test_both_page_layouts(self):
+        classic = ka.parse_ad_description(_AD_PAGE)
+        assert classic.startswith("Ich biete hier eine Sammlung von 10 gebrauchten PlayStation 3 Spielen")
+        assert "\n\nStück preis 7euro VB oder komplett paket 120 euro inkl versand\n\n" in classic
+        assert classic.endswith("schreib mir gerne eine Nachricht.")
+        newer = ka.parse_ad_description(_AD_PAGE_NEW_LAYOUT)
+        assert newer.startswith("Ich verkaufe das Spiel Battlefield 1 für die PlayStation 4.")
+        assert "\n- Plattform: PlayStation 4\n" in newer
+        assert ka.parse_ad_description("<html><body>no ad</body></html>") is None
+
+    def test_fetched_once_then_cached(self, scraper):
+        page = MagicMock(ok=True, status_code=200, content=_AD_PAGE.encode("utf-8"))
+        with patch.object(scraper._session, "get", return_value=page) as get, patch.object(scraper, "_rate_limit"):
+            assert scraper.fetch_description(_AD_URL, cached_only=True) == (None, [])  # miss: no request
+            text, errors = scraper.fetch_description(_AD_URL)
+            again, _ = scraper.fetch_description(_AD_URL, cached_only=True)
+        assert get.call_count == 1
+        assert errors == []
+        assert "komplett paket 120 euro" in text
+        assert again == text
+
+    def test_only_kleinanzeigen_ad_urls(self, scraper):
+        with patch.object(scraper._session, "get") as get:
+            text, errors = scraper.fetch_description("https://evil.example/s-anzeige/x/1-2-3")
+        assert text is None
+        assert "Not a Kleinanzeigen ad URL" in errors[0]
+        get.assert_not_called()
+
+    def test_ip_ban_pauses_searches_too(self, scraper):
+        blocked = MagicMock(ok=False, status_code=403)
+        with patch.object(scraper._session, "get", return_value=blocked) as get, patch.object(scraper, "_rate_limit"):
+            _, first = scraper.fetch_description(_AD_URL)
+            _, second = scraper.search("xbox")
+        assert get.call_count == 1
+        assert "pausing" in first[0]
+        assert "paused" in second[0]
+
+    def test_page_without_description_is_reported(self, scraper):
+        page = MagicMock(ok=True, status_code=200, content=b"<html><body>new markup</body></html>")
+        with patch.object(scraper._session, "get", return_value=page), patch.object(scraper, "_rate_limit"):
+            text, errors = scraper.fetch_description(_AD_URL)
+        assert text is None
+        assert "markup has likely changed" in errors[0]
+
+
 class TestRateLimit:
     def test_concurrent_callers_are_spaced_apart(self, scraper, monkeypatch):
         monkeypatch.setattr(ka, "_REQUEST_SPACING_S", 0.3)

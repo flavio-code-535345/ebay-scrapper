@@ -7,11 +7,18 @@ Stages (each a small pure function, tested on its own):
   dedupe      → one entry per listing (stable listing ID across URL shapes,
                 then normalized title+price for cross-posted listings)
   apply_filters → skipped listings, non-German items, auctions that don't end
-                within two days, sports-only bundles, listings for a
+                within two days, single games posing as bundles (bundle
+                searches only), sports-only bundles, listings for a
                 different platform than the one searched
+  check_prices → a price the listing text says is per game ("Stückpreis
+                7 €") is marked as such, or replaced by the whole-lot price
+                the text states ("komplett Paket 120 €")
   select      → score (query match, freshness, price per game) and fill the
                 AI slots so every source that has relevant results is heard,
                 instead of whichever source was merged first crowding it out
+  complete_descriptions → fetch the full text of the few selected
+                Kleinanzeigen bundles that look too cheap to be true (search
+                results cut descriptions at ~100 characters) and re-check them
 """
 
 from __future__ import annotations
@@ -31,6 +38,11 @@ from ai_providers.base import (
     _PLATFORM_MAP,
     _SPORTS_KINECT_KEYWORDS_RE,
     _detect_sports_kinect_deal,
+    analyze_price_scope,
+    bundle_game_count,
+    is_offer_placeholder,
+    is_single_game_listing,
+    looks_like_multi_item,
 )
 from models import canonical_listing_id
 from search.query import SearchPlan, platforms_named
@@ -38,6 +50,7 @@ from search.query import SearchPlan, platforms_named
 logger = logging.getLogger(__name__)
 
 SearchFn = Callable[..., tuple[list[dict], list[str]]]
+DescribeFn = Callable[..., tuple[str | None, list[str]]]  # (url, cached_only=False) → (text, errors)
 
 # Auctions are only worth showing when bidding closes soon: the current bid of
 # an auction with a week to go says little about what it will sell for, and
@@ -238,7 +251,14 @@ def apply_filters(
     deals: list[dict], plan: SearchPlan, skipped: set[str], now: datetime | None = None
 ) -> tuple[list[dict], dict[str, int]]:
     now = now or datetime.now(UTC)
-    removed = {"skipped": 0, "not_germany": 0, "auction_ends_late": 0, "sports_only": 0, "other_platform": 0}
+    removed = {
+        "skipped": 0,
+        "not_germany": 0,
+        "auction_ends_late": 0,
+        "not_a_bundle": 0,
+        "sports_only": 0,
+        "other_platform": 0,
+    }
     kept = []
     for deal in deals:
         if deal.get("url") in skipped or listing_key(deal) in skipped:
@@ -247,6 +267,8 @@ def apply_filters(
             removed["not_germany"] += 1
         elif auction_ends_too_late(deal, now):
             removed["auction_ends_late"] += 1
+        elif plan.bundle_intent and is_single_game_listing(deal):
+            removed["not_a_bundle"] += 1
         elif is_sports_only(deal):
             removed["sports_only"] += 1
         elif is_other_platform(deal, plan.platform):
@@ -258,26 +280,129 @@ def apply_filters(
 
 # ── Ranking and selection ────────────────────────────────────────────────────
 
-_GAME_COUNT_RE = re.compile(
-    r"(?<![\w.,])(\d{1,3})\s*(?:x\s*)?(?:spiele|games|titel|stück|stk\.?|videospiele)\b", re.IGNORECASE
-)
 _FRESHNESS_HALF_LIFE_DAYS = 3.0
 
 
 def game_count(title: str) -> int | None:
-    """Number of games a bundle title claims ("26 Spiele", "ca. 94 ... Spiele").
+    """Number of games a bundle title claims ("26 Spiele", "10 PS3 Spiele / 6 PS4
+    Spiele" → 16); platform numbers ("Xbox 360", "PS4") are not counts."""
+    return bundle_game_count(title) or None
 
-    Platform names are removed first — otherwise "Xbox 360 Spiele" reads as
-    360 games and "PS4 Spiele" as four.
+
+# ── Price checks ─────────────────────────────────────────────────────────────
+
+
+def check_prices(deals: list[dict]) -> int:
+    """Mark prices that don't buy the whole lot; returns how many were marked.
+
+    - "1 € VB" on Kleinanzeigen is a make-an-offer placeholder, not a price.
+    - A per-game price ("Stück preis 7euro") is replaced by the whole-lot
+      price when the text states one ("oder komplett paket 120 euro inkl
+      versand") — that is what the bundle costs — and the listed amount is
+      kept in ``listed_price``.
+    - Otherwise the price stays but is marked ``per_item``; the assessor
+      rates such listings "Avoid" (analyze_price_scope sees the same text).
+
+    Idempotent: deals that already carry a ``price_basis`` are skipped.
     """
-    text = title or ""
-    for pattern, _ in _PLATFORM_MAP:
-        text = pattern.sub(" ", text)
-    m = _GAME_COUNT_RE.search(text)
-    if not m:
-        return None
-    n = int(m.group(1))
-    return n if 2 <= n <= 500 else None
+    marked = 0
+    for deal in deals:
+        if deal.get("price_basis"):
+            continue
+        if is_offer_placeholder(deal):
+            deal["price_basis"] = "offer"
+            deal["price_note"] = (
+                'Make-an-offer listing ("VB"): the amount shown is a placeholder, not the asking price.'
+            )
+            marked += 1
+            continue
+        scope = analyze_price_scope(deal)
+        if scope is None:
+            continue
+        deal["price_note"] = scope.explain(deal)
+        if scope.lot_price is not None:
+            deal["listed_price"] = deal.get("price")
+            deal["price"] = scope.lot_price
+            deal["shipping_note"] = "VB" if scope.lot_is_negotiable else ""
+            if scope.lot_includes_shipping:
+                deal["shipping"], deal["shipping_cost"] = "inkl. Versand", 0.0
+            deal["price_basis"] = "lot_from_text"
+        else:
+            deal["price_basis"] = "per_item"
+        marked += 1
+    return marked
+
+
+# ── Full descriptions for suspiciously cheap bundles ─────────────────────────
+
+# Each full description is one more request to a site that IP-bans at about
+# six a minute, so only the most suspicious few are fetched per search; the
+# scraper caches them, so repeated searches cost nothing.
+_MAX_DESCRIPTION_FETCHES = 2
+_DESCRIPTION_BUDGET_MAX_S = 12.0
+_TOO_CHEAP_PER_GAME_EUR = 3.0
+_TOO_CHEAP_BUNDLE_EUR = 15.0
+
+
+def _is_truncated(deal: dict) -> bool:
+    return deal.get("source") == "kleinanzeigen" and (deal.get("description") or "").rstrip().endswith("...")
+
+
+def _price_per_game(deal: dict) -> float:
+    total = (deal.get("price") or 0) + (deal.get("shipping_cost") or 0)
+    return total / (game_count(deal.get("title") or "") or 1)
+
+
+def needs_full_description(deal: dict) -> bool:
+    """A Kleinanzeigen bundle, cut off in the search results, cheap enough that
+    the listed price is likely per game — the ones the AI would call a steal."""
+    if deal.get("price_basis") or not _is_truncated(deal) or not (deal.get("price") or 0) > 0:
+        return False
+    title = deal.get("title") or ""
+    if not looks_like_multi_item(title):
+        return False
+    if game_count(title):
+        return _price_per_game(deal) < _TOO_CHEAP_PER_GAME_EUR
+    return (deal.get("price") or 0) <= _TOO_CHEAP_BUNDLE_EUR
+
+
+def complete_descriptions(
+    deals: list[dict], plan: SearchPlan, describe: DescribeFn, budget_s: float
+) -> tuple[list[dict], list[str]]:
+    """Swap in full descriptions (free when cached; fetched for at most
+    ``_MAX_DESCRIPTION_FETCHES`` suspicious bundles), then re-check each updated
+    deal: its price, and — on a bundle search — whether it is a bundle at all.
+    Returns the deals to keep and any fetch errors."""
+    updated: list[dict] = []
+    for deal in (d for d in deals if _is_truncated(d)):
+        text, _ = describe(deal["url"], cached_only=True)
+        if text:
+            deal["description"] = text
+            updated.append(deal)
+
+    suspicious = sorted((d for d in deals if needs_full_description(d)), key=_price_per_game)
+    futures = [(deal, _POOL.submit(describe, deal["url"])) for deal in suspicious[:_MAX_DESCRIPTION_FETCHES]]
+    errors: list[str] = []
+    if futures:
+        done, _ = concurrent.futures.wait([f for _, f in futures], timeout=max(0.0, budget_s))
+        for deal, fut in futures:
+            if fut not in done:
+                continue  # still running: it lands in the scraper's cache for the next search
+            try:
+                text, fetch_errors = fut.result()
+            except Exception as exc:
+                errors.append(f"Kleinanzeigen description fetch failed: {exc}")
+                continue
+            errors.extend(fetch_errors)
+            if text:
+                deal["description"] = text
+                updated.append(deal)
+
+    check_prices(updated)
+    dropped = {id(d) for d in updated if plan.bundle_intent and is_single_game_listing(d)}
+    if updated:
+        logger.info("Full descriptions: %d updated, %d turned out to be single games", len(updated), len(dropped))
+    return [d for d in deals if id(d) not in dropped], errors
 
 
 def _freshness(deal: dict, now: datetime) -> float:
@@ -306,7 +431,10 @@ def _relevance(deal: dict, plan: SearchPlan) -> float:
 
 def _value(deal: dict) -> float:
     price = deal.get("price") or 0
-    count = game_count(deal.get("title") or "")
+    if deal.get("price_basis") == "offer":
+        return 0.3  # no real asking price
+    # A per-game price is the price of one game, whatever the title's count.
+    count = 1 if deal.get("price_basis") == "per_item" else game_count(deal.get("title") or "")
     if not price or not count:
         return 0.3
     per_game = (price + (deal.get("shipping_cost") or 0)) / count
@@ -358,7 +486,9 @@ def run_search(
     skipped: set[str],
     budget_s: float,
     limit: int = 30,
+    kleinanzeigen_describe: DescribeFn | None = None,
 ) -> SearchOutcome:
+    t0 = time.monotonic()
     ebay_queries = plan.ebay_api if ebay_is_api else plan.ebay_web
     jobs = [SourceJob("ebay", ebay_search, q, 200 if ebay_is_api else 120) for q in ebay_queries]
     if auction_search:
@@ -372,14 +502,22 @@ def run_search(
     results, reports = fetch_all(jobs, budget_s)
     merged = dedupe(results)
     filtered, removed = apply_filters(merged, plan, skipped)
+    repriced = check_prices(filtered)
     selected = select(filtered, plan, limit)
+    if kleinanzeigen_describe:
+        budget_left = min(_DESCRIPTION_BUDGET_MAX_S, budget_s - (time.monotonic() - t0))
+        selected, describe_errors = complete_descriptions(selected, plan, kleinanzeigen_describe, budget_left)
+        report = next((r for r in reports if r.source == "kleinanzeigen"), None)
+        if report is not None:
+            report.errors.extend(describe_errors)
     logger.info(
-        "Search %r: %d requests, %d unique, %d after filters %s, %d selected",
+        "Search %r: %d requests, %d unique, %d after filters %s, %d price notes, %d selected",
         plan.label,
         len(jobs),
         len(merged),
         len(filtered),
         removed,
+        repriced,
         len(selected),
     )
     errors = [e for r in reports for e in r.errors]

@@ -60,14 +60,24 @@ the Docker multi-arch build/push step only runs on non-PR events (i.e. after mer
 4. Filters: previously-skipped listings (by URL *or* listing ID) → Germany-only location → **auctions that
    don't end within 2 days** (`AUCTION_MAX_TIME_LEFT`; an auction with no known end time is dropped too — each
    engine's `search_auctions` already asks only for auctions ending by then, this re-checks every auction
-   whichever leg it came from) → sports/Kinect-only
+   whichever leg it came from) → on bundle searches, single games padded with bundle words ("Battlefield 1 PS4
+   Spiel Sammlung PS2 PS3 Konvolut Bundle", `is_single_game_listing`) → sports/Kinect-only
    titles (mixed bundles with ≥3 other meaningful words are kept for Gemini to judge) → **platform guard**
    (a title naming only a different platform than the one searched is dropped; titles naming no platform, or
-   the generic "Xbox"/"PlayStation", are kept). Then **ranked, source-diverse selection** of the 30 deals that
+   the generic "Xbox"/"PlayStation", are kept). **Price checks** (`check_prices`, using
+   `ai_providers.base.analyze_price_scope`) then read what the listing text says about its price: a per-game price
+   ("Stück preis 7euro", "5 € pro Spiel", "je 3 €", "Spiele ab 2 €", pick-one or sold-singly wording — negations and
+   shipping phrases like "Versand pro Stück" ignored) is replaced by the whole-lot price the text states ("oder
+   komplett paket 120 euro inkl versand" → `price` 120, `listed_price` 7, `price_note`), or else marked
+   `price_basis="per_item"` (the assessor rates it "Avoid"); a Kleinanzeigen "1 € VB" is marked as a make-an-offer
+   placeholder. Then **ranked, source-diverse selection** of the 30 deals that
    get AI budget: score = query match + freshness + price per game (from counts like "26 Spiele"), and each
    source bucket (eBay Buy-It-Now, eBay auctions, Kleinanzeigen) first gets an equal share of its own best
    listings — so one prolific source can't crowd the others out. The response's `sources` array reports each
-   source's queries, count, errors and time, so a dead source is visible instead of silent.
+   source's queries, count, errors and time, so a dead source is visible instead of silent. Finally
+   `complete_descriptions` fetches the full text of at most two selected Kleinanzeigen bundles that look too cheap
+   to be true — search results cut descriptions at ~100 characters, which is exactly where per-game prices hide —
+   and re-checks them (cached per ad for an hour, so repeated searches cost no requests).
 5. Send the surviving deals to Gemini in **one batched request** (`assessor.assess_deals_batch`) rather
    than per-deal calls, to conserve API quota — passed a `deadline` (request-start + `_SEARCH_DEADLINE_S`,
    env `SEARCH_DEADLINE_SECONDS`, default 75s) so a slow search phase leaves correspondingly less time for
@@ -101,7 +111,8 @@ exactly once on its cookie-keeping session; if it's still refused, it says so an
 which is the reliable path. `KleinanzeigenScraper` parses the structured `resultAds[]` data each results page embeds
 (an Astro island), with the `article[data-adid]` cards as fallback; it searches the Videospiele category
 (`c227`), decodes UTF-8 explicitly (the server sends no charset), and pauses itself for 10 minutes after an
-IP-ban 403. Parser tests run against **real captured pages** in `fixtures/` — hand-written HTML is what let
+IP-ban 403. `fetch_description` reads an ad page's `#viewad-description-text` (both page layouts) through the same
+rate limiter and ban pause. Parser tests run against **real captured pages** in `fixtures/` — hand-written HTML is what let
 both scrapers break silently before; recapture a fixture when a site's markup changes.
 
 **AI assessment layer (`ai_providers/`)** — `create_assessor()` ([ai_providers/__init__.py](ai_providers/__init__.py))
@@ -124,8 +135,11 @@ nothing network-bound is ever unbounded by the caller's `deadline`:
 - **Phase C — the API call** (`_assess_batch_with_retry`): a real `future.result(timeout=...)` bound to
   `min(_GEMINI_REQUEST_TIMEOUT, deadline - now)`.
 - **Deterministic overrides always win over the AI's own rating**, applied by `_finalize_assessment`
-  in this order: garbage/trash keywords → sports/Kinect keywords → bait-and-switch scam detection
-  (`_apply_garbage_overrides` → `_apply_sports_kinect_override` → `_apply_scam_override`). Each can force
+  in this order: garbage/trash keywords → sports/Kinect keywords → "the price doesn't buy the bundle"
+  (`_apply_garbage_overrides` → `_apply_sports_kinect_override` → `_apply_scam_override`; the last covers
+  per-game / pick-one / sold-singly wording via `analyze_price_scope` and the multi-unit "Stückzahl" trick).
+  A listing the pipeline re-priced with its stated whole-lot price is not flagged — the AI judges that price, told
+  so by the `Price note` line and the prompts' PRICE NOTES section. Each can force
   the rating to `"Garbage"` or `"Avoid"` regardless of what Gemini returned. The same checks also run
   *before* calling the AI at all via `_try_deterministic_assessment` (one shared implementation used by
   both the single-deal and batch paths), to skip the API call entirely for obvious cases.
