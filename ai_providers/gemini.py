@@ -246,6 +246,14 @@ class GeminiAssessor(BaseAssessor):
             header,
             f"Title: {title}",
             f"Price: €{price}",
+        ]
+        # Set by the search pipeline when the listing text says the listed
+        # amount doesn't buy the whole lot (per-game price, "1 € VB", ...).
+        if deal.get("listed_price") is not None:
+            lines.append(f"Listed price (per game): €{deal['listed_price']}")
+        if deal.get("price_note"):
+            lines.append(f"Price note: {deal['price_note']}")
+        lines += [
             f"Shipping: {shipping}",
             f"Condition: {condition}",
             f"Seller rating: {seller_rating}%",

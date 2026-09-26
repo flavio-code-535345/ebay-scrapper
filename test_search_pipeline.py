@@ -2,11 +2,15 @@
 
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
+from kleinanzeigen_scraper import parse_ad_description
 from search.pipeline import (
     AUCTION_MAX_TIME_LEFT,
     SourceJob,
     apply_filters,
+    check_prices,
+    complete_descriptions,
     dedupe,
     fetch_all,
     game_count,
@@ -18,6 +22,15 @@ from search.query import plan_search
 
 _NOW = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
 _XBOX_PLAN = plan_search(["Xbox 360 Spiele Sammlung"])
+_PS_PLAN = plan_search(["PS3 Spiele Sammlung"])
+
+# A real Kleinanzeigen ad: 16 games listed at "7 € VB" — per game. Its search
+# result carried only the first ~100 characters of this description.
+_EXAMPLE_TITLE = "10 PlayStation 3 Spiele Sammlung / 6 PS 4 spiele"
+_EXAMPLE_DESCRIPTION = parse_ad_description(
+    (Path(__file__).parent / "fixtures" / "kleinanzeigen_ad.html").read_text(encoding="utf-8")
+)
+_EXAMPLE_PREVIEW = _EXAMPLE_DESCRIPTION[:97] + "..."
 
 
 def _deal(title="Xbox 360 Spiele Sammlung", url="https://www.ebay.de/itm/100000001", **extra):
@@ -219,6 +232,141 @@ class TestAuctionLeg:
 
     def test_cutoff_is_two_days(self):
         assert timedelta(days=2) == AUCTION_MAX_TIME_LEFT
+
+
+def _ka(n, price, title=_EXAMPLE_TITLE, description=_EXAMPLE_PREVIEW, **extra):
+    return {
+        "title": title,
+        "url": f"https://www.kleinanzeigen.de/s-anzeige/x/{n}-227-1",
+        "price": price,
+        "source": "kleinanzeigen",
+        "description": description,
+        "shipping_cost": None,
+        **extra,
+    }
+
+
+class TestCheckPrices:
+    def test_per_game_price_replaced_by_the_whole_lot_price_the_text_states(self):
+        deal = _ka(1, 7.0, description=_EXAMPLE_DESCRIPTION, shipping_note="VB")
+        assert check_prices([deal]) == 1
+        assert (deal["price"], deal["listed_price"], deal["price_basis"]) == (120.0, 7.0, "lot_from_text")
+        assert (deal["shipping"], deal["shipping_cost"]) == ("inkl. Versand", 0.0)
+        assert deal["shipping_note"] == ""  # the "VB" belonged to the 7 € piece price
+        assert deal["price_note"].startswith("Listed €7.00 is the price per game ('Stück preis')")
+        assert check_prices([deal]) == 0  # idempotent
+        assert deal["price"] == 120.0
+
+    def test_per_game_price_without_a_lot_price(self):
+        deal = _deal(title="Xbox 360 Spiele Sammlung 20 Spiele", description="Stückpreis 3 €", price=3.0)
+        check_prices([deal])
+        assert (deal["price"], deal["price_basis"]) == (3.0, "per_item")
+        assert deal["price_note"] == (
+            "Price is per game, not for the bundle ('Stückpreis') — all 20 would cost about €60."
+        )
+
+    def test_make_an_offer_placeholder(self):
+        deal = _ka(1, 1.0, description="Sammlung", shipping_note="VB")
+        check_prices([deal])
+        assert deal["price_basis"] == "offer"
+        assert "placeholder" in deal["price_note"]
+
+    def test_per_game_listing_no_longer_outranks_a_real_bundle(self):
+        """3 € "for 20 games" looked like 0.15 €/game; it is 3 € per game."""
+        title = "Xbox 360 Spiele Sammlung 20 Spiele"
+        per_game = _deal(url="https://x/per-game", title=title, description="Stückpreis 3 €", price=3.0)
+        real = _deal(url="https://x/real", title=title, price=40.0)
+        assert select([per_game, real], _XBOX_PLAN, limit=2, now=_NOW)[0] is per_game
+        check_prices([per_game, real])
+        assert select([per_game, real], _XBOX_PLAN, limit=2, now=_NOW)[0] is real
+
+
+class TestNotABundle:
+    def test_single_game_dropped_from_bundle_searches_only(self):
+        padded = _deal(title="Battlefield 1 PS4 Spiel Sammlung PS2 PS3 PS5 Konvolut Bundle Top")
+        kept, removed = apply_filters([padded], plan_search(["PS4 Sammlung"]), set(), now=_NOW)
+        assert kept == []
+        assert removed["not_a_bundle"] == 1
+        kept, _ = apply_filters([padded], plan_search(["Battlefield 1 PS4"]), set(), now=_NOW)
+        assert kept == [padded]
+
+
+class _Describe:
+    """Stands in for KleinanzeigenScraper.fetch_description."""
+
+    def __init__(self, texts=None, cached=None, errors=(), delay=0.0):
+        self.texts, self.cached, self.errors, self.delay = texts or {}, cached or {}, list(errors), delay
+        self.fetched = []
+
+    def __call__(self, url, cached_only=False):
+        if cached_only:
+            return self.cached.get(url), []
+        self.fetched.append(url)
+        time.sleep(self.delay)
+        return self.texts.get(url), self.errors
+
+
+class TestCompleteDescriptions:
+    def test_only_the_most_suspicious_truncated_bundles_are_fetched(self):
+        deals = [
+            _ka(1, 7.0),  # 16 games for 7 € — 0.44 €/game
+            _ka(2, 30.0),  # 1.88 €/game
+            _ka(3, 16.0),  # 1.00 €/game
+            _ka(4, 120.0),  # 7.50 €/game: plausible
+            _ka(5, 7.0, description="Kurze Beschreibung."),  # complete already
+            _deal(price=5.0, title="Xbox 360 Spiele Sammlung 20 Spiele", description="..."),  # not Kleinanzeigen
+        ]
+        describe = _Describe()
+        complete_descriptions(deals, _PS_PLAN, describe, budget_s=2)
+        assert describe.fetched == [deals[0]["url"], deals[2]["url"]]  # cheapest per game first, at most two
+
+    def test_full_text_reprices_the_real_listing(self):
+        deal = _ka(1, 7.0, shipping_note="VB")
+        describe = _Describe(texts={deal["url"]: _EXAMPLE_DESCRIPTION})
+        (kept,), errors = complete_descriptions([deal], _PS_PLAN, describe, budget_s=2)
+        assert errors == []
+        assert kept["description"] == _EXAMPLE_DESCRIPTION
+        assert (kept["price"], kept["listed_price"]) == (120.0, 7.0)
+
+    def test_cached_text_is_used_for_any_truncated_deal_without_a_request(self):
+        deal = _ka(4, 120.0)  # not suspicious — never fetched
+        describe = _Describe(cached={deal["url"]: _EXAMPLE_DESCRIPTION})
+        complete_descriptions([deal], _PS_PLAN, describe, budget_s=2)
+        assert describe.fetched == []
+        assert deal["description"] == _EXAMPLE_DESCRIPTION
+
+    def test_single_game_revealed_by_the_full_text_is_dropped(self):
+        deal = _ka(1, 5.0, title="PS4 Konvolut", description="Ich verkaufe das...")
+        describe = _Describe(texts={deal["url"]: "Ich verkaufe das Spiel Battlefield 1 für die PlayStation 4."})
+        kept, _ = complete_descriptions([deal], _PS_PLAN, describe, budget_s=2)
+        assert kept == []
+
+    def test_fetch_errors_are_returned(self):
+        describe = _Describe(errors=["Kleinanzeigen HTTP 403"])
+        _, errors = complete_descriptions([_ka(1, 7.0)], _PS_PLAN, describe, budget_s=2)
+        assert errors == ["Kleinanzeigen HTTP 403"]
+
+    def test_slow_fetch_does_not_hold_the_search(self):
+        deal = _ka(1, 7.0)
+        describe = _Describe(texts={deal["url"]: _EXAMPLE_DESCRIPTION}, delay=2.0)
+        t0 = time.monotonic()
+        (kept,), _ = complete_descriptions([deal], _PS_PLAN, describe, budget_s=0.2)
+        assert time.monotonic() - t0 < 1.0
+        assert kept["price"] == 7.0  # unverified this time; the scraper caches it for the next search
+
+    def test_run_search_wires_it_in(self):
+        describe = _Describe(texts={_ka(1, 7.0)["url"]: _EXAMPLE_DESCRIPTION})
+        outcome = run_search(
+            _PS_PLAN,
+            ebay_search=_fn([]),
+            ebay_is_api=True,
+            auction_search=None,
+            kleinanzeigen_search=_fn([_ka(1, 7.0)]),
+            kleinanzeigen_describe=describe,
+            skipped=set(),
+            budget_s=5,
+        )
+        assert [d["price"] for d in outcome.selected] == [120.0]
 
 
 class TestSelection:

@@ -13,6 +13,9 @@ SQLite persistence, and a dark-themed web UI.
 - Also searches **Kleinanzeigen.de** for matching classified listings
 - **Gemini AI** deal ratings: Must Have / Good / Okay / Avoid / Garbage
 - Deterministic overrides for scams, sports/Kinect lots, broken/untested junk
+- Reads what a listing says about its price: a per-game price ("Stückpreis 7 €") on a bundle is flagged, or
+  replaced by the whole-lot price the description states ("komplett Paket 120 €"); "1 € VB" placeholders and single
+  games dressed up as bundles are recognised too
 - Per-game resale estimates from live eBay market data
 - Runtime settings (AI on/off, model, data source) persisted in SQLite
 - Docker multi-arch images (`linux/amd64`, `linux/arm64`) for Portainer

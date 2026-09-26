@@ -261,7 +261,14 @@ class Deal(TypedDict, total=False):
     """
 
     title: str
-    price: float
+    price: float  # what the whole listing costs — see price_basis
+    # Set by search.pipeline.check_prices when the listing text says the price
+    # isn't for the whole lot: "per_item" (price is per game), "lot_from_text"
+    # (price replaced by the whole-lot price the text states; the listed
+    # amount is in listed_price), "offer" (a "1 € VB" placeholder).
+    price_basis: str
+    listed_price: float | None
+    price_note: str  # one-line explanation for the user and the AI
     condition: str
     condition_normalized: str
     seller_rating: float

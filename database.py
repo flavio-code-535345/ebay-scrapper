@@ -97,6 +97,7 @@ def init_db():
         _add_column_if_missing(cursor, "deals", "ai_itemized_resale_estimates", "TEXT")
         _add_column_if_missing(cursor, "deals", "ai_estimated_total_cost", "REAL")
         _add_column_if_missing(cursor, "deals", "ai_estimated_gross_profit", "REAL")
+        _add_column_if_missing(cursor, "deals", "price_note", "TEXT")
 
         cursor.executescript("""
             CREATE TABLE IF NOT EXISTS user_saved_deals (
@@ -148,6 +149,7 @@ def _add_column_if_missing(cursor, table: str, column: str, col_type: str) -> No
         "ai_itemized_resale_estimates",
         "ai_estimated_total_cost",
         "ai_estimated_gross_profit",
+        "price_note",
     }
     _ALLOWED_TYPES = {"TEXT", "REAL", "INTEGER", "INTEGER DEFAULT 0"}
     if table not in _ALLOWED_TABLES:
@@ -193,9 +195,9 @@ def save_search(query: str, deals: list[dict]) -> int:
                    ai_potential_scam, ai_scam_warning, image_issues, image_urls,
                    item_location, description, seller_count, listing_date,
                    ai_itemized_resale_estimates, ai_estimated_total_cost,
-                   ai_estimated_gross_profit, created_at)
+                   ai_estimated_gross_profit, price_note, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     search_id,
                     deal.get("title"),
@@ -223,6 +225,7 @@ def save_search(query: str, deals: list[dict]) -> int:
                     _encode_list_field(deal.get("ai_itemized_resale_estimates")),
                     deal.get("ai_estimated_total_cost"),
                     deal.get("ai_estimated_gross_profit"),
+                    deal.get("price_note"),
                     now,
                 ),
             )

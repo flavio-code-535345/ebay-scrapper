@@ -780,6 +780,11 @@ function createDealCard(deal, mode) {
     const priceNegotiableHtml = deal.shipping_note
         ? ` <span class="price-negotiable">(${escapeHtml(deal.shipping_note)})</span>`
         : '';
+    // Set when the listing text says the price isn't for the whole lot
+    // ("Stückpreis 7 €", "1 € VB") — or states the real whole-lot price.
+    const priceNoteHtml = deal.price_note
+        ? `<div class="price-note">${escapeHtml(deal.price_note)}</div>`
+        : '';
 
     return `<div class="deal-card${isSelected ? ' selected' : ''}" data-url="${encodedUrl}" data-title="${escapeHtml(deal.title || '')}">
         <div class="deal-card-select">
@@ -794,6 +799,7 @@ function createDealCard(deal, mode) {
         <div class="deal-body">
             <div class="deal-title">${buildSourceBadge(deal)} ${escapeHtml(deal.title || '(no title)')}${buildGameCountBadge(deal.title)}</div>
             <div class="deal-price">€${(deal.price || 0).toFixed(2)}${priceNegotiableHtml}</div>
+            ${priceNoteHtml}
             <div class="deal-meta">${metaRows.join('')}</div>
             ${imageWarningSection}
             ${aiSection}

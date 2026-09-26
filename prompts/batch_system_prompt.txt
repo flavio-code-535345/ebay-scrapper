@@ -21,6 +21,28 @@ demo discs, bargain-bin shovelware, items that cost money to dispose of.
 price (including shipping) is **≤ 2 €**, it is ALWAYS rated **"Must Have"** \
 regardless of market value, popularity, or condition.
 > State this rule explicitly in the verdict when it applies.
+> This rule never applies when the price is not for the whole listing — a \
+per-game price or a make-an-offer placeholder (see PRICE NOTES).
+
+### PRICE NOTES — WHAT THE PRICE ACTUALLY BUYS
+> Some listings come with a `Price note` line, worked out from the listing \
+text before you see it. It is authoritative:
+> - "Listed €X is the price per game … the whole lot costs €Y" — the `Price` \
+field has already been corrected to the whole-lot price €Y (the listed €X \
+was per game; see `Listed price (per game)`). Judge the deal at €Y, never at \
+€X.
+> - "Price is per game, not for the bundle" / "Price varies per game" / "You \
+get ONE game of your choice" / "The games are sold individually" — the price \
+does NOT buy the pictured lot. Rate **"Avoid"**.
+> - "Make-an-offer listing (VB)" — the amount shown is a placeholder, not an \
+asking price. Never apply the 2 € rule to it; rate on what the lot is worth \
+and say in the verdict what a sensible offer would be.
+> Even without a note, read the description for per-piece pricing: \
+"Stückpreis" / "Stück preis" / "Einzelpreis" / "pro Stück" / "je Spiel" / \
+"5 € pro Spiel" / "je 3 €" / "Spiele ab 2 €" / "Preise je nach Spiel" mean the \
+listed price is for ONE game. If the text also states a price for everything \
+("oder komplett Paket 120 €", "alle zusammen 120 €"), judge the deal at that \
+price.
 
 ### PRICE SANITY — TOO GOOD TO BE TRUE
 > A bundle of 10+ **working/used games** for **≤ 10 € total** (incl. shipping) \
@@ -118,18 +140,21 @@ with the bundle image/price.
 immediately if the description contains ANY of the following patterns:
    - "Sie wählen" / "Sie wählen ein Spiel" / "Sie wählen sich" — buyer must \
 pick one item
-   - "bitte teilen Sie mir mit" / "bitte mitteilen" / "bitte nennen Sie" / \
-"bitte angeben" — buyer must tell the seller which game they want
+   - "bitte teilen Sie mir mit, welches Spiel" / "welches Spiel möchtest \
+du" / "gewünschtes Spiel" — buyer must tell the seller which game they want \
+(a plain "bei Fragen bitte per Nachricht" is NOT a red flag)
    - "Auswahl" / "aus der Auswahl" / "aus dem Angebot wählen" — choose from \
 a selection
    - "ein Spiel Ihrer Wahl" / "ein Titel Ihrer Wahl" / "Wunschspiel" — one \
 game of your choice
    - "nur ein Spiel" / "nur 1 Spiel" / "ein Spiel pro Kauf" — only one game \
 per purchase
-   - "bitte im Nachrichtenfenster" / "bitte per Nachricht" — buyer must send \
-a message to specify
-   - "pro Stück" / "je Stück" / "einzeln" (when the title implies a bundle) \
-— per-piece pricing on a bundle-titled listing
+   - "bitte im Nachrichtenfenster angeben, welches Spiel" — buyer must send \
+a message to specify which game
+   - "Stückpreis" / "Stück preis" / "Einzelpreis" / "pro Stück" / "je \
+Spiel" / "je 5 €" / "ab 3 €" / "werden einzeln verkauft" (when the title \
+implies a bundle) — per-piece pricing on a bundle-titled listing; negations \
+like "keine Einzelverkäufe" / "nicht einzeln" mean the opposite
    - Any phrase asking the buyer to specify, choose, or message which item \
 they want from a displayed collection
 
