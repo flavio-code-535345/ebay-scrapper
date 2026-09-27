@@ -1,12 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Trading API GetItem response in the shape eBay documents for GetItemResponseType (compatibility level 1477),
-  filled with the values of one of the seller's real listings as shown on ebay.de (item 318839546855:
-  category 139973, condition "Gut", 1,80 € DHL shipping, no returns, the seller's fixed description).
-  NOT a captured response: that needs the seller's own token. Replace it with a real capture (GetItem on one
-  of the seller's listings) once the account is connected; the postal code and shipping-service code here are
-  placeholders. Read-only fields (ListingDetails, SellingStatus, ...) are included on purpose — the template
-  parser must ignore them.
+  filled with the values of one of the seller's real listings (item 318839546855: category 139973, condition
+  "Gut", 1,80 € DHL shipping with age check, no returns, the seller's fixed description).
+
+  Not a raw capture (that needs the seller's token), but checked against the real thing: on 2026-09-28 the app
+  imported this very listing from eBay on the seller's connected account and showed the same values, including
+  the shipping-service code DE_DHLAlterssichtprüfung18. The real account additionally uses business policies
+  (SellerProfiles); this fixture keeps inline shipping/returns to cover accounts without them — the business-policy
+  case has its own test. Postal code is a placeholder. Read-only fields (ListingDetails, SellingStatus, ...) are
+  included on purpose: the template parser must ignore them.
 -->
 <GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents">
   <Timestamp>2026-09-27T10:00:00.000Z</Timestamp>
@@ -48,7 +51,7 @@
         <SalesTaxPercent>0.0</SalesTaxPercent>
       </SalesTax>
       <ShippingServiceOptions>
-        <ShippingService>DE_DHLPaket</ShippingService>
+        <ShippingService>DE_DHLAlterssichtprüfung18</ShippingService>
         <ShippingServiceCost currencyID="EUR">1.8</ShippingServiceCost>
         <ShippingServicePriority>1</ShippingServicePriority>
         <ExpeditedService>false</ExpeditedService>

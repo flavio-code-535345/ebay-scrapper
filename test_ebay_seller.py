@@ -123,9 +123,14 @@ class TestTemplate:
         t = _template()
         assert (t.source_item_id, t.category_id, t.condition_id) == ("318839546855", "139973", "5000")
         assert (t.location, t.postal_code, t.country, t.currency) == ("FURTH,BY", "12345", "DE", "EUR")
-        assert t.shipping_services == [
-            {"priority": "1", "service": "DE_DHLPaket", "cost": 1.8, "additional_cost": None, "free": False}
-        ]
+        (service,) = t.shipping_services
+        assert service == {
+            "priority": "1",
+            "service": "DE_DHLAlterssichtprüfung18",  # the seller's real service code
+            "cost": 1.8,
+            "additional_cost": None,
+            "free": False,
+        }
         assert t.shipping_cost == 1.8
         assert t.return_policy == {"returns_accepted_option": "ReturnsNotAccepted"}
         assert t.seller_profiles == {}
@@ -175,7 +180,7 @@ class TestBuildItem:
         assert (text("e:Location"), text("e:PostalCode"), text("e:DispatchTimeMax")) == ("FURTH,BY", "12345", "3")
         assert text("e:Description").startswith('<div><font face="Arial" size="4">Die CD(s)')
         assert [p.text for p in item.findall("e:PictureDetails/e:PictureURL", _NS)] == _draft().photo_urls
-        assert text("e:ShippingDetails/e:ShippingServiceOptions/e:ShippingService") == "DE_DHLPaket"
+        assert text("e:ShippingDetails/e:ShippingServiceOptions/e:ShippingService") == "DE_DHLAlterssichtprüfung18"
         assert text("e:ShippingDetails/e:ShippingServiceOptions/e:ShippingServiceCost") == "1.80"
         assert text("e:ReturnPolicy/e:ReturnsAcceptedOption") == "ReturnsNotAccepted"
         assert text("e:BestOfferDetails/e:BestOfferEnabled") == "true"
@@ -327,7 +332,7 @@ class TestTrading:
             "<ErrorCode>17</ErrorCode><SeverityCode>Error</SeverityCode></Errors>",
             ack="Failure",
         )
-        with pytest.raises(SellerError, match=r"The item ID is invalid\. \(error 17\)"):
+        with pytest.raises(SellerError, match=r"The item ID is invalid\. \(code 17\)"):
             seller.import_template("318839546855")
 
     def _ready(self, seller, session):
@@ -335,8 +340,9 @@ class TestTrading:
         session.trading["GetItem"] = _response(content=_GETITEM)
         seller.import_template("318839546855")
         fees = (
-            "<Fees><Fee><Name>InsertionFee</Name><Fee currencyID='EUR'>0.0</Fee></Fee>"
-            "<Fee><Name>FinalValueFee</Name><Fee currencyID='EUR'>0.35</Fee></Fee></Fees>"
+            "<Fees><Fee><Name>FeaturedFee</Name><Fee currencyID='EUR'>0.0</Fee></Fee>"
+            "<Fee><Name>InsertionFee</Name><Fee currencyID='EUR'>0.5</Fee></Fee>"
+            "<Fee><Name>ListingFee</Name><Fee currencyID='EUR'>0.5</Fee></Fee></Fees>"
         )
         warning = (
             "<Errors><LongMessage>Stock photo not used.</LongMessage><ErrorCode>21919</ErrorCode>"
@@ -353,14 +359,14 @@ class TestTrading:
         assert session.trading_calls()[-2:] == ["VerifyAddFixedPriceItem", "AddFixedPriceItem"]
         assert result.item_id == "318900000001"
         assert result.url == "https://www.ebay.de/itm/318900000001"
-        assert result.fees == {"FinalValueFee": 0.35}
+        assert result.fees == {"InsertionFee": 0.5}  # ListingFee is their total
 
     def test_verify_only_lists_nothing(self, seller, session):
         self._ready(seller, session)
         result = seller.publish(_draft(), verify_only=True)
         assert session.trading_calls()[-1] == "VerifyAddFixedPriceItem"
         assert result.item_id == ""
-        assert result.warnings == ["Stock photo not used. (error 21919)"]
+        assert result.warnings == ["Stock photo not used. (code 21919)"]
 
     def test_incomplete_draft_makes_no_call(self, seller, session):
         self._ready(seller, session)
