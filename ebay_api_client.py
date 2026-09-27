@@ -11,6 +11,7 @@ import os
 import re
 import threading
 import time
+import urllib.parse
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
@@ -377,6 +378,85 @@ class EbayApiClient:
         for d in deals:
             d["listing_type"] = "auction"
         return deals, errors
+
+    def cheapest_offers(
+        self, gtin: str, *, exclude_seller: str = "", postal_code: str = "", limit: int = 3
+    ) -> tuple[list[dict], list[str]]:
+        """The cheapest comparable Buy-It-Now offers for a product, by *total*
+        (item + shipping to Germany) — the basis of the seller's pricing rule.
+
+        Comparable: same product (``gtin``), used, Buy It Now. The seller's own
+        listings (*exclude_seller*) are left out, and so are offers whose
+        shipping cost eBay doesn't state — their total is unknown.
+        """
+        if not self.is_configured:
+            return [], ["eBay API credentials not configured"]
+        try:
+            token = self._get_access_token()
+        except Exception as exc:
+            return [], [f"eBay auth failed: {exc}"]
+        location = f"country={self.delivery_country}" + (f",zip={postal_code}" if postal_code else "")
+        params = {
+            "gtin": gtin,
+            "sort": "price",  # documented: by price + shipping, lowest first
+            "limit": "50",
+            "filter": f"buyingOptions:{{FIXED_PRICE}},conditions:{{USED}},deliveryCountry:{self.delivery_country}",
+        }
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-EBAY-C-MARKETPLACE-ID": self.marketplace_id,
+            "Accept-Language": self.accept_language,
+            "X-EBAY-C-ENDUSERCTX": "contextualLocation=" + urllib.parse.quote(location, safe=""),
+        }
+        try:
+            resp = self.session.get(self._base_url + self._SEARCH_PATH, params=params, headers=headers, timeout=15)
+        except requests.RequestException as exc:
+            return [], [f"eBay price lookup failed: {exc}"]
+        if not resp.ok:
+            return [], [f"eBay price lookup HTTP {resp.status_code}"]
+        try:
+            items = resp.json().get("itemSummaries") or []
+        except ValueError:
+            return [], ["eBay price lookup: response was not JSON"]
+
+        offers = []
+        for item in items:
+            seller = ((item.get("seller") or {}).get("username") or "").strip()
+            if exclude_seller and seller.lower() == exclude_seller.lower():
+                continue
+            try:
+                price = float((item.get("price") or {}).get("value"))
+            except (TypeError, ValueError):
+                continue
+            shipping = self._known_shipping_cost(item.get("shippingOptions") or [])
+            if shipping is None:
+                continue
+            offers.append(
+                {
+                    "title": item.get("title", ""),
+                    "url": item.get("itemWebUrl", ""),
+                    "seller": seller,
+                    "condition": item.get("condition", ""),
+                    "price": price,
+                    "shipping": shipping,
+                    "total": round(price + shipping, 2),
+                }
+            )
+        offers.sort(key=lambda o: o["total"])
+        return offers[:limit], []
+
+    @staticmethod
+    def _known_shipping_cost(shipping_options: list) -> float | None:
+        """The cheapest stated shipping cost, or ``None`` when eBay states none
+        (unlike ``_parse_shipping``, which treats a missing cost as free)."""
+        costs = []
+        for option in shipping_options:
+            if (option.get("shippingCostType") or "").upper() in ("FREE", "FREE_SHIPPING"):
+                costs.append(0.0)
+                continue
+            with suppress(TypeError, ValueError):
+                costs.append(float((option.get("shippingCost") or {})["value"]))
+        return min(costs) if costs else None
 
     def get_lowest_market_price(self, query: str, max_results: int = 10) -> "tuple[float | None, str, list[str]]":
         """Return the lowest Buy It Now (BIN/fixed-price) price for *query*.

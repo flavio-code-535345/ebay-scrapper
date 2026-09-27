@@ -8,11 +8,14 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
+from datetime import timedelta
 
 from flask import Flask, Response, jsonify, render_template, request
 
 import database
+import sell
 from ai_providers import create_assessor
 from ebay_api_client import _MARKETPLACE_LOCALE_MAP, EbayApiClient
 from models import canonical_listing_id, sort_key_for_deal
@@ -58,6 +61,19 @@ ebay_api = EbayApiClient()
 kleinanzeigen = KleinanzeigenScraper() if KleinanzeigenScraper else None
 
 database.init_db()
+
+# Sessions only carry the Sell page's login. The key is shared by every
+# Gunicorn worker through the database unless SECRET_KEY is set.
+app.secret_key = os.environ.get("SECRET_KEY") or database.get_or_create_setting(
+    "flask_secret_key", lambda: secrets.token_hex(32)
+)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+)
+sell.prices = ebay_api
+app.register_blueprint(sell.bp)
 
 assessor = create_assessor()
 assessor.set_ebay_client(ebay_api)

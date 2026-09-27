@@ -164,6 +164,19 @@ nothing network-bound is ever unbounded by the caller's `deadline`:
   retries with bracket-matching heuristics, and falls back to `_DEFAULT_PARSE_ERROR` per item rather than
   failing the whole batch.
 
+**Sell page ([sell.py](sell.py) blueprint + [ebay_seller.py](ebay_seller.py))** — lists games on the seller's own
+eBay account: `/sell` (mobile-first, [templates/sell.html](templates/sell.html) + [static/sell.js](static/sell.js)).
+Every sell route requires the `APP_PASSWORD` session (the rest of the app has no login). `EbaySeller` holds the OAuth
+user token (authorization-code grant via `EBAY_RUNAME`; scopes `api_scope` + `sell.inventory`; refresh token in the
+`settings` table, never returned by an endpoint) and uses the **Trading API** (`GetItem`, `VerifyAddFixedPriceItem`,
+`AddFixedPriceItem`, `X-EBAY-API-IAF-TOKEN`) rather than the Inventory API, whose listings can't be edited in Seller
+Hub or the eBay app afterwards. A new listing copies shipping, returns, location, business-policy IDs, description and
+best-offer from one of the seller's own listings (`import_template` → `ListingTemplate`, stored as JSON) and adds the
+draft's title, EAN (catalog match; Catalog API for lookup), condition (Metadata API list), photos (Media API) and
+price. Price rule (`ebay_seller.suggest_price` over `EbayApiClient.cheapest_offers`): the cheapest comparable used
+Buy-It-Now **total** (item + that seller's shipping, own listings excluded) becomes the item price; the buyer pays the
+template's shipping on top.
+
 **Persistence ([database.py](database.py))** — raw `sqlite3` (no ORM), WAL mode, indexed on
 `deals.search_id` and `deals.created_at`, one row per search and one row per deal (FK to search), plus a
 generic `settings` key/value table for runtime toggles

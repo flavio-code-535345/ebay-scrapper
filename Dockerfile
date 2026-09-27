@@ -20,7 +20,7 @@ WORKDIR /app
 
 COPY --from=builder /usr/local /usr/local
 
-COPY app.py database.py models.py scraper.py ebay_api_client.py kleinanzeigen_scraper.py ./
+COPY app.py database.py models.py scraper.py ebay_api_client.py kleinanzeigen_scraper.py ebay_seller.py sell.py ./
 COPY ai_providers/ ai_providers/
 COPY search/ search/
 COPY prompts/ prompts/

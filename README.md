@@ -17,6 +17,8 @@ SQLite persistence, and a dark-themed web UI.
   replaced by the whole-lot price the description states ("komplett Paket 120 €"); "1 € VB" placeholders and single
   games dressed up as bundles are recognised too
 - Per-game resale estimates from live eBay market data
+- **Sell page** (`/sell`): list a game on your own eBay account from your phone — scan the barcode, take photos,
+  publish; price suggested from the cheapest comparable offer, settings copied from one of your listings
 - Runtime settings (AI on/off, model, data source) persisted in SQLite
 - Docker multi-arch images (`linux/amd64`, `linux/arm64`) for Portainer
 
@@ -72,6 +74,38 @@ curl -X POST http://localhost:5000/api/settings \
 
 ---
 
+## Selling: list a game in under a minute (`/sell`)
+
+A phone-friendly page for listing a game on your own eBay.de account: scan the barcode → eBay's catalog fills in the
+title and item specifics → the price is suggested from the cheapest comparable Buy-It-Now offer (item + shipping,
+your own listings excluded) → take photos → **Publish**. Shipping, returns, location, business policies and the
+description are copied from one of your existing listings, so every new listing looks like the ones you made by hand.
+
+Listings are created with eBay's Trading API, so they are ordinary listings you can still edit, discount and accept
+offers on in the eBay app. ("Check with eBay" validates a listing without creating it.)
+
+### One-time setup
+
+1. **RuName** — at <https://developer.ebay.com/> → *Application Keys* → *User Tokens* (production keyset) →
+   *Get a Token from eBay via Your Application* → *Add eBay Redirect URL*. Tick *OAuth Enabled* and set
+   *Your auth accepted URL* to `https://<your app's domain>/sell/ebay/callback`. Copy the RuName it shows
+   (looks like `Your_Name-YourApp-PRD-abc123-def456`).
+2. **Environment** (next to the existing `EBAY_CLIENT_ID` / `EBAY_CLIENT_SECRET`):
+
+   ```env
+   APP_PASSWORD=choose-a-long-password   # the Sell page only opens with it
+   EBAY_RUNAME=Your_Name-YourApp-PRD-abc123-def456
+   # SECRET_KEY=...                      # optional; otherwise generated once and kept in the database
+   ```
+3. Open `/sell`, sign in with `APP_PASSWORD`, press **Connect eBay** and agree on eBay's own page (you sign in to eBay
+   there — this app never sees your eBay password). If eBay can't send you back to the app, paste the address you
+   landed on into the box under the button.
+4. Paste one of your listings (URL or item number) under **Listing settings** — its setup becomes the template.
+
+The connection lasts about 18 months; **Disconnect** or changing `APP_PASSWORD` ends it early.
+
+---
+
 ## Local install
 
 ```bash
@@ -116,6 +150,12 @@ ruff format --check .
 | POST | `/api/deals/skip` | Hide deal forever |
 | POST | `/api/deals/unskip` | Restore skipped deal |
 | GET | `/api/deals/skipped` | List skipped deals |
+| GET | `/sell` | Sell page (password: `APP_PASSWORD`) |
+| GET | `/api/sell/status` | Connection, template, recent listings |
+| POST | `/api/sell/template` | Copy settings from one of your listings |
+| GET | `/api/sell/product?q=` | Catalog product + price suggestion for an EAN/title |
+| POST | `/api/sell/photos` | Upload a photo to eBay |
+| POST | `/api/sell/publish` | Check (`verify_only`) or publish a listing |
 
 ---
 
@@ -127,7 +167,9 @@ ebay-scrapper/
 ├── database.py            # SQLite persistence
 ├── models.py              # Shared Deal schema, condition/date normalization, sort key
 ├── scraper.py             # Legacy HTML scraper (ebay.de)
-├── ebay_api_client.py     # Browse API client (OAuth + search + auctions)
+├── ebay_api_client.py     # Browse API client (OAuth + search + auctions + price lookup)
+├── ebay_seller.py         # Your eBay account: OAuth connection, listing template, photos, publishing
+├── sell.py                # Sell page routes (password-protected)
 ├── kleinanzeigen_scraper.py # Kleinanzeigen.de HTML scraper
 ├── search/
 │   ├── query.py           # Query planner: one OR-grouped request per source
@@ -139,8 +181,8 @@ ebay-scrapper/
 │   ├── enrichment.py      # Phase A: concurrent, deadline-bounded price/image fetching
 │   └── gemini.py          # Google Gemini multimodal assessor (Phase B/C)
 ├── prompts/               # System prompts for single + batch AI
-├── templates/index.html
-├── static/                # app.js + style.css
+├── templates/             # index.html + sell.html
+├── static/                # app.js, style.css, sell.js, sell.css
 ├── test_*.py              # pytest suite
 ├── Dockerfile
 ├── docker-compose.yml
