@@ -29,6 +29,8 @@ import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -49,6 +51,11 @@ _NSMAP = {"e": _NS}
 _REQUEST_TIMEOUT = 30
 _TOKEN_REFRESH_MARGIN_S = 120
 _CONDITIONS_CACHE_S = 86400
+# eBay.de: private sellers list 320 items a month without an insertion fee, then 0,50 € each
+# (GTC renewals don't count). https://www.ebay.de/help/selling/fees-credits-invoices/gebhren-fr-private-verkufer?id=4822
+FREE_LISTINGS_PER_MONTH = 320
+_USAGE_CACHE_S = 300
+_BERLIN = ZoneInfo("Europe/Berlin")
 
 _KEY_REFRESH = "ebay_seller_refresh_token"
 _KEY_REFRESH_EXPIRES = "ebay_seller_refresh_expires_at"
@@ -362,6 +369,7 @@ class EbaySeller:
         self.session = session or requests.Session()
         self._token_lock = threading.Lock()
         self._conditions: dict[str, tuple[float, list[dict]]] = {}
+        self._usage: tuple[float, int] | None = None
 
     # ── Connection ──────────────────────────────────────────────────────────
 
@@ -497,6 +505,25 @@ class EbaySeller:
             raise SellerError(" · ".join(errors) or f"eBay {call} failed.")
         return root, warnings
 
+    def listings_this_month(self) -> int:
+        """New listings the seller started this calendar month (German time) —
+        what counts against the free allowance. Cached for five minutes."""
+        if self._usage and time.monotonic() - self._usage[0] < _USAGE_CACHE_S:
+            return self._usage[1]
+        month_start = datetime.now(_BERLIN).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        pagination = ET.Element("Pagination")
+        _sub(pagination, "EntriesPerPage", "1")
+        _sub(pagination, "PageNumber", "1")
+        root, _ = self._trading(
+            "GetSellerList",
+            _element("StartTimeFrom", _ebay_time(month_start)),
+            _element("StartTimeTo", _ebay_time(datetime.now(UTC))),
+            pagination,
+        )
+        count = int(_text(root, "e:PaginationResult/e:TotalNumberOfEntries", "0") or 0)
+        self._usage = (time.monotonic(), count)
+        return count
+
     def get_user(self) -> str:
         root, _ = self._trading("GetUser")
         return _text(root, "e:User/e:UserID")
@@ -621,6 +648,10 @@ class EbaySeller:
         ]
         self._conditions[category_id] = (time.monotonic(), found)
         return found
+
+
+def _ebay_time(moment: datetime) -> str:
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 def _element(tag: str, text: str) -> ET.Element:

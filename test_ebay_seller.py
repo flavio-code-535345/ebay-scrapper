@@ -375,6 +375,23 @@ class TestTrading:
             seller.publish(_draft(photo_urls=[]))
         assert len(session.calls) == before
 
+    def test_listings_this_month(self, seller, session):
+        """What counts against eBay.de's 320 free listings a month — cached for a few minutes."""
+        _connected(seller)
+        session.trading["GetSellerList"] = _trading_response(
+            "GetSellerList",
+            "<PaginationResult><TotalNumberOfPages>57</TotalNumberOfPages>"
+            "<TotalNumberOfEntries>57</TotalNumberOfEntries></PaginationResult>",
+        )
+        assert seller.listings_this_month() == 57
+        assert seller.listings_this_month() == 57
+        assert session.trading_calls() == ["GetSellerList"]
+        request = ET.fromstring(session.calls[-1][2].split(b"?>", 1)[1])
+        start = request.findtext("e:StartTimeFrom", namespaces=_NS)
+        # The first of this month at midnight in Germany, sent as UTC.
+        assert start.endswith(":00:00.000Z") and start[11:13] in ("22", "23")
+        assert request.findtext("e:Pagination/e:EntriesPerPage", namespaces=_NS) == "1"
+
     def test_no_template_yet(self, seller):
         _connected(seller)
         with pytest.raises(SellerError, match="template"):

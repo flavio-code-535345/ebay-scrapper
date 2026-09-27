@@ -25,7 +25,7 @@ import urllib.parse
 from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
 
 import database
-from ebay_seller import Draft, EbaySeller, SellerError, suggest_price
+from ebay_seller import FREE_LISTINGS_PER_MONTH, Draft, EbaySeller, SellerError, suggest_price
 
 logger = logging.getLogger(__name__)
 
@@ -165,12 +165,18 @@ def status():
         "template": template.summary() if template else None,
         "recent": database.get_sell_listings(),
         "conditions": [],
+        "free_listings": None,
     }
     if body["connected"] and template:
         try:
             body["conditions"] = seller.conditions(template.category_id)
         except SellerError as exc:
             logger.warning("Could not load item conditions: %s", exc)
+    if body["connected"]:
+        try:
+            body["free_listings"] = {"used": seller.listings_this_month(), "allowance": FREE_LISTINGS_PER_MONTH}
+        except SellerError as exc:
+            logger.warning("Could not count this month's listings: %s", exc)
     return jsonify(body)
 
 
