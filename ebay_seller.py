@@ -491,7 +491,7 @@ class EbaySeller:
         for err in root.findall("e:Errors", _NSMAP):
             message = _text(err, "e:LongMessage") or _text(err, "e:ShortMessage")
             code = _text(err, "e:ErrorCode")
-            text = f"{message} (error {code})" if code else message
+            text = f"{message} (code {code})" if code else message
             (warnings if _text(err, "e:SeverityCode") == "Warning" else errors).append(text)
         if _text(root, "e:Ack") not in ("Success", "Warning") or errors:
             raise SellerError(" · ".join(errors) or f"eBay {call} failed.")
@@ -630,12 +630,16 @@ def _element(tag: str, text: str) -> ET.Element:
 
 
 def _fees(root: ET.Element) -> dict[str, float]:
-    """Non-zero fees from a Verify/Add response ({"InsertionFee": 0.35, ...})."""
+    """Non-zero fees from a Verify/Add response ({"InsertionFee": 0.5, ...}).
+
+    "ListingFee" is eBay's total of the others, so it's left out — listing it
+    too would count every fee twice.
+    """
     fees = {}
     for fee in root.findall("e:Fees/e:Fee", _NSMAP):
-        amount = _amount(fee, "e:Fee")
-        if amount:
-            fees[_text(fee, "e:Name")] = amount
+        name, amount = _text(fee, "e:Name"), _amount(fee, "e:Fee")
+        if amount and name != "ListingFee":
+            fees[name] = amount
     return fees
 
 
