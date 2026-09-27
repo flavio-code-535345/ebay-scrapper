@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Trading API GetItem response in the shape eBay documents for GetItemResponseType (compatibility level 1477),
+  filled with the values of one of the seller's real listings as shown on ebay.de (item 318839546855:
+  category 139973, condition "Gut", 1,80 € DHL shipping, no returns, the seller's fixed description).
+  NOT a captured response: that needs the seller's own token. Replace it with a real capture (GetItem on one
+  of the seller's listings) once the account is connected; the postal code and shipping-service code here are
+  placeholders. Read-only fields (ListingDetails, SellingStatus, ...) are included on purpose — the template
+  parser must ignore them.
+-->
+<GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+  <Timestamp>2026-09-27T10:00:00.000Z</Timestamp>
+  <Ack>Success</Ack>
+  <Version>1477</Version>
+  <Build>E1477_CORE_API_19146596_R1</Build>
+  <Item>
+    <AutoPay>false</AutoPay>
+    <BuyerProtection>ItemIneligible</BuyerProtection>
+    <BuyItNowPrice currencyID="EUR">0.0</BuyItNowPrice>
+    <Country>DE</Country>
+    <Currency>EUR</Currency>
+    <Description>&lt;div&gt;&lt;font face="Arial" size="4"&gt;Die CD(s) läuft/laufen einwandfrei, bitte siehe Artikelzustand oder Produktbilder.&lt;/font&gt;&lt;/div&gt;&lt;div&gt;&lt;font face="Arial" size="4"&gt;&lt;br&gt;&lt;/font&gt;&lt;/div&gt;&lt;div&gt;&lt;font face="Arial" size="4"&gt;Ich verkleinere meine Spielesammlung, schaut gerne bei meinem anderen Angeboten vorbei.&lt;/font&gt;&lt;/div&gt;&lt;div&gt;&lt;font face="Arial" size="4"&gt;&lt;br&gt;&lt;/font&gt;&lt;/div&gt;&lt;div&gt;&lt;font face="Arial" size="4"&gt;Bei Fragen stehe ich Ihnen gerne zur Verfügung.&lt;/font&gt;&lt;/div&gt;&lt;div&gt;&lt;font face="Arial" size="4"&gt;&lt;br&gt;&lt;/font&gt;&lt;/div&gt;&lt;div&gt;&lt;font face="Arial" size="4"&gt;Dies ist ein Privatverkauf. Der Verkauf erfolgt unter Ausschluss jeglicher Sachmängelhaftung. Die Haftung auf Schadenersatz wegen Verletzungen von Gesundheit, Körper oder Leben und grob fahrlässiger und/oder vorsätzlicher Verletzungen meiner Pflichten als Verkäufer bleibt davon unberührt. Keine Rücknahme oder Garantie.&lt;/font&gt;&lt;/div&gt;</Description>
+    <ItemID>318839546855</ItemID>
+    <ListingDetails>
+      <Adult>false</Adult>
+      <StartTime>2026-08-20T17:02:11.000Z</StartTime>
+      <ViewItemURL>https://www.ebay.de/itm/318839546855</ViewItemURL>
+    </ListingDetails>
+    <ListingDuration>GTC</ListingDuration>
+    <ListingType>FixedPriceItem</ListingType>
+    <Location>FURTH,BY</Location>
+    <PrimaryCategory>
+      <CategoryID>139973</CategoryID>
+      <CategoryName>PC- &amp; Videospiele:Videospiele</CategoryName>
+    </PrimaryCategory>
+    <Quantity>1</Quantity>
+    <Seller>
+      <UserID>wucha23</UserID>
+      <FeedbackScore>554</FeedbackScore>
+    </Seller>
+    <SellingStatus>
+      <CurrentPrice currencyID="EUR">2.0</CurrentPrice>
+      <ListingStatus>Active</ListingStatus>
+    </SellingStatus>
+    <ShippingDetails>
+      <ApplyShippingDiscount>false</ApplyShippingDiscount>
+      <SalesTax>
+        <SalesTaxPercent>0.0</SalesTaxPercent>
+      </SalesTax>
+      <ShippingServiceOptions>
+        <ShippingService>DE_DHLPaket</ShippingService>
+        <ShippingServiceCost currencyID="EUR">1.8</ShippingServiceCost>
+        <ShippingServicePriority>1</ShippingServicePriority>
+        <ExpeditedService>false</ExpeditedService>
+        <ShippingTimeMin>1</ShippingTimeMin>
+        <ShippingTimeMax>2</ShippingTimeMax>
+      </ShippingServiceOptions>
+      <ShippingType>Flat</ShippingType>
+      <ThirdPartyCheckout>false</ThirdPartyCheckout>
+    </ShippingDetails>
+    <ShipToLocations>DE</ShipToLocations>
+    <Site>Germany</Site>
+    <StartPrice currencyID="EUR">2.0</StartPrice>
+    <Title>Tom Clancy's EndWar (Microsoft Xbox 360)</Title>
+    <BestOfferDetails>
+      <BestOfferEnabled>true</BestOfferEnabled>
+    </BestOfferDetails>
+    <PostalCode>12345</PostalCode>
+    <PictureDetails>
+      <GalleryType>Gallery</GalleryType>
+      <PictureURL>https://i.ebayimg.com/00/s/MTYwMFgxMjAw/z/abcAAOSw/$_57.JPG</PictureURL>
+    </PictureDetails>
+    <DispatchTimeMax>3</DispatchTimeMax>
+    <ReturnPolicy>
+      <ReturnsAcceptedOption>ReturnsNotAccepted</ReturnsAcceptedOption>
+      <ReturnsAccepted>Keine Rücknahme</ReturnsAccepted>
+    </ReturnPolicy>
+    <ConditionID>5000</ConditionID>
+    <ConditionDisplayName>Gut</ConditionDisplayName>
+    <ProductListingDetails>
+      <EAN>3307210333339</EAN>
+    </ProductListingDetails>
+  </Item>
+</GetItemResponse>

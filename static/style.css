@@ -114,6 +114,21 @@ a:focus-visible,
     margin: 0 auto;
 }
 
+/* Link to the Sell page, top-right of the hero */
+.hero-sell-link {
+    position: absolute;
+    top: 0.35rem;
+    right: 0;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid var(--border2);
+    border-radius: 999px;
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+.hero-sell-link:hover { text-decoration: none; border-color: var(--accent); }
+
 .hero h1 {
     font-size: 1.8rem;
     font-weight: 800;

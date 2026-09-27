@@ -123,6 +123,16 @@ def init_db():
                 key TEXT PRIMARY KEY NOT NULL,
                 value TEXT NOT NULL
             );
+
+            -- Listings published from the Sell page (the eBay listing itself lives on eBay).
+            CREATE TABLE IF NOT EXISTS sell_listings (
+                item_id TEXT PRIMARY KEY NOT NULL,
+                title TEXT,
+                ean TEXT,
+                price REAL,
+                url TEXT,
+                created_at REAL NOT NULL
+            );
         """)
 
 
@@ -363,4 +373,41 @@ def get_skipped_deals() -> list[dict]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT url, title, price, skipped_at FROM user_skipped_deals ORDER BY skipped_at DESC")
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_or_create_setting(key: str, make_value) -> str:
+    """The stored value for *key*, creating it with ``make_value()`` if absent.
+
+    Race-safe across processes (Gunicorn runs several workers): the first
+    insert wins and every caller reads that same stored value back.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, make_value()))
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        return cursor.fetchone()["value"]
+
+
+def delete_settings(*keys: str) -> None:
+    with get_db() as conn:
+        conn.executemany("DELETE FROM settings WHERE key = ?", [(k,) for k in keys])
+
+
+def add_sell_listing(item_id: str, title: str, ean: str, price: float, url: str) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO sell_listings (item_id, title, ean, price, url, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (item_id, title, ean, price, url, time.time()),
+        )
+
+
+def get_sell_listings(limit: int = 20) -> list[dict]:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT item_id, title, ean, price, url, created_at FROM sell_listings ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
         return [dict(row) for row in cursor.fetchall()]

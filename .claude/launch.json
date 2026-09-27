@@ -6,6 +6,15 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["app.py"],
       "port": 5000
+    },
+    {
+      "name": "flask-env",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-c",
+        "import os, runpy; [os.environ.setdefault(k.strip(), v.strip()) for k, v in (l.split('=', 1) for l in open('.env', encoding='utf-8').read().splitlines() if '=' in l and not l.startswith('#'))]; runpy.run_path('app.py', run_name='__main__')"
+      ],
+      "port": 5000
     }
   ]
 }

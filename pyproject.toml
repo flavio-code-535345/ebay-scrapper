@@ -11,7 +11,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["app", "database", "models", "scraper", "ebay_api_client", "kleinanzeigen_scraper"]
+py-modules = ["app", "database", "models", "scraper", "ebay_api_client", "kleinanzeigen_scraper", "ebay_seller", "sell"]
 
 [tool.setuptools.packages.find]
 include = ["ai_providers*", "search*"]
@@ -28,7 +28,7 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["app", "database", "models", "scraper", "ebay_api_client", "kleinanzeigen_scraper", "ai_providers", "search"]
+source = ["app", "database", "models", "scraper", "ebay_api_client", "kleinanzeigen_scraper", "ebay_seller", "sell", "ai_providers", "search"]
 branch = true
 omit = ["test_*.py"]
 

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0d1117">
+    <title>Sell · Deal Finder</title>
+    <link rel="stylesheet" href="/static/style.css?v=7">
+    <link rel="stylesheet" href="/static/sell.css?v=2">
+</head>
+<body class="sell-body">
+    <header class="sell-header">
+        <a href="/" class="sell-back">← Deal Finder</a>
+        <h1>Sell</h1>
+        {% if logged_in %}
+        <form method="post" action="/sell/logout" class="sell-logout">
+            <button type="submit" class="sell-link-btn">Sign out</button>
+        </form>
+        {% endif %}
+    </header>
+
+    <main class="sell-main">
+        {% if message %}<div class="sell-flash" role="status">{{ message }}</div>{% endif %}
+
+        {% if not password_set %}
+        <section class="sell-card">
+            <h2>Set a password first</h2>
+            <p>This page publishes listings on your eBay account, so it only opens with a password.
+               Set <code>APP_PASSWORD</code> in the container's environment and restart it — see the README.</p>
+        </section>
+
+        {% elif not logged_in %}
+        <section class="sell-card">
+            <h2>Sign in</h2>
+            <form method="post" action="/sell/login" class="sell-login">
+                <input type="password" name="password" placeholder="App password" autocomplete="current-password" required autofocus>
+                <button type="submit" class="sell-btn sell-btn--primary">Sign in</button>
+            </form>
+        </section>
+
+        {% elif not ebay_configured %}
+        <section class="sell-card">
+            <h2>One more setting</h2>
+            <p>Connecting your eBay account needs <code>EBAY_CLIENT_ID</code>, <code>EBAY_CLIENT_SECRET</code> and
+               <code>EBAY_RUNAME</code> (the RuName from eBay's developer portal). The README walks through it.</p>
+        </section>
+
+        {% else %}
+        <div id="sellApp" data-prices="{{ 'on' if prices_configured else 'off' }}">
+            <p class="sell-loading" id="sellLoading">Loading…</p>
+
+            <!-- Not connected yet -->
+            <section class="sell-card" id="connectCard" hidden>
+                <h2>Connect your eBay account</h2>
+                <p>You sign in on eBay's own page; this app never sees your eBay password.</p>
+                <a class="sell-btn sell-btn--primary" href="/sell/ebay/connect">Connect eBay</a>
+                <details class="sell-details">
+                    <summary>eBay didn't bring you back here?</summary>
+                    <p>Paste the full address of the page eBay sent you to after "Agree":</p>
+                    <div class="sell-row">
+                        <input type="url" id="pastedAuthUrl" placeholder="https://…?code=…&amp;state=…">
+                        <button type="button" class="sell-btn" id="pastedAuthBtn">Connect</button>
+                    </div>
+                </details>
+            </section>
+
+            <!-- Listing template (copied from one of the seller's listings) -->
+            <section class="sell-card" id="templateCard" hidden>
+                <div class="sell-card-head">
+                    <h2>Listing settings</h2>
+                    <span class="sell-account" id="accountName"></span>
+                </div>
+                <div id="templateSummary" class="sell-template"></div>
+                <details class="sell-details" id="templateForm">
+                    <summary id="templateFormSummary">Copy settings from one of your listings</summary>
+                    <p>Paste one of your eBay listings (URL or item number). Shipping, returns, location and the
+                       description are copied from it into every new listing.</p>
+                    <div class="sell-row">
+                        <input type="text" id="templateItem" placeholder="https://www.ebay.de/itm/…" inputmode="url">
+                        <button type="button" class="sell-btn" id="templateBtn">Copy</button>
+                    </div>
+                </details>
+            </section>
+
+            <!-- One listing -->
+            <section class="sell-card" id="listingCard" hidden>
+                <h2>New listing</h2>
+
+                <div class="sell-step">
+                    <label for="lookupInput" class="sell-label">Game</label>
+                    <div class="sell-row">
+                        <input type="search" id="lookupInput" placeholder="EAN or title" autocomplete="off" enterkeyhint="search">
+                        <button type="button" class="sell-btn" id="scanBtn" title="Scan the barcode">📷 Scan</button>
+                    </div>
+                    <div class="sell-scanner" id="scanner" hidden>
+                        <video id="scannerVideo" playsinline muted></video>
+                        <div class="sell-scanner-frame" aria-hidden="true"></div>
+                        <button type="button" class="sell-btn" id="scanCancel">Cancel</button>
+                    </div>
+                    <p class="sell-hint" id="lookupStatus"></p>
+                    <div class="sell-choices" id="productChoices"></div>
+                </div>
+
+                <div id="draft" hidden>
+                    <div class="sell-product">
+                        <img id="productImage" alt="" hidden>
+                        <div class="sell-product-text">
+                            <label for="titleInput" class="sell-label">Title <span class="sell-count" id="titleCount"></span></label>
+                            <input type="text" id="titleInput" maxlength="80">
+                            <p class="sell-hint" id="productMeta"></p>
+                            <div id="platformRow" class="sell-row" hidden>
+                                <select id="platformSelect" aria-label="Platform">
+                                    <option value="">Platform…</option>
+                                    <option>Sony PlayStation 2</option>
+                                    <option>Sony PlayStation 3</option>
+                                    <option>Sony PlayStation 4</option>
+                                    <option>Sony PlayStation 5</option>
+                                    <option>Microsoft Xbox 360</option>
+                                    <option>Microsoft Xbox One</option>
+                                    <option>Microsoft Xbox Series X|S</option>
+                                    <option>Nintendo Switch</option>
+                                    <option>Nintendo Wii</option>
+                                    <option>Nintendo Wii U</option>
+                                    <option>Nintendo DS</option>
+                                    <option>Nintendo 3DS</option>
+                                    <option>PC</option>
+                                </select>
+                            </div>
+                            <button type="button" class="sell-link-btn" id="addGameBtn">+ Add a second game (set)</button>
+                        </div>
+                    </div>
+
+                    <div class="sell-step">
+                        <span class="sell-label">Price</span>
+                        <ol class="sell-offers" id="offers"></ol>
+                        <div class="sell-row sell-price-row">
+                            <span class="sell-euro">€</span>
+                            <input type="text" id="priceInput" inputmode="decimal" placeholder="0,00" aria-label="Price">
+                            <span class="sell-hint" id="buyerTotal"></span>
+                        </div>
+                    </div>
+
+                    <div class="sell-step">
+                        <span class="sell-label">Condition</span>
+                        <div class="sell-chips" id="conditionChips" role="radiogroup" aria-label="Condition"></div>
+                    </div>
+
+                    <div class="sell-step">
+                        <span class="sell-label">Photos <span class="sell-count" id="photoCount"></span></span>
+                        <div class="sell-photos" id="photos"></div>
+                        <div class="sell-row">
+                            <label class="sell-btn">📷 Take photo
+                                <input type="file" accept="image/*" capture="environment" id="photoCamera" hidden>
+                            </label>
+                            <label class="sell-btn">🖼️ Choose photos
+                                <input type="file" accept="image/*" multiple id="photoPicker" hidden>
+                            </label>
+                        </div>
+                        <p class="sell-hint">The first photo is the gallery picture — tap ★ on another to move it first.</p>
+                    </div>
+
+                    <label class="sell-toggle">
+                        <input type="checkbox" id="bestOffer"> Accept price offers (Preisvorschlag)
+                    </label>
+
+                    <p class="sell-error" id="publishError" hidden></p>
+                    <div class="sell-actions">
+                        <button type="button" class="sell-btn" id="verifyBtn">Check with eBay</button>
+                        <button type="button" class="sell-btn sell-btn--primary" id="publishBtn">Publish</button>
+                    </div>
+                    <p class="sell-hint" id="publishStatus"></p>
+                </div>
+            </section>
+
+            <!-- Published -->
+            <section class="sell-card sell-card--done" id="doneCard" hidden>
+                <h2>Listed ✓</h2>
+                <p id="doneText"></p>
+                <div class="sell-actions">
+                    <a class="sell-btn" id="doneLink" target="_blank" rel="noopener noreferrer">View on eBay</a>
+                    <button type="button" class="sell-btn sell-btn--primary" id="nextBtn">Next game</button>
+                </div>
+            </section>
+
+            <section class="sell-card" id="recentCard" hidden>
+                <h2>Listed from here</h2>
+                <ul class="sell-recent" id="recent"></ul>
+            </section>
+        </div>
+        <script src="/static/sell.js?v=3"></script>
+        {% endif %}
+    </main>
+</body>
+</html>

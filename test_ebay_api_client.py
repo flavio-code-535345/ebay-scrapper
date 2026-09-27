@@ -349,6 +349,49 @@ class TestQueryParams:
         assert "EXTENDED" in self._search_params(client, method)["fieldgroups"]
 
 
+class TestCheapestOffers:
+    """The seller's pricing rule: the cheapest comparable Buy-It-Now *total*."""
+
+    def _offer(self, seller, price, shipping):
+        options = []
+        if shipping == "free":
+            options = [{"shippingCostType": "FIXED", "shippingCost": {"value": "0.00", "currency": "EUR"}}]
+        elif shipping is not None:
+            options = [{"shippingCostType": "FIXED", "shippingCost": {"value": str(shipping), "currency": "EUR"}}]
+        return {
+            "title": f"Game from {seller}",
+            "itemWebUrl": f"https://www.ebay.de/itm/{seller}",
+            "seller": {"username": seller},
+            "condition": "Gut",
+            "price": {"value": str(price), "currency": "EUR"},
+            "shippingOptions": options,
+        }
+
+    def test_ranked_by_total_without_own_listings_or_unknown_shipping(self, client):
+        items = [
+            self._offer("wucha23", 1.00, "free"),  # the seller's own listing
+            self._offer("calculated", 0.50, None),  # shipping cost unknown → total unknown
+            self._offer("cheap_item", 3.99, 1.80),  # 5.79
+            self._offer("free_ship", 4.50, "free"),  # 4.50
+        ]
+        resp = MagicMock(ok=True, status_code=200)
+        resp.json.return_value = {"itemSummaries": items}
+        with (
+            patch.object(client, "_get_access_token", return_value="tok"),
+            patch.object(client.session, "get", return_value=resp) as get,
+        ):
+            offers, errors = client.cheapest_offers("5030932103772", exclude_seller="WUCHA23", postal_code="12345")
+        assert errors == []
+        assert [(o["seller"], o["total"]) for o in offers] == [("free_ship", 4.5), ("cheap_item", 5.79)]
+        params = get.call_args.kwargs["params"]
+        assert (params["gtin"], params["sort"]) == ("5030932103772", "price")
+        assert "buyingOptions:{FIXED_PRICE}" in params["filter"] and "conditions:{USED}" in params["filter"]
+        assert get.call_args.kwargs["headers"]["X-EBAY-C-ENDUSERCTX"] == "contextualLocation=country%3DDE%2Czip%3D12345"
+
+    def test_not_configured(self):
+        assert EbayApiClient().cheapest_offers("123") == ([], ["eBay API credentials not configured"])
+
+
 class TestListingIdentity:
     def test_legacy_item_id(self, client):
         deal = client._normalize_item(

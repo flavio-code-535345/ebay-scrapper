@@ -20,6 +20,9 @@ services:
       - EBAY_CLIENT_SECRET=${EBAY_CLIENT_SECRET:-}
       - EBAY_MARKETPLACE_ID=${EBAY_MARKETPLACE_ID:-EBAY_DE}
       - EBAY_ENVIRONMENT=${EBAY_ENVIRONMENT:-production}
+      # Sell page (/sell): password for the page and the RuName for connecting your eBay account.
+      - APP_PASSWORD=${APP_PASSWORD:-}
+      - EBAY_RUNAME=${EBAY_RUNAME:-}
       # DATA_SOURCE: "auto" (default), "api", or "scraper"
       - DATA_SOURCE=${DATA_SOURCE:-auto}
       # Total time budget (seconds) for a single /api/search request. Lower
