@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0d1117">
     <title>Sell · Deal Finder</title>
     <link rel="stylesheet" href="/static/style.css?v=7">
-    <link rel="stylesheet" href="/static/sell.css?v=2">
+    <link rel="stylesheet" href="/static/sell.css?v=4">
 </head>
 <body class="sell-body">
     <header class="sell-header">
@@ -71,6 +71,7 @@
                     <span class="sell-account" id="accountName"></span>
                 </div>
                 <div id="templateSummary" class="sell-template"></div>
+                <p class="sell-hint" id="allowance" hidden></p>
                 <details class="sell-details" id="templateForm">
                     <summary id="templateFormSummary">Copy settings from one of your listings</summary>
                     <p>Paste one of your eBay listings (URL or item number). Shipping, returns, location and the
@@ -187,7 +188,7 @@
                 <ul class="sell-recent" id="recent"></ul>
             </section>
         </div>
-        <script src="/static/sell.js?v=3"></script>
+        <script src="/static/sell.js?v=4"></script>
         {% endif %}
     </main>
 </body>

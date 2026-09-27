@@ -74,8 +74,25 @@ async function loadStatus() {
     show($('listingCard'), s.connected && !!s.template);
     setText('accountName', s.username ? `eBay: ${s.username}` : '');
     renderTemplate(s.template);
+    renderAllowance(s.free_listings);
     renderConditions();
     renderRecent(s.recent || []);
+}
+
+// eBay.de: 320 new listings a month without an insertion fee, then €0.50 each.
+function renderAllowance(usage) {
+    const el = $('allowance');
+    show(el, !!usage);
+    if (!usage) return;
+    const over = usage.used >= usage.allowance;
+    el.textContent = `Free listings this month: ${usage.used} of ${usage.allowance} used`
+        + (over ? ' — each further new listing costs €0.50 until next month.' : '.');
+    el.classList.toggle('sell-warning', over);
+}
+
+function allowanceNote() {
+    const usage = state.status && state.status.free_listings;
+    return usage ? `${usage.used} of ${usage.allowance} free listings used this month` : '';
 }
 
 function renderTemplate(t) {
@@ -372,7 +389,8 @@ async function publish(verifyOnly) {
     try {
         const result = await postJson('/api/sell/publish', draftBody(verifyOnly));
         const fees = Object.entries(result.fees || {}).map(([k, v]) => `${k} ${euro(v)}`).join(', ');
-        const notes = [fees ? `Fees: ${fees}` : 'No fees', ...(result.warnings || [])].join(' · ');
+        const notes = [fees ? `Fees: ${fees}` : 'No fees', allowanceNote(), ...(result.warnings || [])]
+            .filter(Boolean).join(' · ');
         if (verifyOnly) {
             setText('publishStatus', `eBay accepts it. ${notes}`);
         } else {

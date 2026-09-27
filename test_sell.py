@@ -47,6 +47,9 @@ class FakeSeller:
     def conditions(self, category_id):
         return [{"id": "5000", "name": "Gut"}]
 
+    def listings_this_month(self):
+        return 57
+
     def lookup_products(self, query):
         self.calls.append(("lookup", query))
         return [
@@ -140,6 +143,7 @@ class TestPasswordGate:
         assert body["username"] == "wucha23"
         assert body["template"]["shipping_cost"] == 1.8
         assert body["conditions"] == [{"id": "5000", "name": "Gut"}]
+        assert body["free_listings"] == {"used": 57, "allowance": 320}
         assert b'id="sellApp"' in client.get("/sell").data
 
     def test_changing_the_password_signs_everyone_out(self, client, monkeypatch):
